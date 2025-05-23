@@ -1,7 +1,7 @@
 import aiohttp
 import asyncio
 
-async def get_klines_async(symbol, interval=15, limit=200):
+async def get_klines_async(symbol, interval=15, limit=120):
     """Асинхронная версия получения свечных данных"""
     url = "https://api.bybit.com/v5/market/kline"
     params = {
