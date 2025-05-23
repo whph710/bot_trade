@@ -1,25 +1,15 @@
 import asyncio
 import time
 from func_async import get_usdt_linear_symbols, get_klines_async
-from func_trade import calculate_atr, compute_indicators
-from deepseek import deep_seek, deep_seek_check
-
-# Параметры индикаторов
-params = {
-    'EMA': [9, 21],
-    'RSI': 7,
-    'MACD': {'fast': 12, 'slow': 26, 'signal': 9},
-    'BBANDS': {'period': 20, 'dev': 2},
-    'CVD': True,  # Для расчета CVD
-    'EMA_volume': [9, 21],  # Для EMA по объему
-    'OBV': True,  # Для расчета OBV
-}
+from func_trade import calculate_atr, detect_candlestick_signals, compute_cvd_signals, compute_trend_signals
+from deepseek import deep_seek
+from chat_gpt import chat_gpt
 
 
-async def process_pair(pair, interval="15"):
+async def process_pair(pair, limit, interval="15" ):
     """Асинхронная обработка одной торговой пары"""
     try:
-        candles = await get_klines_async(symbol=pair, interval=interval)
+        candles = await get_klines_async(symbol=pair, interval=interval, limit=limit)
         candles = candles[::-1]  # Переворачиваем список для правильного порядка
 
         if not candles or len(candles) < 2:
@@ -27,14 +17,14 @@ async def process_pair(pair, interval="15"):
             return None
 
         atr = calculate_atr(candles)
-        if atr > 0.005:
+        if atr > 0.02:
             # Вычисляем индикаторы на полном наборе данных
-            indicators = compute_indicators(candles[:-1], params)
+            #indicators = compute_indicators(candles[:-1], params)
 
             # Формируем итоговый результат
             return pair, {
-                "candles": candles,
-                "indicators": indicators
+                "candles": candles #,
+                #"indicators": indicators
             }
         return None
     except Exception as e:
@@ -50,12 +40,8 @@ async def main():
         usdt_pairs = await get_usdt_linear_symbols()
         print(f"Получено {len(usdt_pairs)} торговых пар")
 
-        # Для ограничения количества одновременных запросов
-        # Можно ограничить количество пар для тестирования
-        # usdt_pairs = usdt_pairs[:10]  # Раскомментируйте для тестирования с меньшим количеством пар
-
         # Создаем список задач для асинхронного выполнения
-        tasks = [process_pair(pair) for pair in usdt_pairs]
+        tasks = [process_pair(pair, limit=4) for pair in usdt_pairs]
 
         # Выполняем все задачи параллельно
         results = await asyncio.gather(*tasks)
@@ -85,23 +71,19 @@ async def process_data():
         if not all_data:
             print("Нет данных для обработки.")
             return
+        else:
+            candlestick_signals = detect_candlestick_signals(all_data)
+        print(candlestick_signals)
+        for signal, pairs in candlestick_signals.items():
+            for pair in pairs:
+                kline = await get_klines_async(symbol=pair)
+                signal_cvd = compute_trend_signals(kline)
+                if signal_cvd[-1] != signal:
+                    candlestick_signals[signal].remove(pair)
 
-        print(f"Начинаем анализ {len(all_data)} пар через DeepSeek...")
-        pairs_deepseek = deep_seek_check(data=all_data)
-        print(str(pairs_deepseek))
-        # Обрабатываем каждую пару последовательно
-        for pair, data in all_data.items():
-            print(f"Отправляем данные по {pair} в DeepSeek...")
+        print(candlestick_signals)
 
-            # Получаем текстовый результат из функции deep_seek
-            result = await deep_seek(data)
 
-            if result:
-                print(f"\n===== Результат анализа {pair} =====")
-                print(result)
-                print(f"===== Конец результата {pair} =====\n")
-            else:
-                print(f"Не получен результат для {pair}")
 
     except Exception as e:
         print(f"Ошибка при обработке данных: {e}")
@@ -109,3 +91,4 @@ async def process_data():
 
 if __name__ == "__main__":
     asyncio.run(process_data())
+

@@ -1,7 +1,7 @@
 import aiohttp
 import asyncio
 
-async def get_klines_async(symbol, interval, limit=250):
+async def get_klines_async(symbol, interval=15, limit=200):
     """Асинхронная версия получения свечных данных"""
     url = "https://api.bybit.com/v5/market/kline"
     params = {
@@ -18,7 +18,7 @@ async def get_klines_async(symbol, interval, limit=250):
             if data["retCode"] != 0:
                 raise Exception(f"API Error: {data['retMsg']}")
 
-            return data["result"]["list"]  # возвращает список списков свечей
+            return data["result"]["list"][:-1]  # возвращает список списков свечей
 
 async def get_usdt_linear_symbols():
     """Асинхронная версия получения списка торговых пар"""
