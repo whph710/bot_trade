@@ -2,7 +2,7 @@ import asyncio
 import time
 from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import calculate_atr, detect_candlestick_signals, compute_cvd_signals, compute_trend_signals
-from deepseek import deep_seek
+from deepseek import deep_seek, deep_seek_streaming
 from chat_gpt import chat_gpt
 
 
@@ -82,6 +82,20 @@ async def process_data():
                     candlestick_signals[signal].remove(pair)
 
         print(candlestick_signals)
+        direction = input('long/short: ')
+        check_candlestick_signals = {}
+        if direction == 'long':
+            pairs = candlestick_signals['long']
+            for pair in pairs:
+                kline = await get_klines_async(symbol=pair)
+                check_candlestick_signals[pair] = kline
+
+        elif direction == 'short':
+            pairs = candlestick_signals['short']
+            for pair in pairs:
+                kline = await get_klines_async(symbol=pair)
+                check_candlestick_signals[pair] = kline
+        print(await deep_seek_streaming(str(check_candlestick_signals)))
 
 
 
