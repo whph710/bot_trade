@@ -134,7 +134,7 @@ async def test_deepseek_connection():
 
 
 # Альтернативная версия с стримингом для больших ответов
-async def deep_seek_streaming(data, prompt=prompt1, timeout=120):
+async def deep_seek_streaming(data, trade1, prompt=prompt1, timeout=120):
     """
     Версия со стримингом - показывает прогресс генерации ответа
     """
@@ -156,8 +156,8 @@ async def deep_seek_streaming(data, prompt=prompt1, timeout=120):
         stream = await client.chat.completions.create(
             model="deepseek-reasoner",
             messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": str(data)},
+                {"role": "system", "content": trade1 + prompt},
+                {"role": "user", "content": data},
             ],
             stream=True,
             max_tokens=4000

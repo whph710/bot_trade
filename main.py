@@ -4,6 +4,7 @@ from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import calculate_atr, detect_candlestick_signals, compute_cvd_signals, compute_trend_signals
 from deepseek import deep_seek, deep_seek_streaming
 from chat_gpt import chat_gpt
+import json
 
 
 async def process_pair(pair, limit, interval="15" ):
@@ -73,13 +74,6 @@ async def process_data():
             return
         else:
             candlestick_signals = detect_candlestick_signals(all_data)
-        print(candlestick_signals)
-        for signal, pairs in candlestick_signals.items():
-            for pair in pairs:
-                kline = await get_klines_async(symbol=pair)
-                signal_cvd = compute_trend_signals(kline)
-                if signal_cvd[-1] != signal:
-                    candlestick_signals[signal].remove(pair)
 
         print(candlestick_signals)
         direction = input('long/short: ')
@@ -87,16 +81,26 @@ async def process_data():
         if direction == 'long':
             pairs = candlestick_signals['long']
             for pair in pairs:
-                kline = await get_klines_async(symbol=pair)
+                kline = await get_klines_async(symbol=pair, limit=20)
                 check_candlestick_signals[pair] = kline
 
         elif direction == 'short':
             pairs = candlestick_signals['short']
             for pair in pairs:
-                kline = await get_klines_async(symbol=pair)
+                kline = await get_klines_async(symbol=pair, limit=20)
                 check_candlestick_signals[pair] = kline
-        print(await deep_seek_streaming(str(check_candlestick_signals)))
 
+        with open('prompt2.txt', 'r', encoding='utf-8') as file:
+            prompt2 = file.read()
+        answer1 = await deep_seek_streaming(data=str(check_candlestick_signals), trade1=str(direction), prompt=prompt2)
+        print(answer1)
+        data = json.loads(answer1)
+        #data = dict(answer1)
+        check_candlestick_signals1 = {}
+        for pair in data['pairs']:
+             check_candlestick_signals1[pair] = await get_klines_async(symbol=pair, limit=100)
+        answer = await deep_seek_streaming(data=str(check_candlestick_signals1), trade1=str(direction))
+        print(answer)
 
 
     except Exception as e:
