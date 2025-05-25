@@ -1,45 +1,52 @@
 import asyncio
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
 import os
-
-load_dotenv()
-
-# Загружаем промпт из файла
-with open('prompt.txt', 'r', encoding='utf-8') as file:
-    prompt1 = file.read()
-
-import asyncio
-import os
+import logging
+from typing import Optional
 import httpx
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Загружаем основной промпт из файла
+try:
+    with open('prompt.txt', 'r', encoding='utf-8') as file:
+        DEFAULT_PROMPT = file.read()
+        logger.info("Загружен основной промпт из prompt.txt")
+except FileNotFoundError:
+    DEFAULT_PROMPT = "Ты опытный трейдер. Проанализируй данные и дай рекомендации."
+    logger.warning("Файл prompt.txt не найден, используется промпт по умолчанию")
 
 
-async def deep_seek(data, prompt=prompt1, timeout=60, max_tokens=4000, max_retries=3):
+async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
+                    max_tokens: int = 4000, max_retries: int = 3) -> str:
     """
-    Асинхронная функция для отправки данных в модель DeepSeek с обработкой connection error.
+    Асинхронно отправляет запрос к DeepSeek API с обработкой ошибок и повторными попытками.
 
     Args:
-        data: Данные для отправки модели (будут преобразованы в строку)
-        prompt: Системный промпт для модели (по умолчанию из файла prompt.txt)
-        timeout: Таймаут запроса в секундах (по умолчанию 60)
+        data: Данные для отправки модели
+        prompt: Системный промпт для модели
+        timeout: Таймаут запроса в секундах
         max_tokens: Максимальное количество токенов в ответе
         max_retries: Количество попыток при ошибке соединения
 
     Returns:
-        str: Содержимое ответа от модели
+        Содержимое ответа от модели или сообщение об ошибке
     """
-
     api_key = os.getenv('DEEPSEEK')
-
     if not api_key:
-        return "Ошибка: не найден API ключ DEEPSEEK"
+        error_msg = "API ключ DEEPSEEK не найден в переменных окружения"
+        logger.error(error_msg)
+        return f"Ошибка: {error_msg}"
 
-    # Настройки для более стабильного соединения
+    # Настройки HTTP клиента для стабильного соединения
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(timeout),
         limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        verify=True  # Проверка SSL сертификатов
+        verify=True
     )
 
     client = AsyncOpenAI(
@@ -50,11 +57,11 @@ async def deep_seek(data, prompt=prompt1, timeout=60, max_tokens=4000, max_retri
 
     for attempt in range(max_retries):
         try:
-            print(f"Попытка {attempt + 1}/{max_retries}: отправляем запрос к DeepSeek...")
-            print(f"Длина данных: {len(str(data))} символов")
+            logger.info(f"Попытка {attempt + 1}/{max_retries}: отправка запроса к DeepSeek")
+            logger.debug(f"Размер данных: {len(str(data))} символов")
 
             response = await client.chat.completions.create(
-                model="deepseek-chat",  # Более стабильная модель
+                model="deepseek-chat",
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": str(data)},
@@ -65,48 +72,123 @@ async def deep_seek(data, prompt=prompt1, timeout=60, max_tokens=4000, max_retri
             )
 
             result = response.choices[0].message.content
-            print(f"Успешно получен ответ: {result[:50]}...")
+            logger.info(f"Успешно получен ответ от DeepSeek (длина: {len(result)} символов)")
 
-            # Закрываем клиент
             await http_client.aclose()
             return result
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Попытка {attempt + 1} неудачна: {error_msg}")
+            logger.warning(f"Попытка {attempt + 1} неудачна: {error_msg}")
 
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Экспоненциальная задержка: 1, 2, 4 сек
-                print(f"Ожидание {wait_time} сек перед следующей попыткой...")
+                logger.info(f"Ожидание {wait_time} сек перед следующей попыткой...")
                 await asyncio.sleep(wait_time)
             else:
+                logger.error(f"Все попытки исчерпаны: {error_msg}")
                 await http_client.aclose()
                 return f"Ошибка после {max_retries} попыток: {error_msg}"
 
     await http_client.aclose()
-    return "Неизвестная ошибка"
+    return "Неизвестная ошибка при обращении к DeepSeek API"
 
 
-# Функция для проверки соединения с API
-async def test_deepseek_connection():
+async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT_PROMPT,
+                              timeout: int = 120) -> str:
     """
-    Тестирует соединение с DeepSeek API
+    Версия с потоковой передачей - показывает прогресс генерации ответа в реальном времени.
+
+    Args:
+        data: Данные для анализа
+        trade1: Дополнительная информация о торговом направлении
+        prompt: Системный промпт
+        timeout: Таймаут запроса в секундах
+
+    Returns:
+        Полный ответ модели
     """
     api_key = os.getenv('DEEPSEEK')
-
     if not api_key:
-        print("❌ API ключ DEEPSEEK не найден")
-        return False
-
-    print("🔍 Проверяем соединение с DeepSeek API...")
+        error_msg = "API ключ DEEPSEEK не найден в переменных окружения"
+        logger.error(error_msg)
+        return f"Ошибка: {error_msg}"
 
     try:
-        # Простой HTTP клиент для проверки доступности
+        timeout_config = httpx.Timeout(timeout)
+        http_client = httpx.AsyncClient(timeout=timeout_config)
+
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            http_client=http_client
+        )
+
+        logger.info("Начинаем потоковую генерацию ответа...")
+
+        # Формируем системный промпт с учетом торгового направления
+        system_prompt = f"{trade1} {prompt}" if trade1 else prompt
+
+        stream = await client.chat.completions.create(
+            model="deepseek-reasoner",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": data},
+            ],
+            stream=True,
+            max_tokens=4000,
+            temperature=0.7
+        )
+
+        result = ""
+        chunk_count = 0
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                content = chunk.choices[0].delta.content
+                result += content
+                chunk_count += 1
+
+                # Логируем прогресс каждые 50 чанков
+                if chunk_count % 50 == 0:
+                    logger.debug(f"Получено {chunk_count} чанков, текущая длина ответа: {len(result)}")
+
+        await http_client.aclose()
+
+        logger.info(f"Генерация завершена. Итоговая длина ответа: {len(result)} символов")
+        return result
+
+    except asyncio.TimeoutError:
+        error_msg = f"Таймаут запроса ({timeout} сек)"
+        logger.error(error_msg)
+        return f"Ошибка: {error_msg}"
+    except Exception as e:
+        error_msg = f"Ошибка при потоковом запросе к DeepSeek: {e}"
+        logger.error(error_msg)
+        return f"Ошибка: {str(e)}"
+
+
+async def test_deepseek_connection() -> bool:
+    """
+    Тестирует подключение к DeepSeek API.
+
+    Returns:
+        True если подключение успешно, False в противном случае
+    """
+    api_key = os.getenv('DEEPSEEK')
+    if not api_key:
+        logger.error("API ключ DEEPSEEK не найден")
+        return False
+
+    logger.info("Проверяем подключение к DeepSeek API...")
+
+    # Проверяем доступность сервера
+    try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get("https://api.deepseek.com")
-            print(f"✅ Сервер доступен, статус: {response.status_code}")
+            logger.info(f"Сервер доступен, статус: {response.status_code}")
     except Exception as e:
-        print(f"❌ Сервер недоступен: {e}")
+        logger.error(f"Сервер недоступен: {e}")
         return False
 
     # Тестовый запрос к API
@@ -125,65 +207,40 @@ async def test_deepseek_connection():
         )
 
         await http_client.aclose()
-        print("✅ API работает корректно")
+        logger.info("API работает корректно")
         return True
 
     except Exception as e:
-        print(f"❌ Ошибка API: {e}")
+        logger.error(f"Ошибка API: {e}")
         return False
 
 
-# Альтернативная версия с стримингом для больших ответов
-async def deep_seek_streaming(data, trade1, prompt=prompt1, timeout=120):
+async def check_api_health() -> dict:
     """
-    Версия со стримингом - показывает прогресс генерации ответа
+    Проверяет состояние API и возвращает детальную информацию.
+
+    Returns:
+        Словарь с информацией о состоянии API
     """
+    health_info = {
+        "api_key_exists": bool(os.getenv('DEEPSEEK')),
+        "server_accessible": False,
+        "api_functional": False,
+        "response_time": None
+    }
 
-    api_key = os.getenv('DEEPSEEK')
-
-    if not api_key:
-        return "Ошибка: не найден API ключ DEEPSEEK"
+    start_time = asyncio.get_event_loop().time()
 
     try:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com",
-            timeout=timeout
-        )
+        # Проверяем API
+        is_connected = await test_deepseek_connection()
+        health_info["api_functional"] = is_connected
+        health_info["server_accessible"] = True
 
-        print("Начинаем генерацию ответа...")
-
-        stream = await client.chat.completions.create(
-            model="deepseek-reasoner",
-            messages=[
-                {"role": "system", "content": trade1 + prompt},
-                {"role": "user", "content": data},
-            ],
-            stream=True,
-            max_tokens=4000
-        )
-
-        result = ""
-        async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                content = chunk.choices[0].delta.content
-                result += content
-                print(content, end='', flush=True)  # Показываем прогресс в реальном времени
-
-        print("\n--- Генерация завершена ---")
-        return result
-
-    except asyncio.TimeoutError:
-        error_msg = f"Таймаут запроса ({timeout} сек)"
-        print(error_msg)
-        return f"Ошибка: {error_msg}"
+        end_time = asyncio.get_event_loop().time()
+        health_info["response_time"] = round(end_time - start_time, 2)
 
     except Exception as e:
-        error_msg = f"Ошибка при запросе к DeepSeek API: {e}"
-        print(error_msg)
-        return f"Ошибка: {str(e)}"
+        logger.error(f"Ошибка при проверке здоровья API: {e}")
 
-# a =""" {'long': ['AUCTIONUSDT', 'AXSUSDT', 'BCHUSDT', 'BSVUSDT', 'DASHUSDT', 'DEXEUSDT', 'ETCUSDT', 'ILVUSDT', 'LTCUSDT', 'OMNIUSDT', 'TAOUSDT'], 'short': ['BCHUSDT', 'FXSUSDT', 'NXPCUSDT']}"""
-# b = asyncio.run(deep_seek_streaming(a))
-
-# print(b)
+    return health_info
