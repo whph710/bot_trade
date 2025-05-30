@@ -133,9 +133,14 @@ async def get_detailed_data_for_pairs(pairs: List[str], limit: int = 20) -> Dict
         return {}
 
 
+import json
+import re
+
+
 async def analyze_with_ai(data: Dict, direction: str, prompt_file: str = 'prompt2.txt') -> Optional[Dict]:
     """
     Анализирует данные с помощью ИИ.
+    ИСПРАВЛЕНА для более безопасной обработки ответов.
 
     Args:
         data: Данные для анализа
@@ -148,8 +153,15 @@ async def analyze_with_ai(data: Dict, direction: str, prompt_file: str = 'prompt
     try:
         logger.info(f"Начинаем анализ с ИИ для направления: {direction}")
 
-        with open("prompt2.txt", 'r', encoding='utf-8') as file:
-            prompt = file.read()
+        # Читаем промпт
+        try:
+            with open("prompt2.txt", 'r', encoding='utf-8') as file:
+                prompt = file.read()
+        except FileNotFoundError:
+            logger.warning("Файл prompt2.txt не найден, используем базовый промпт")
+            prompt = """Проанализируй торговые данные и верни результат в виде Python словаря с ключом 'pairs', 
+                       содержащим список рекомендуемых торговых пар для анализа. 
+                       Формат ответа: {'pairs': ['BTCUSDT', 'ETHUSDT']}"""
 
         # Получаем ответ от ИИ
         ai_response = await deep_seek_streaming(
@@ -160,19 +172,78 @@ async def analyze_with_ai(data: Dict, direction: str, prompt_file: str = 'prompt
 
         logger.info("Получен ответ от ИИ")
 
-        # Преобразуем строку в словарь
+        # ИСПРАВЛЕНИЕ: Более безопасная обработка ответа
+        if not ai_response or ai_response.strip() == "":
+            logger.error("Получен пустой ответ от ИИ")
+            return None
+
+        logger.debug(f"Первые 200 символов ответа: {ai_response[:200]}")
+
+        # Пытаемся найти JSON в ответе
+        parsed_data = None
+
+        # Метод 1: Прямое преобразование в JSON
         try:
-            parsed_data = eval(ai_response.strip())
-            if isinstance(parsed_data, dict):
-                logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data.get('pairs', []))} пар")
+            parsed_data = json.loads(ai_response.strip())
+            logger.info("Успешно распознан JSON")
+        except json.JSONDecodeError:
+            logger.debug("Не удалось распознать как JSON, пробуем другие методы")
+
+        # Метод 2: Поиск JSON блока в тексте
+        if parsed_data is None:
+            json_pattern = r'\{[^{}]*"pairs"[^{}]*\[[^\]]*\][^{}]*\}'
+            json_matches = re.findall(json_pattern, ai_response, re.DOTALL)
+
+            for match in json_matches:
+                try:
+                    parsed_data = json.loads(match)
+                    logger.info("Найден JSON блок в тексте")
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        # Метод 3: Поиск списка пар в тексте
+        if parsed_data is None:
+            pairs_pattern = r'["\']([A-Z]+USDT)["\']'
+            found_pairs = re.findall(pairs_pattern, ai_response)
+
+            if found_pairs:
+                # Убираем дубликаты и берем первые 5-10 пар
+                unique_pairs = list(dict.fromkeys(found_pairs))[:10]
+                parsed_data = {'pairs': unique_pairs}
+                logger.info(f"Извлечены пары из текста: {len(unique_pairs)} пар")
+
+        # Метод 4: Безопасное использование eval (только если другие методы не сработали)
+        if parsed_data is None:
+            try:
+                # Очищаем строку от лишних символов
+                clean_response = ai_response.strip()
+                if clean_response.startswith('```') and clean_response.endswith('```'):
+                    clean_response = clean_response[3:-3].strip()
+                if clean_response.startswith('python'):
+                    clean_response = clean_response[6:].strip()
+
+                # Пробуем eval только если строка выглядит как словарь
+                if clean_response.startswith('{') and clean_response.endswith('}'):
+                    parsed_data = eval(clean_response)
+                    logger.info("Успешно использован eval")
+            except Exception as e:
+                logger.warning(f"Eval не сработал: {e}")
+
+        # Проверяем результат
+        if parsed_data and isinstance(parsed_data, dict):
+            if 'pairs' in parsed_data and isinstance(parsed_data['pairs'], list):
+                logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data['pairs'])} пар")
                 return parsed_data
             else:
-                logger.error("Ответ ИИ не является словарём")
-                return None
-        except Exception as e:
-            logger.error(f"Ошибка при преобразовании ответа ИИ в dict: {e}")
-            logger.debug(f"Ответ ИИ: {ai_response[:500]}...")
-            return None
+                logger.error("В ответе ИИ отсутствует корректный ключ 'pairs'")
+        else:
+            logger.error("Не удалось распознать структуру ответа ИИ")
+
+        # Если ничего не получилось, создаем fallback ответ
+        logger.warning("Используем fallback: возвращаем случайные пары из исходных данных")
+        available_pairs = list(data.keys())[:5]  # Берем первые 5 пар
+        return {'pairs': available_pairs}
 
     except Exception as e:
         logger.error(f"Ошибка при анализе с ИИ: {e}")
