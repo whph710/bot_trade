@@ -96,52 +96,30 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
 
 async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT_PROMPT,
                               timeout: int = 120) -> str:
-    """
-    Версия с потоковой передачей - показывает прогресс генерации ответа в реальном времени.
-    ИСПРАВЛЕНА для решения проблем с пустыми ответами.
-
-    Args:
-        data: Данные для анализа
-        trade1: Дополнительная информация о торговом направлении
-        prompt: Системный промпт
-        timeout: Таймаут запроса в секундах
-
-    Returns:
-        Полный ответ модели
-    """
     api_key = os.getenv('DEEPSEEK')
     if not api_key:
-        error_msg = "API ключ DEEPSEEK не найден в переменных окружения"
-        logger.error(error_msg)
-        return f"Ошибка: {error_msg}"
+        return "Ошибка: API ключ DEEPSEEK не найден"
 
-    # Проверяем размер данных и обрезаем если необходимо
     data_str = str(data)
-    if len(data_str) > 50000:  # Ограничиваем размер данных
-        logger.warning(f"Данные слишком большие ({len(data_str)} символов), обрезаем до 50000")
+    if len(data_str) > 50000:
         data_str = data_str[:50000] + "... [данные обрезаны]"
 
     try:
         timeout_config = httpx.Timeout(timeout)
         http_client = httpx.AsyncClient(timeout=timeout_config)
-
         client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://api.deepseek.com",
             http_client=http_client
         )
 
-        logger.info("Начинаем потоковую генерацию ответа...")
-
-        # Формируем системный промпт с учетом торгового направления
         system_prompt = f"{trade1} {prompt}" if trade1 else prompt
 
-        # ИСПРАВЛЕНИЕ 1: Используем deepseek-chat вместо deepseek-reasoner для streaming
         stream = await client.chat.completions.create(
-            model="deepseek-reasoner",  # Изменено с deepseek-reasoner
+            model="deepseek-reasoner",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": data_str},  # Используем обрезанные данные
+                {"role": "user", "content": data_str},
             ],
             stream=True,
             max_tokens=4000,
@@ -149,52 +127,21 @@ async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT
         )
 
         result = ""
-        chunk_count = 0
-
-        # ИСПРАВЛЕНИЕ 2: Улучшенная обработка потоковых чанков
         async for chunk in stream:
-            try:
-                if hasattr(chunk, 'choices') and chunk.choices:
-                    if hasattr(chunk.choices[0], 'delta') and hasattr(chunk.choices[0].delta, 'content'):
-                        content = chunk.choices[0].delta.content
-                        if content is not None:  # Проверяем на None
-                            result += content
-                            chunk_count += 1
-
-                            # Логируем прогресс каждые 50 чанков
-                            if chunk_count % 50 == 0:
-                                logger.debug(f"Получено {chunk_count} чанков, текущая длина ответа: {len(result)}")
-            except AttributeError as e:
-                logger.warning(f"Неожиданная структура чанка: {e}")
-                continue
+            content = getattr(chunk.choices[0].delta, "content", None)
+            if content:
+                result += content
 
         await http_client.aclose()
 
-        logger.info(f"Генерация завершена. Итоговая длина ответа: {len(result)} символов")
-
-        # ИСПРАВЛЕНИЕ 3: Проверяем, что результат не пустой
         if not result.strip():
-            logger.error("Получен пустой ответ от API. Попробуем без streaming...")
-            # Fallback на обычный запрос без streaming
             return await deep_seek(data_str, prompt, timeout=60)
 
         return result
 
     except asyncio.TimeoutError:
-        error_msg = f"Таймаут запроса ({timeout} сек)"
-        logger.error(error_msg)
-        return f"Ошибка: {error_msg}"
-    except Exception as e:
-        error_msg = f"Ошибка при потоковом запросе к DeepSeek: {e}"
-        logger.error(error_msg)
+        return f"Ошибка: Таймаут запроса ({timeout} сек)"
 
-        # ИСПРАВЛЕНИЕ 4: Fallback на обычный запрос при ошибке streaming
-        logger.info("Пробуем обычный запрос без streaming...")
-        try:
-            return await deep_seek(data_str, prompt, timeout=60)
-        except Exception as fallback_error:
-            logger.error(f"Fallback запрос также неудачен: {fallback_error}")
-            return f"Ошибка: {str(e)}"
 
 
 async def test_deepseek_connection() -> bool:
