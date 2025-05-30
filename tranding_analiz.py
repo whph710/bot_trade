@@ -269,7 +269,3 @@ async def process_trading_signals():
         logger.info("Программа прервана пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка в основной функции: {e}")
-
-
-if __name__ == "__main__":
-    asyncio.run(process_trading_signals())
