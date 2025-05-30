@@ -1,79 +1,9 @@
-2025-05-30 19:55:42,486 - INFO - ============================================================
-2025-05-30 19:55:42,486 - INFO - ЗАПУСК АНАЛИЗА ТОРГОВЫХ СИГНАЛОВ
-2025-05-30 19:55:42,486 - INFO - ============================================================
-2025-05-30 19:55:42,486 - INFO - Начинаем сбор данных по торговым парам...
-2025-05-30 19:55:43,085 - INFO - Найдено 414 активных USDT торговых пар
-2025-05-30 19:55:43,085 - INFO - Получено 414 торговых пар
-2025-05-30 19:55:49,069 - INFO - Сбор данных завершен: 65 пар обработано за 6.58с
-2025-05-30 19:55:49,069 - INFO - Поиск свечных паттернов...
-2025-05-30 19:55:49,070 - INFO - Найдено паттернов: 24 long, 3 short
-2025-05-30 19:56:20,798 - INFO - Выбрано направление: long
-2025-05-30 19:56:20,798 - INFO - Выбрано для анализа: 24 пар
-2025-05-30 19:56:20,798 - INFO - Получаем детальные данные для 24 пар...
-2025-05-30 19:56:21,257 - INFO - Получены детальные данные для 24 пар
-2025-05-30 19:56:21,257 - INFO - Начинаем анализ с ИИ для направления: long
-2025-05-30 19:56:21,789 - INFO - Попытка 1/3: отправка запроса к DeepSeek
-2025-05-30 19:56:23,286 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
-2025-05-30 19:56:37,244 - INFO - Успешно получен ответ от DeepSeek (длина: 68 символов)
-2025-05-30 19:56:37,245 - INFO - Успешно обработан ответ ИИ: 4 пар
-2025-05-30 19:56:37,245 - INFO - ИИ рекомендует для детального анализа: 4 пар
-2025-05-30 19:56:37,245 - INFO - Получаем детальные данные для 4 пар...
-2025-05-30 19:56:37,625 - INFO - Получены детальные данные для 4 пар
-2025-05-30 19:56:37,625 - INFO - Начинаем финальный анализ с ИИ...
-2025-05-30 19:56:38,106 - INFO - Попытка 1/3: отправка запроса к DeepSeek
-2025-05-30 19:56:39,047 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
-2025-05-30 19:57:39,052 - INFO - Retrying request to /chat/completions in 0.435117 seconds
-2025-05-30 19:57:40,651 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
-2025-05-30 19:58:40,661 - INFO - Retrying request to /chat/completions in 0.852469 seconds
-2025-05-30 19:58:43,551 - WARNING - Попытка 1 неудачна: Connection error.
-2025-05-30 19:58:43,552 - INFO - Ожидание 1 сек перед следующей попыткой...
-2025-05-30 19:58:44,566 - INFO - Попытка 2/3: отправка запроса к DeepSeek
-2025-05-30 19:58:46,604 - INFO - Retrying request to /chat/completions in 0.401577 seconds
-2025-05-30 19:58:49,060 - INFO - Retrying request to /chat/completions in 0.905376 seconds
-2025-05-30 19:58:52,032 - WARNING - Попытка 2 неудачна: Connection error.
-2025-05-30 19:58:52,034 - INFO - Ожидание 2 сек перед следующей попыткой...
-2025-05-30 19:58:54,041 - INFO - Попытка 3/3: отправка запроса к DeepSeek
-2025-05-30 19:58:56,097 - INFO - Retrying request to /chat/completions in 0.432061 seconds
-2025-05-30 19:58:58,560 - INFO - Retrying request to /chat/completions in 0.838471 seconds
-2025-05-30 19:59:01,540 - INFO - ============================================================
-2025-05-30 19:59:01,540 - INFO - ЗАПУСК АНАЛИЗА ТОРГОВЫХ СИГНАЛОВ
-2025-05-30 19:59:01,540 - INFO - ============================================================
-2025-05-30 19:59:01,540 - INFO - Начинаем сбор данных по торговым парам...
-2025-05-30 19:59:02,202 - INFO - Найдено 414 активных USDT торговых пар
-2025-05-30 19:59:02,202 - INFO - Получено 414 торговых пар
-2025-05-30 19:59:09,318 - INFO - Сбор данных завершен: 67 пар обработано за 7.78с
-2025-05-30 19:59:09,319 - INFO - Поиск свечных паттернов...
-2025-05-30 19:59:09,320 - INFO - Найдено паттернов: 16 long, 2 short
-2025-05-30 19:59:14,836 - INFO - Выбрано направление: long
-2025-05-30 19:59:14,837 - INFO - Выбрано для анализа: 16 пар
-2025-05-30 19:59:14,837 - INFO - Получаем детальные данные для 16 пар...
-2025-05-30 19:59:15,227 - INFO - Получены детальные данные для 16 пар
-2025-05-30 19:59:15,227 - INFO - Начинаем анализ с ИИ для направления: long
-2025-05-30 19:59:15,418 - INFO - Попытка 1/3: отправка запроса к DeepSeek
-2025-05-30 19:59:17,058 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
-2025-05-30 19:59:30,537 - INFO - Успешно получен ответ от DeepSeek (длина: 213 символов)
-2025-05-30 19:59:30,538 - INFO - Успешно обработан ответ ИИ: 16 пар
-2025-05-30 19:59:30,538 - INFO - ИИ рекомендует для детального анализа: 16 пар
-2025-05-30 19:59:30,538 - INFO - Получаем детальные данные для 16 пар...
-2025-05-30 19:59:31,289 - INFO - Получены детальные данные для 16 пар
-2025-05-30 19:59:31,290 - INFO - Начинаем финальный анализ с ИИ...
-2025-05-30 19:59:31,450 - INFO - Попытка 1/3: отправка запроса к DeepSeek
-2025-05-30 19:59:32,641 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 400 Bad Request"
-2025-05-30 19:59:32,643 - WARNING - Попытка 1 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 67067 tokens (63067 in the messages, 4000 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
-2025-05-30 19:59:32,643 - INFO - Ожидание 1 сек перед следующей попыткой...
-2025-05-30 19:59:33,650 - INFO - Попытка 2/3: отправка запроса к DeepSeek
-2025-05-30 19:59:34,271 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 400 Bad Request"
-2025-05-30 19:59:34,272 - WARNING - Попытка 2 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 67067 tokens (63067 in the messages, 4000 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
-2025-05-30 19:59:34,272 - INFO - Ожидание 2 сек перед следующей попыткой...
-2025-05-30 19:59:36,276 - INFO - Попытка 3/3: отправка запроса к DeepSeek
-2025-05-30 19:59:36,905 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 400 Bad Request"
-2025-05-30 19:59:36,906 - WARNING - Попытка 3 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 67067 tokens (63067 in the messages, 4000 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
-2025-05-30 19:59:36,906 - ERROR - Все попытки исчерпаны: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 67067 tokens (63067 in the messages, 4000 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
-2025-05-30 19:59:36,907 - INFO - Получен финальный анализ от ИИ
-2025-05-30 19:59:36,907 - INFO - ============================================================
-2025-05-30 19:59:36,908 - INFO - ФИНАЛЬНЫЕ РЕКОМЕНДАЦИИ:
-2025-05-30 19:59:36,908 - INFO - ============================================================
-2025-05-30 19:59:36,908 - INFO - Ошибка после 3 попыток: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 67067 tokens (63067 in the messages, 4000 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
-2025-05-30 19:59:36,908 - INFO - ============================================================
-2025-05-30 19:59:36,908 - INFO - АНАЛИЗ ЗАВЕРШЕН
-2025-05-30 19:59:36,908 - INFO - ============================================================
+2025-05-30 20:05:52,030 - INFO - ============================================================
+2025-05-30 20:05:52,030 - INFO - ЗАПУСК АНАЛИЗА ТОРГОВЫХ СИГНАЛОВ
+2025-05-30 20:05:52,030 - INFO - ============================================================
+2025-05-30 20:05:52,030 - INFO - Начинаем сбор данных по торговым парам...
+2025-05-30 20:05:52,552 - INFO - Найдено 414 активных USDT торговых пар
+2025-05-30 20:05:52,553 - INFO - Получено 414 торговых пар
+2025-05-30 20:05:59,080 - INFO - Сбор данных завершен: 56 пар обработано за 7.05с
+2025-05-30 20:05:59,091 - INFO - Поиск свечных паттернов...
+2025-05-30 20:05:59,093 - INFO - Найдено паттернов: 12 long, 1 short
