@@ -45,12 +45,10 @@ async def process_single_pair(pair: str, limit: int, interval: str = "15") -> Op
 async def collect_initial_data() -> Dict[str, Dict]:
     """Собирает начальные данные по всем торговым парам."""
     start_time = time.time()
-    logger.info("Начинаем сбор данных по торговым парам...")
+    logger.info("Сбор данных по торговым парам...")
 
     try:
         usdt_pairs = await get_usdt_linear_symbols()
-        logger.info(f"Получено {len(usdt_pairs)} торговых пар")
-
         tasks = [process_single_pair(pair, limit=4) for pair in usdt_pairs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -66,10 +64,7 @@ async def collect_initial_data() -> Dict[str, Dict]:
                 filtered_data[pair] = data
 
         elapsed_time = time.time() - start_time
-        logger.info(f"Сбор данных завершен: {len(filtered_data)} пар обработано за {elapsed_time:.2f}с")
-
-        if error_count > 0:
-            logger.warning(f"Ошибок при обработке: {error_count}")
+        logger.info(f"Сбор данных завершен: {len(filtered_data)} пар за {elapsed_time:.2f}с")
 
         return filtered_data
 
@@ -80,8 +75,6 @@ async def collect_initial_data() -> Dict[str, Dict]:
 
 async def get_detailed_data_for_pairs(pairs: List[str], limit: int = 20) -> Dict[str, List]:
     """Получает детальные данные по списку торговых пар."""
-    logger.info(f"Получаем детальные данные для {len(pairs)} пар...")
-
     detailed_data = {}
     tasks = [get_klines_async(symbol=pair, limit=limit) for pair in pairs]
 
@@ -90,11 +83,9 @@ async def get_detailed_data_for_pairs(pairs: List[str], limit: int = 20) -> Dict
 
         for pair, result in zip(pairs, results):
             if isinstance(result, Exception):
-                logger.error(f"Ошибка получения данных для {pair}: {result}")
                 continue
             detailed_data[pair] = result
 
-        logger.info(f"Получены детальные данные для {len(detailed_data)} пар")
         return detailed_data
 
     except Exception as e:
@@ -137,8 +128,6 @@ def parse_ai_response(ai_response: str) -> Optional[Dict]:
 async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
     """Анализирует данные с помощью ИИ (первичный анализ с prompt2.txt)."""
     try:
-        logger.info(f"Начинаем первичный анализ с ИИ для направления: {direction}")
-
         # Читаем промпт из prompt2.txt
         try:
             with open("prompt2.txt", 'r', encoding='utf-8') as file:
@@ -156,21 +145,12 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
             prompt=system_prompt
         )
 
-        logger.info("=" * 60)
-        logger.info("ОТВЕТ ИИ НА ПЕРВИЧНЫЙ АНАЛИЗ:")
-        logger.info("=" * 60)
-        logger.info(ai_response)
-        logger.info("=" * 60)
-
         parsed_data = parse_ai_response(ai_response)
 
         if parsed_data and isinstance(parsed_data, dict) and 'pairs' in parsed_data:
-            logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data['pairs'])} пар")
-            logger.info(f"Рекомендуемые пары: {parsed_data['pairs']}")
             return parsed_data
 
         # Fallback: возвращаем случайные пары из исходных данных
-        logger.warning("Используем fallback: возвращаем случайные пары из исходных данных")
         available_pairs = list(data.keys())[:5]
         return {'pairs': available_pairs}
 
@@ -182,8 +162,6 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
 async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
     """Финальный анализ с ИИ на расширенных данных (с prompt.txt)."""
     try:
-        logger.info("Начинаем финальный анализ с ИИ...")
-
         # Читаем основной промпт из prompt.txt
         try:
             with open('prompt.txt', 'r', encoding='utf-8') as file:
@@ -199,12 +177,6 @@ async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
             prompt=system_prompt
         )
 
-        logger.info("=" * 60)
-        logger.info("ФИНАЛЬНЫЙ ОТВЕТ ИИ:")
-        logger.info("=" * 60)
-        logger.info(final_response)
-        logger.info("=" * 60)
-
         return final_response
 
     except Exception as e:
@@ -217,84 +189,99 @@ def get_user_direction() -> str:
     while True:
         direction = input('Выберите направление торговли (long/short): ').strip().lower()
         if direction in ['long', 'short']:
-            logger.info(f"Выбрано направление: {direction}")
             return direction
-        logger.warning("Некорректный ввод. Введите 'long' или 'short'")
+        print("Некорректный ввод. Введите 'long' или 'short'")
 
 
-async def process_trading_signals():
-    """Основная функция обработки торговых сигналов."""
+async def run_trading_analysis(direction: str) -> Optional[str]:
+    """
+    Основная функция анализа торговых сигналов.
+
+    Args:
+        direction: Направление торговли ('long' или 'short')
+
+    Returns:
+        Результат финального анализа от ИИ или None при ошибке
+    """
     try:
-        logger.info("=" * 60)
-        logger.info("ЗАПУСК АНАЛИЗА ТОРГОВЫХ СИГНАЛОВ")
-        logger.info("=" * 60)
+        logger.info(f"Запуск анализа для направления: {direction}")
 
         # Шаг 1: Сбор начальных данных
         all_data = await collect_initial_data()
         if not all_data:
-            logger.error("Нет данных для анализа. Завершение программы.")
-            return
+            logger.error("Нет данных для анализа")
+            return None
 
         # Шаг 2: Поиск свечных паттернов
-        logger.info("Поиск свечных паттернов...")
         candlestick_signals = detect_candlestick_signals(all_data)
-
-        total_long = len(candlestick_signals['long'])
-        total_short = len(candlestick_signals['short'])
-        logger.info(f"Найдено паттернов: {total_long} long, {total_short} short")
-
-        if total_long == 0 and total_short == 0:
-            logger.warning("Свечные паттерны не найдены")
-            return
-
-        # Шаг 3: Выбор направления пользователем
-        direction = get_user_direction()
         selected_pairs = candlestick_signals[direction]
 
         if not selected_pairs:
             logger.warning(f"Нет паттернов для направления {direction}")
-            return
+            return None
 
-        logger.info(f"Выбрано для анализа: {len(selected_pairs)} пар")
+        logger.info(f"Найдено паттернов {direction}: {selected_pairs}")
 
-        # Шаг 4: Получение детальных данных (20 свечей)
+        # Шаг 3: Получение детальных данных (20 свечей)
         detailed_data = await get_detailed_data_for_pairs(selected_pairs, limit=20)
         if not detailed_data:
             logger.error("Не удалось получить детальные данные")
-            return
+            return None
 
-        # Шаг 5: Первичный анализ с ИИ (с prompt2.txt)
+        # Шаг 4: Первичный анализ с ИИ
         ai_analysis = await analyze_with_ai(detailed_data, direction)
         if not ai_analysis or 'pairs' not in ai_analysis:
             logger.error("Не удалось получить анализ от ИИ")
-            return
+            return None
 
         final_pairs = ai_analysis['pairs']
-        logger.info(f"ИИ рекомендует для детального анализа: {len(final_pairs)} пар - {final_pairs}")
+        logger.info(f"ИИ рекомендует: {final_pairs}")
 
-        # Шаг 6: Получение расширенных данных для финального анализа (100 свечей)
+        # Шаг 5: Получение расширенных данных (100 свечей)
         if final_pairs:
             extended_data = await get_detailed_data_for_pairs(final_pairs, limit=100)
-            logger.info(f"Получены расширенные данные по {len(extended_data)} парам (100 свечей каждая)")
 
-            # Шаг 7: Финальный анализ (с prompt.txt)
-            final_recommendation = await final_ai_analysis(extended_data, direction)
-            if final_recommendation:
-                logger.info("=" * 60)
-                logger.info("АНАЛИЗ ЗАВЕРШЕН УСПЕШНО")
-                logger.info("=" * 60)
-            else:
-                logger.error("Не удалось получить финальные рекомендации")
+            # Шаг 6: Финальный анализ
+            final_result = await final_ai_analysis(extended_data, direction)
+            return final_result
 
-        logger.info("=" * 60)
-        logger.info("ПРОГРАММА ЗАВЕРШЕНА")
-        logger.info("=" * 60)
+        return None
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+        return None
+
+
+async def main():
+    """Главная функция программы."""
+    logger.info("=" * 50)
+    logger.info("ЗАПУСК ТОРГОВОГО БОТА")
+    logger.info("=" * 50)
+
+    try:
+        # Получаем направление от пользователя
+        direction = get_user_direction()
+
+        # Запускаем анализ
+        result = await run_trading_analysis(direction)
+
+        # Логируем результат
+        if result:
+            logger.info("=" * 50)
+            logger.info("РЕЗУЛЬТАТ АНАЛИЗА:")
+            logger.info("=" * 50)
+            logger.info(result)
+            logger.info("=" * 50)
+        else:
+            logger.error("Анализ не завершен успешно")
 
     except KeyboardInterrupt:
         logger.info("Программа прервана пользователем")
     except Exception as e:
-        logger.error(f"Критическая ошибка в основной функции: {e}")
+        logger.error(f"Критическая ошибка в main: {e}")
+    finally:
+        logger.info("Программа завершена")
 
 
 if __name__ == "__main__":
-    asyncio.run(process_trading_signals())
+    asyncio.run(main())
