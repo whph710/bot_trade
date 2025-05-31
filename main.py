@@ -2,11 +2,12 @@ import asyncio
 import time
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import calculate_atr, detect_candlestick_signals
-from deepseek import deep_seek_streaming
+from deepseek import deepseek_chat, deepseek_reasoner, test_deepseek_connection
 
 # Настройка логирования
 logging.basicConfig(
@@ -133,25 +134,70 @@ async def get_detailed_data_for_pairs(pairs: List[str], limit: int = 20) -> Dict
         return {}
 
 
-import json
-import re
-
-
-async def analyze_with_ai(data: Dict, direction: str, prompt_file: str = 'prompt2.txt') -> Optional[Dict]:
+def parse_ai_response(ai_response: str) -> Optional[Dict]:
     """
-    Анализирует данные с помощью ИИ.
-    ИСПРАВЛЕНА для более безопасной обработки ответов.
+    Упрощенная функция для парсинга ответа ИИ.
+
+    Args:
+        ai_response: Ответ от ИИ
+
+    Returns:
+        Словарь с ключом 'pairs' или None
+    """
+    if not ai_response or ai_response.strip() == "":
+        logger.error("Получен пустой ответ от ИИ")
+        return None
+
+    logger.debug(f"Первые 200 символов ответа: {ai_response[:200]}")
+
+    # Метод 1: Прямое преобразование в JSON
+    try:
+        parsed_data = json.loads(ai_response.strip())
+        if isinstance(parsed_data, dict) and 'pairs' in parsed_data:
+            logger.info("Успешно распознан JSON")
+            return parsed_data
+    except json.JSONDecodeError:
+        pass
+
+    # Метод 2: Поиск JSON блока в тексте
+    json_pattern = r'\{[^{}]*"pairs"[^{}]*\[[^\]]*\][^{}]*\}'
+    json_matches = re.findall(json_pattern, ai_response, re.DOTALL)
+
+    for match in json_matches:
+        try:
+            parsed_data = json.loads(match)
+            if isinstance(parsed_data, dict) and 'pairs' in parsed_data:
+                logger.info("Найден JSON блок в тексте")
+                return parsed_data
+        except json.JSONDecodeError:
+            continue
+
+    # Метод 3: Поиск списка пар в тексте
+    pairs_pattern = r'["\']([A-Z]+USDT)["\']'
+    found_pairs = re.findall(pairs_pattern, ai_response)
+
+    if found_pairs:
+        unique_pairs = list(dict.fromkeys(found_pairs))[:10]
+        logger.info(f"Извлечены пары из текста: {len(unique_pairs)} пар")
+        return {'pairs': unique_pairs}
+
+    logger.error("Не удалось распознать структуру ответа ИИ")
+    return None
+
+
+async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
+    """
+    Анализирует данные с помощью ИИ используя deepseek_chat.
 
     Args:
         data: Данные для анализа
         direction: Направление торговли ('long' или 'short')
-        prompt_file: Файл с промптом для ИИ
 
     Returns:
         Результат анализа ИИ в виде словаря или None при ошибке
     """
     try:
-        logger.info(f"Начинаем анализ с ИИ для направления: {direction}")
+        logger.info(f"Начинаем первичный анализ с ИИ (Chat) для направления: {direction}")
 
         # Читаем промпт
         try:
@@ -159,123 +205,124 @@ async def analyze_with_ai(data: Dict, direction: str, prompt_file: str = 'prompt
                 prompt = file.read()
         except FileNotFoundError:
             logger.warning("Файл prompt2.txt не найден, используем базовый промпт")
-            prompt = """Проанализируй торговые данные и верни результат в виде Python словаря с ключом 'pairs', 
-                       содержащим список рекомендуемых торговых пар для анализа. 
-                       Формат ответа: {'pairs': ['BTCUSDT', 'ETHUSDT']}"""
+            prompt = f"""Ты опытный трейдер. Проанализируй торговые данные для направления {direction}.
+                       Верни результат ТОЛЬКО в виде JSON словаря с ключом 'pairs', содержащим список 
+                       рекомендуемых торговых пар для детального анализа.
+                       Пример формата ответа: {{"pairs": ["BTCUSDT", "ETHUSDT"]}}
+                       Выбери максимум 5-7 лучших пар."""
 
-        # Получаем ответ от ИИ
-        ai_response = await deep_seek_streaming(
-            data=str(data),
-            trade1=str(direction),
-            prompt=prompt
-        )
+        # Формируем данные для отправки
+        analysis_data = f"Направление: {direction}\nДанные: {str(data)}"
 
-        logger.info("Получен ответ от ИИ")
+        # Получаем ответ от ИИ (используем deepseek_chat для первичного анализа)
+        ai_response = await deepseek_chat(prompt, analysis_data)
 
-        # ИСПРАВЛЕНИЕ: Более безопасная обработка ответа
-        if not ai_response or ai_response.strip() == "":
-            logger.error("Получен пустой ответ от ИИ")
+        if "Ошибка" in ai_response:
+            logger.error(f"Ошибка от ИИ: {ai_response}")
             return None
 
-        logger.debug(f"Первые 200 символов ответа: {ai_response[:200]}")
+        # Парсим ответ
+        parsed_data = parse_ai_response(ai_response)
 
-        # Пытаемся найти JSON в ответе
-        parsed_data = None
-
-        # Метод 1: Прямое преобразование в JSON
-        try:
-            parsed_data = json.loads(ai_response.strip())
-            logger.info("Успешно распознан JSON")
-        except json.JSONDecodeError:
-            logger.debug("Не удалось распознать как JSON, пробуем другие методы")
-
-        # Метод 2: Поиск JSON блока в тексте
-        if parsed_data is None:
-            json_pattern = r'\{[^{}]*"pairs"[^{}]*\[[^\]]*\][^{}]*\}'
-            json_matches = re.findall(json_pattern, ai_response, re.DOTALL)
-
-            for match in json_matches:
-                try:
-                    parsed_data = json.loads(match)
-                    logger.info("Найден JSON блок в тексте")
-                    break
-                except json.JSONDecodeError:
-                    continue
-
-        # Метод 3: Поиск списка пар в тексте
-        if parsed_data is None:
-            pairs_pattern = r'["\']([A-Z]+USDT)["\']'
-            found_pairs = re.findall(pairs_pattern, ai_response)
-
-            if found_pairs:
-                # Убираем дубликаты и берем первые 5-10 пар
-                unique_pairs = list(dict.fromkeys(found_pairs))[:10]
-                parsed_data = {'pairs': unique_pairs}
-                logger.info(f"Извлечены пары из текста: {len(unique_pairs)} пар")
-
-        # Метод 4: Безопасное использование eval (только если другие методы не сработали)
-        if parsed_data is None:
-            try:
-                # Очищаем строку от лишних символов
-                clean_response = ai_response.strip()
-                if clean_response.startswith('```') and clean_response.endswith('```'):
-                    clean_response = clean_response[3:-3].strip()
-                if clean_response.startswith('python'):
-                    clean_response = clean_response[6:].strip()
-
-                # Пробуем eval только если строка выглядит как словарь
-                if clean_response.startswith('{') and clean_response.endswith('}'):
-                    parsed_data = eval(clean_response)
-                    logger.info("Успешно использован eval")
-            except Exception as e:
-                logger.warning(f"Eval не сработал: {e}")
-
-        # Проверяем результат
-        if parsed_data and isinstance(parsed_data, dict):
-            if 'pairs' in parsed_data and isinstance(parsed_data['pairs'], list):
-                logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data['pairs'])} пар")
-                return parsed_data
-            else:
-                logger.error("В ответе ИИ отсутствует корректный ключ 'pairs'")
+        if parsed_data and 'pairs' in parsed_data:
+            logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data['pairs'])} пар")
+            return parsed_data
         else:
-            logger.error("Не удалось распознать структуру ответа ИИ")
-
-        # Если ничего не получилось, создаем fallback ответ
-        logger.warning("Используем fallback: возвращаем случайные пары из исходных данных")
-        available_pairs = list(data.keys())[:5]  # Берем первые 5 пар
-        return {'pairs': available_pairs}
+            # Fallback: возвращаем случайные пары из исходных данных
+            logger.warning("Используем fallback: возвращаем первые пары из исходных данных")
+            available_pairs = list(data.keys())[:5]
+            return {'pairs': available_pairs}
 
     except Exception as e:
         logger.error(f"Ошибка при анализе с ИИ: {e}")
         return None
 
 
-
 async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
-    """
-    Финальный анализ с ИИ на расширенных данных.
-
-    Args:
-        data: Расширенные данные для анализа
-        direction: Направление торговли
-
-    Returns:
-        Финальные рекомендации от ИИ
-    """
+    """Оптимизированная версия функции финального анализа"""
     try:
-        logger.info("Начинаем финальный анализ с ИИ...")
+        logger.info("Начинаем оптимизированный финальный анализ...")
 
-        final_response = await deep_seek_streaming(
-            data=str(data),
-            trade1=str(direction)
-        )
+        # 1. Чтение промпта (оставляем без изменений)
+        try:
+            with open("prompt.txt", 'r', encoding='utf-8') as file:
+                prompt = file.read()
+        except FileNotFoundError:
+            prompt = f"Ты опытный трейдер. Проведи глубокий анализ торговых данных для направления {direction}."
 
-        logger.info("Получен финальный анализ от ИИ")
+        # 2. Оптимизация данных
+        optimized_data = {}
+        for pair, candles in data.items():
+            if not candles or len(candles) < 5:
+                continue
+
+            # Берем только ключевые метрики
+            optimized_data[pair] = {
+                "current_price": float(candles[-1][4]),
+                "price_24h_change": f"{(float(candles[-1][4]) - float(candles[0][1])) / float(candles[0][1]) * 100:.2f} % ",
+                "volume_24h": sum(float(c[5]) for c in candles[-24:]) / 24,
+                "support_level": min(float(c[3]) for c in candles[-10:]),
+                "resistance_level": max(float(c[2]) for c in candles[-10:]),
+                "trend": "up" if float(candles[-1][4]) > float(candles[-5][4]) else "down"
+                }
+
+        # 3. Формируем компактные данные для анализа
+        analysis_data = {
+            "direction": direction,
+            "pairs_count": len(optimized_data),
+            "analysis_data": optimized_data
+        }
+
+        logger.info(f"Оптимизированный размер данных: {len(str(analysis_data))} символов")
+
+        # 4. Отправка в Reasoner
+        final_response = await deepseek_reasoner(prompt, json.dumps(analysis_data))
+
+        if not final_response or len(final_response.strip()) < 50:
+            logger.warning("ИИ не смог сформировать полный ответ, используем резервный метод...")
+            # Резервный метод с ручной генерацией рекомендаций
+            return generate_fallback_recommendations(optimized_data, direction)
+
         return final_response
 
     except Exception as e:
-        logger.error(f"Ошибка при финальном анализе: {e}")
+        logger.error(f"Ошибка при оптимизированном анализе: {e}")
         return None
+
+
+def generate_fallback_recommendations(data: Dict, direction: str) -> str:
+    """Генерация рекомендаций при невозможности получения ответа от ИИ"""
+    recommendations = []
+    for pair, metrics in data.items():
+        entry_price = metrics['support_level'] * 0.99 if direction == "long" else metrics['resistance_level'] * 1.01
+        recommendations.append(
+            f"Пара: {pair}\n"
+            f"Рекомендация: {'BUY' if direction == 'long' else 'SELL'}\n"
+            f"Точка входа: {entry_price:.6f}\n"
+            f"Стоп-лосс: {entry_price * 0.98 if direction == 'long' else entry_price * 1.02:.6f}\n"
+            f"Тейк-профит: {entry_price * 1.03 if direction == 'long' else entry_price * 0.97:.6f}\n"
+        )
+
+    return "\n".join([
+        f"Аналитический отчет ({direction})",
+        f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "=" * 50,
+        *recommendations
+    ])
+
+
+async def validate_api_before_analysis():
+    """
+    Проверяет работоспособность API перед началом анализа.
+    """
+    logger.info("Проверяем работоспособность DeepSeek API...")
+
+    if not await test_deepseek_connection():
+        logger.error("API недоступен. Проверьте подключение к интернету и API ключ.")
+        return False
+
+    logger.info("API проверка пройдена успешно")
+    return True
 
 
 def get_user_direction() -> str:
@@ -298,15 +345,21 @@ async def process_trading_signals():
     Основная функция обработки торговых сигналов.
 
     Выполняет полный цикл:
-    1. Сбор данных по парам
-    2. Поиск свечных паттернов
-    3. Анализ с ИИ
-    4. Финальные рекомендации
+    1. Проверка API
+    2. Сбор данных по парам
+    3. Поиск свечных паттернов
+    4. Первичный анализ с ИИ (deepseek_chat)
+    5. Финальные рекомендации (deepseek_reasoner)
     """
     try:
         logger.info("=" * 60)
         logger.info("ЗАПУСК АНАЛИЗА ТОРГОВЫХ СИГНАЛОВ")
         logger.info("=" * 60)
+
+        # Шаг 0: Проверка API
+        if not await validate_api_before_analysis():
+            logger.error("Не удалось подключиться к API. Завершение программы.")
+            return
 
         # Шаг 1: Сбор начальных данных
         all_data = await collect_initial_data()
@@ -342,7 +395,8 @@ async def process_trading_signals():
             logger.error("Не удалось получить детальные данные")
             return
 
-        # Шаг 5: Первичный анализ с ИИ
+        # Шаг 5: Первичный анализ с ИИ (deepseek_chat)
+        logger.info("Этап 1: Первичный анализ с DeepSeek Chat...")
         ai_analysis = await analyze_with_ai(detailed_data, direction)
         if not ai_analysis or 'pairs' not in ai_analysis:
             logger.error("Не удалось получить анализ от ИИ")
@@ -350,20 +404,36 @@ async def process_trading_signals():
 
         final_pairs = ai_analysis['pairs']
         logger.info(f"ИИ рекомендует для детального анализа: {len(final_pairs)} пар")
+        logger.info(f"Выбранные пары: {final_pairs}")
 
         # Шаг 6: Получение расширенных данных для финального анализа
         if final_pairs:
-            extended_data = await get_detailed_data_for_pairs(final_pairs, limit=100)
+            extended_data = await get_detailed_data_for_pairs(final_pairs, limit=100)  # Уменьшил лимит
 
-            # Шаг 7: Финальный анализ
+            # Шаг 7: Финальный анализ (deepseek_reasoner)
+            logger.info("Этап 2: Глубокий анализ с DeepSeek Reasoner...")
             final_recommendation = await final_ai_analysis(extended_data, direction)
-            if final_recommendation:
+
+            if final_recommendation and len(final_recommendation.strip()) > 50:
                 logger.info("=" * 60)
                 logger.info("ФИНАЛЬНЫЕ РЕКОМЕНДАЦИИ:")
                 logger.info("=" * 60)
-                logger.info(final_recommendation)
+                print(final_recommendation)
+
+                # Сохраняем результат в файл
+                try:
+                    with open(f'analysis_result_{direction}.txt', 'w', encoding='utf-8') as f:
+                        f.write(f"Анализ от {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write(f"Направление: {direction}\n")
+                        f.write(f"Анализируемые пары: {final_pairs}\n")
+                        f.write("=" * 60 + "\n")
+                        f.write(final_recommendation)
+                    logger.info(f"Результат сохранен в файл: analysis_result_{direction}.txt")
+                except Exception as e:
+                    logger.error(f"Ошибка при сохранении файла: {e}")
             else:
-                logger.error("Не удалось получить финальные рекомендации")
+                logger.error("Не удалось получить качественные финальные рекомендации")
+                logger.info("Попробуйте запустить анализ повторно через несколько минут")
 
         logger.info("=" * 60)
         logger.info("АНАЛИЗ ЗАВЕРШЕН")
@@ -373,6 +443,8 @@ async def process_trading_signals():
         logger.info("Программа прервана пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка в основной функции: {e}")
+        import traceback
+        logger.error(f"Детали ошибки: {traceback.format_exc()}")
 
 
 if __name__ == "__main__":

@@ -21,20 +21,16 @@ except FileNotFoundError:
     logger.warning("Файл prompt.txt не найден, используется промпт по умолчанию")
 
 
-async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
-                    max_tokens: int = 4000, max_retries: int = 3) -> str:
+async def deepseek_chat(prompt: str = DEFAULT_PROMPT, data: str = "") -> str:
     """
-    Асинхронно отправляет запрос к DeepSeek API с обработкой ошибок и повторными попытками.
+    Отправляет запрос к DeepSeek Chat модели.
 
     Args:
-        data: Данные для отправки модели
-        prompt: Системный промпт для модели
-        timeout: Таймаут запроса в секундах
-        max_tokens: Максимальное количество токенов в ответе
-        max_retries: Количество попыток при ошибке соединения
+        prompt: Системный промпт
+        data: Данные для анализа
 
     Returns:
-        Содержимое ответа от модели или сообщение об ошибке
+        Ответ от модели
     """
     api_key = os.getenv('DEEPSEEK')
     if not api_key:
@@ -42,84 +38,21 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
         logger.error(error_msg)
         return f"Ошибка: {error_msg}"
 
-    # Настройки HTTP клиента для стабильного соединения
-    http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        verify=True
-    )
-
+    http_client = httpx.AsyncClient(timeout=180)  # Увеличил таймаут
     client = AsyncOpenAI(
         api_key=api_key,
         base_url="https://api.deepseek.com",
         http_client=http_client
     )
 
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Попытка {attempt + 1}/{max_retries}: отправка запроса к DeepSeek")
-            logger.debug(f"Размер данных: {len(str(data))} символов")
-
-            response = await client.chat.completions.create(
-                model="deepseek-chat",  # Используем обычную модель вместо reasoner
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": str(data)},
-                ],
-                stream=False,
-                max_tokens=max_tokens,
-                temperature=0.7
-            )
-
-            result = response.choices[0].message.content
-            logger.info(f"Успешно получен ответ от DeepSeek (длина: {len(result)} символов)")
-
-            await http_client.aclose()
-            return result
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.warning(f"Попытка {attempt + 1} неудачна: {error_msg}")
-
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # Экспоненциальная задержка: 1, 2, 4 сек
-                logger.info(f"Ожидание {wait_time} сек перед следующей попыткой...")
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"Все попытки исчерпаны: {error_msg}")
-                await http_client.aclose()
-                return f"Ошибка после {max_retries} попыток: {error_msg}"
-
-    await http_client.aclose()
-    return "Неизвестная ошибка при обращении к DeepSeek API"
-
-
-async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT_PROMPT,
-                              timeout: int = 120) -> str:
-    api_key = os.getenv('DEEPSEEK')
-    if not api_key:
-        return "Ошибка: API ключ DEEPSEEK не найден"
-
-    data_str = str(data)
-    if len(data_str) > 50000:
-        data_str = data_str[:50000] + "... [данные обрезаны]"
-
     try:
-        timeout_config = httpx.Timeout(timeout)
-        http_client = httpx.AsyncClient(timeout=timeout_config)
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com",
-            http_client=http_client
-        )
-
-        system_prompt = f"{trade1} {prompt}" if trade1 else prompt
+        logger.info("Отправка запроса к DeepSeek Chat")
 
         stream = await client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": data_str},
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": data},
             ],
             stream=True,
             max_tokens=4000,
@@ -133,15 +66,123 @@ async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT
                 result += content
 
         await http_client.aclose()
-
-        if not result.strip():
-            return await deep_seek(data_str, prompt, timeout=60)
-
+        logger.info(f"Успешно получен ответ от DeepSeek Chat (длина: {len(result)} символов)")
         return result
 
-    except asyncio.TimeoutError:
-        return f"Ошибка: Таймаут запроса ({timeout} сек)"
+    except Exception as e:
+        await http_client.aclose()
+        error_msg = f"Ошибка DeepSeek Chat: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
 
+
+async def deepseek_reasoner(prompt: str = DEFAULT_PROMPT, data: str = "", max_retries: int = 3) -> str:
+    """
+    Отправляет запрос к DeepSeek Reasoner модели с повторными попытками.
+
+    Args:
+        prompt: Системный промпт
+        data: Данные для анализа
+        max_retries: Максимальное количество попыток
+
+    Returns:
+        Ответ от модели
+    """
+    api_key = os.getenv('DEEPSEEK')
+    if not api_key:
+        error_msg = "API ключ DEEPSEEK не найден в переменных окружения"
+        logger.error(error_msg)
+        return f"Ошибка: {error_msg}"
+
+    # Обрезаем данные если они слишком длинные для Reasoner
+    data_str = str(data)
+    if len(data_str) > 30000:  # Уменьшил лимит для Reasoner
+        data_str = data_str[:30000] + "... [данные обрезаны для анализа]"
+        logger.info(f"Данные обрезаны до 30000 символов для Reasoner")
+
+    for attempt in range(max_retries):
+        http_client = httpx.AsyncClient(timeout=300)  # Увеличил таймаут для Reasoner
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            http_client=http_client
+        )
+
+        try:
+            logger.info(f"Отправка запроса к DeepSeek Reasoner (попытка {attempt + 1}/{max_retries})")
+
+            # Используем обычный режим вместо stream для Reasoner
+            response = await client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": data_str},
+                ],
+                max_tokens=8000,  # Увеличил лимит токенов
+                temperature=0.7,  # Уменьшил температуру для более стабильных результатов
+                # Отключил стриминг для Reasoner
+            )
+
+            await http_client.aclose()
+
+            result = response.choices[0].message.content
+            if result and len(result.strip()) > 0:
+                logger.info(f"Успешно получен ответ от DeepSeek Reasoner (длина: {len(result)} символов)")
+                return result
+            else:
+                logger.warning(f"Получен пустой ответ от Reasoner на попытке {attempt + 1}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)  # Ждем перед повторной попыткой
+                    continue
+
+        except asyncio.TimeoutError:
+            await http_client.aclose()
+            logger.error(f"Таймаут при запросе к Reasoner на попытке {attempt + 1}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(5)
+                continue
+        except Exception as e:
+            await http_client.aclose()
+            error_msg = f"Ошибка DeepSeek Reasoner на попытке {attempt + 1}: {str(e)}"
+            logger.error(error_msg)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(3)
+                continue
+
+    # Если все попытки неудачны, используем fallback на Chat модель
+    logger.warning("Все попытки Reasoner неудачны, используем fallback на Chat модель")
+    return await deepseek_chat_fallback(prompt, data_str)
+
+
+async def deepseek_chat_fallback(prompt: str, data: str) -> str:
+    """
+    Fallback функция, использующая Chat модель вместо Reasoner.
+
+    Args:
+        prompt: Системный промпт
+        data: Данные для анализа
+
+    Returns:
+        Ответ от Chat модели
+    """
+    logger.info("Использую Chat модель как fallback для детального анализа")
+
+    # Модифицируем промпт для более детального анализа через Chat
+    enhanced_prompt = f"""
+{prompt}
+
+ВАЖНО: Проведи максимально детальный и глубокий анализ предоставленных данных.
+Включи в анализ:
+1. Технический анализ каждой торговой пары
+2. Конкретные точки входа и выхода
+3. Уровни стоп-лосса и тейк-профита
+4. Обоснование каждой рекомендации
+5. Оценку рисков
+
+Предоставь структурированный и подробный ответ.
+"""
+
+    return await deepseek_chat(enhanced_prompt, data)
 
 
 async def test_deepseek_connection() -> bool:
@@ -158,65 +199,25 @@ async def test_deepseek_connection() -> bool:
 
     logger.info("Проверяем подключение к DeepSeek API...")
 
-    # Проверяем доступность сервера
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get("https://api.deepseek.com")
-            logger.info(f"Сервер доступен, статус: {response.status_code}")
+        # Простой тест с минимальным запросом
+        response = await deepseek_chat("Привет", "Тест")
+        if "Ошибка" not in response:
+            logger.info("Chat API работает корректно")
+
+            # Тестируем также Reasoner
+            reasoner_response = await deepseek_reasoner("Привет", "Тест короткое сообщение")
+            if "Ошибка" not in reasoner_response and len(reasoner_response.strip()) > 0:
+                logger.info("Reasoner API работает корректно")
+                return True
+            else:
+                logger.warning("Reasoner API не отвечает, но Chat работает")
+                return True  # Возвращаем True, так как есть fallback
+
+        else:
+            logger.error(f"Ошибка API: {response}")
+            return False
+
     except Exception as e:
-        logger.error(f"Сервер недоступен: {e}")
+        logger.error(f"Ошибка при тестировании API: {e}")
         return False
-
-    # Тестовый запрос к API
-    try:
-        http_client = httpx.AsyncClient(timeout=30.0)
-        api_client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com",
-            http_client=http_client
-        )
-
-        response = await api_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "user", "content": "Привет"}],
-            max_tokens=10
-        )
-
-        await http_client.aclose()
-        logger.info("API работает корректно")
-        return True
-
-    except Exception as e:
-        logger.error(f"Ошибка API: {e}")
-        return False
-
-
-async def check_api_health() -> dict:
-    """
-    Проверяет состояние API и возвращает детальную информацию.
-
-    Returns:
-        Словарь с информацией о состоянии API
-    """
-    health_info = {
-        "api_key_exists": bool(os.getenv('DEEPSEEK')),
-        "server_accessible": False,
-        "api_functional": False,
-        "response_time": None
-    }
-
-    start_time = asyncio.get_event_loop().time()
-
-    try:
-        # Проверяем API
-        is_connected = await test_deepseek_connection()
-        health_info["api_functional"] = is_connected
-        health_info["server_accessible"] = True
-
-        end_time = asyncio.get_event_loop().time()
-        health_info["response_time"] = round(end_time - start_time, 2)
-
-    except Exception as e:
-        logger.error(f"Ошибка при проверке здоровья API: {e}")
-
-    return health_info
