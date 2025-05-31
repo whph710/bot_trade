@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
-async def get_klines_async(symbol: str, interval: int = 15, limit: int = 120) -> List[List[str]]:
+async def get_klines_async(symbol: str, interval: int = 15, limit: int = 100) -> List[List[str]]:
     """
     Асинхронно получает данные свечей для торговой пары.
 
