@@ -135,28 +135,38 @@ def parse_ai_response(ai_response: str) -> Optional[Dict]:
 
 
 async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
-    """Анализирует данные с помощью ИИ."""
+    """Анализирует данные с помощью ИИ (первичный анализ с prompt2.txt)."""
     try:
-        logger.info(f"Начинаем анализ с ИИ для направления: {direction}")
+        logger.info(f"Начинаем первичный анализ с ИИ для направления: {direction}")
 
-        # Читаем промпт
+        # Читаем промпт из prompt2.txt
         try:
             with open("prompt2.txt", 'r', encoding='utf-8') as file:
-                prompt = file.read()
+                prompt2 = file.read()
         except FileNotFoundError:
-            prompt = """Проанализируй торговые данные и верни результат в виде Python словаря с ключом 'pairs', 
+            prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря с ключом 'pairs', 
                        содержащим список рекомендуемых торговых пар для анализа. 
                        Формат ответа: {'pairs': ['BTCUSDT', 'ETHUSDT']}"""
 
+        # Добавляем направление к системному промпту
+        system_prompt = f"Рассматривай только {direction} {prompt2}"
+
         ai_response = await deep_seek(
             data=str(data),
-            prompt=f"{direction} {prompt}"
+            prompt=system_prompt
         )
+
+        logger.info("=" * 60)
+        logger.info("ОТВЕТ ИИ НА ПЕРВИЧНЫЙ АНАЛИЗ:")
+        logger.info("=" * 60)
+        logger.info(ai_response)
+        logger.info("=" * 60)
 
         parsed_data = parse_ai_response(ai_response)
 
         if parsed_data and isinstance(parsed_data, dict) and 'pairs' in parsed_data:
             logger.info(f"Успешно обработан ответ ИИ: {len(parsed_data['pairs'])} пар")
+            logger.info(f"Рекомендуемые пары: {parsed_data['pairs']}")
             return parsed_data
 
         # Fallback: возвращаем случайные пары из исходных данных
@@ -170,16 +180,31 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
 
 
 async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
-    """Финальный анализ с ИИ на расширенных данных."""
+    """Финальный анализ с ИИ на расширенных данных (с prompt.txt)."""
     try:
         logger.info("Начинаем финальный анализ с ИИ...")
 
+        # Читаем основной промпт из prompt.txt
+        try:
+            with open('prompt.txt', 'r', encoding='utf-8') as file:
+                main_prompt = file.read()
+        except FileNotFoundError:
+            main_prompt = "Ты опытный трейдер. Проанализируй данные и дай рекомендации."
+
+        # Добавляем направление к системному промпту
+        system_prompt = f"Рассматривай только {direction} {main_prompt}"
+
         final_response = await deep_seek(
             data=str(data),
-            prompt=f"{direction} торговые рекомендации"
+            prompt=system_prompt
         )
 
-        logger.info("Получен финальный анализ от ИИ")
+        logger.info("=" * 60)
+        logger.info("ФИНАЛЬНЫЙ ОТВЕТ ИИ:")
+        logger.info("=" * 60)
+        logger.info(final_response)
+        logger.info("=" * 60)
+
         return final_response
 
     except Exception as e:
@@ -232,37 +257,37 @@ async def process_trading_signals():
 
         logger.info(f"Выбрано для анализа: {len(selected_pairs)} пар")
 
-        # Шаг 4: Получение детальных данных
+        # Шаг 4: Получение детальных данных (20 свечей)
         detailed_data = await get_detailed_data_for_pairs(selected_pairs, limit=20)
         if not detailed_data:
             logger.error("Не удалось получить детальные данные")
             return
 
-        # Шаг 5: Первичный анализ с ИИ
+        # Шаг 5: Первичный анализ с ИИ (с prompt2.txt)
         ai_analysis = await analyze_with_ai(detailed_data, direction)
         if not ai_analysis or 'pairs' not in ai_analysis:
             logger.error("Не удалось получить анализ от ИИ")
             return
 
         final_pairs = ai_analysis['pairs']
-        logger.info(f"ИИ рекомендует для детального анализа: {len(final_pairs)} пар")
+        logger.info(f"ИИ рекомендует для детального анализа: {len(final_pairs)} пар - {final_pairs}")
 
-        # Шаг 6: Получение расширенных данных для финального анализа
+        # Шаг 6: Получение расширенных данных для финального анализа (100 свечей)
         if final_pairs:
             extended_data = await get_detailed_data_for_pairs(final_pairs, limit=100)
+            logger.info(f"Получены расширенные данные по {len(extended_data)} парам (100 свечей каждая)")
 
-            # Шаг 7: Финальный анализ
+            # Шаг 7: Финальный анализ (с prompt.txt)
             final_recommendation = await final_ai_analysis(extended_data, direction)
             if final_recommendation:
                 logger.info("=" * 60)
-                logger.info("ФИНАЛЬНЫЕ РЕКОМЕНДАЦИИ:")
+                logger.info("АНАЛИЗ ЗАВЕРШЕН УСПЕШНО")
                 logger.info("=" * 60)
-                logger.info(final_recommendation)
             else:
                 logger.error("Не удалось получить финальные рекомендации")
 
         logger.info("=" * 60)
-        logger.info("АНАЛИЗ ЗАВЕРШЕН")
+        logger.info("ПРОГРАММА ЗАВЕРШЕНА")
         logger.info("=" * 60)
 
     except KeyboardInterrupt:

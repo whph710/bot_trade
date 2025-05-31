@@ -25,6 +25,7 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
                     max_tokens: int = 4000, max_retries: int = 3) -> str:
     """
     Асинхронно отправляет запрос к DeepSeek API с обработкой ошибок и повторными попытками.
+    Только deepseek-chat модель.
 
     Args:
         data: Данные для отправки модели
@@ -61,7 +62,7 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
             logger.debug(f"Размер данных: {len(str(data))} символов")
 
             response = await client.chat.completions.create(
-                model="deepseek-chat",  # Используем обычную модель вместо reasoner
+                model="deepseek-chat",
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": str(data)},
@@ -92,56 +93,6 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
 
     await http_client.aclose()
     return "Неизвестная ошибка при обращении к DeepSeek API"
-
-
-async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT_PROMPT,
-                              timeout: int = 60) -> str:
-    api_key = os.getenv('DEEPSEEK')
-    if not api_key:
-        return "Ошибка: API ключ DEEPSEEK не найден"
-
-    data_str = str(data)
-    if len(data_str) > 50000:
-        data_str = data_str[:50000] + "... [данные обрезаны]"
-
-    try:
-        timeout_config = httpx.Timeout(timeout)
-        http_client = httpx.AsyncClient(timeout=timeout_config)
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com",
-            http_client=http_client
-        )
-
-        system_prompt = f"{trade1} {prompt}" if trade1 else prompt
-
-        stream = await client.chat.completions.create(
-            model="deepseek-reasoner",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": data_str},
-            ],
-            stream=True,
-            max_tokens=4000,
-            temperature=0.1
-        )
-
-        result = ""
-        async for chunk in stream:
-            content = getattr(chunk.choices[0].delta, "content", None)
-            if content:
-                result += content
-
-        await http_client.aclose()
-
-        if not result.strip():
-            return await deep_seek(data_str, prompt, timeout=60)
-
-        return result
-
-    except asyncio.TimeoutError:
-        return f"Ошибка: Таймаут запроса ({timeout} сек)"
-
 
 
 async def test_deepseek_connection() -> bool:
