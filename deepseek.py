@@ -95,7 +95,7 @@ async def deep_seek(data: str, prompt: str = DEFAULT_PROMPT, timeout: int = 60,
 
 
 async def deep_seek_streaming(data: str, trade1: str = "", prompt: str = DEFAULT_PROMPT,
-                              timeout: int = 120) -> str:
+                              timeout: int = 60) -> str:
     api_key = os.getenv('DEEPSEEK')
     if not api_key:
         return "Ошибка: API ключ DEEPSEEK не найден"
