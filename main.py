@@ -21,35 +21,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def process_single_pair(pair: str, limit: int, interval: str = "15") -> Optional[Tuple[str, Dict]]:
-    """Асинхронная обработка одной торговой пары."""
+async def process_single_pair_full(pair: str, limit: int = 100, interval: str = "15") -> Optional[Tuple[str, Dict]]:
+    """Асинхронная обработка одной торговой пары с полными данными (100 свечей)."""
     try:
         candles = await get_klines_async(symbol=pair, interval=interval, limit=limit)
         candles = candles[::-1]  # От старых к новым
 
-        if not candles or len(candles) < 2:
+        if not candles or len(candles) < 4:
             return None
 
         # Фильтруем по ATR (только пары с достаточной волатильностью)
-        atr = calculate_atr(candles)
+        # Используем последние 20 свечей для расчета ATR
+        atr_candles = candles[-20:] if len(candles) >= 20 else candles
+        atr = calculate_atr(atr_candles)
         if atr <= 0.02:
             return None
 
-        return pair, {"candles": candles}
+        # Возвращаем все данные сразу
+        return pair, {
+            "candles_full": candles,  # Полные данные (100 свечей)
+            "candles_3": candles[-3:],  # Последние 3 свечи для паттернов
+            "candles_20": candles[-20:],  # Последние 20 свечей для первичного анализа
+            "atr": atr
+        }
 
     except Exception as e:
         logger.error(f"Ошибка при обработке пары {pair}: {e}")
         return None
 
 
-async def collect_initial_data() -> Dict[str, Dict]:
-    """Собирает начальные данные по всем торговым парам."""
+async def collect_all_data() -> Dict[str, Dict]:
+    """Собирает ВСЕ данные по всем торговым парам за один раз."""
     start_time = time.time()
-    logger.info("Сбор данных по торговым парам...")
+    logger.info("Сбор полных данных по торговым парам (100 свечей)...")
 
     try:
         usdt_pairs = await get_usdt_linear_symbols()
-        tasks = [process_single_pair(pair, limit=4) for pair in usdt_pairs]
+
+        # Ограничиваем количество одновременных запросов для стабильности
+        semaphore = asyncio.Semaphore(100)  # Максимум 50 одновременных запросов
+
+        async def process_with_semaphore(pair):
+            async with semaphore:
+                return await process_single_pair_full(pair, limit=100)
+
+        tasks = [process_with_semaphore(pair) for pair in usdt_pairs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         filtered_data = {}
@@ -65,6 +81,8 @@ async def collect_initial_data() -> Dict[str, Dict]:
 
         elapsed_time = time.time() - start_time
         logger.info(f"Сбор данных завершен: {len(filtered_data)} пар за {elapsed_time:.2f}с")
+        if error_count > 0:
+            logger.warning(f"Ошибок при загрузке: {error_count}")
 
         return filtered_data
 
@@ -73,24 +91,22 @@ async def collect_initial_data() -> Dict[str, Dict]:
         return {}
 
 
-async def get_detailed_data_for_pairs(pairs: List[str], limit: int = 20) -> Dict[str, List]:
-    """Получает детальные данные по списку торговых пар."""
-    detailed_data = {}
-    tasks = [get_klines_async(symbol=pair, limit=limit) for pair in pairs]
+def extract_data_for_patterns(all_data: Dict[str, Dict]) -> Dict[str, Dict]:
+    """Извлекает данные для поиска свечных паттернов (3 свечи)."""
+    pattern_data = {}
+    for pair, data in all_data.items():
+        if "candles_3" in data and len(data["candles_3"]) >= 3:
+            pattern_data[pair] = {"candles": data["candles_3"]}
+    return pattern_data
 
-    try:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for pair, result in zip(pairs, results):
-            if isinstance(result, Exception):
-                continue
-            detailed_data[pair] = result
-
-        return detailed_data
-
-    except Exception as e:
-        logger.error(f"Ошибка при получении детальных данных: {e}")
-        return {}
+def extract_data_subset(all_data: Dict[str, Dict], pairs: List[str], candle_key: str) -> Dict[str, List]:
+    """Извлекает подмножество данных для указанных пар."""
+    subset_data = {}
+    for pair in pairs:
+        if pair in all_data and candle_key in all_data[pair]:
+            subset_data[pair] = all_data[pair][candle_key]
+    return subset_data
 
 
 def parse_ai_response(ai_response: str) -> Optional[Dict]:
@@ -206,14 +222,17 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
     try:
         logger.info(f"Запуск анализа для направления: {direction}")
 
-        # Шаг 1: Сбор начальных данных
-        all_data = await collect_initial_data()
+        # Шаг 1: Сбор ВСЕХ данных сразу (100 свечей для каждой пары)
+        all_data = await collect_all_data()
         if not all_data:
             logger.error("Нет данных для анализа")
             return None
 
-        # Шаг 2: Поиск свечных паттернов
-        candlestick_signals = detect_candlestick_signals(all_data)
+        logger.info(f"Загружено данных по {len(all_data)} парам")
+
+        # Шаг 2: Поиск свечных паттернов (используем последние 3 свечи)
+        pattern_data = extract_data_for_patterns(all_data)
+        candlestick_signals = detect_candlestick_signals(pattern_data)
         selected_pairs = candlestick_signals[direction]
 
         if not selected_pairs:
@@ -222,10 +241,10 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
 
         logger.info(f"Найдено паттернов {direction}: {selected_pairs}")
 
-        # Шаг 3: Получение детальных данных (20 свечей)
-        detailed_data = await get_detailed_data_for_pairs(selected_pairs, limit=20)
+        # Шаг 3: Извлекаем данные для первичного анализа (20 свечей)
+        detailed_data = extract_data_subset(all_data, selected_pairs, "candles_20")
         if not detailed_data:
-            logger.error("Не удалось получить детальные данные")
+            logger.error("Не удалось извлечь детальные данные")
             return None
 
         # Шаг 4: Первичный анализ с ИИ
@@ -237,9 +256,9 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         final_pairs = ai_analysis['pairs']
         logger.info(f"ИИ рекомендует: {final_pairs}")
 
-        # Шаг 5: Получение расширенных данных (100 свечей)
+        # Шаг 5: Извлекаем расширенные данные (100 свечей) для финального анализа
         if final_pairs:
-            extended_data = await get_detailed_data_for_pairs(final_pairs, limit=100)
+            extended_data = extract_data_subset(all_data, final_pairs, "candles_full")
 
             # Шаг 6: Финальный анализ
             final_result = await final_ai_analysis(extended_data, direction)
@@ -255,7 +274,7 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
 async def main():
     """Главная функция программы."""
     logger.info("=" * 50)
-    logger.info("ЗАПУСК ТОРГОВОГО БОТА")
+    logger.info("ЗАПУСК ТОРГОВОГО БОТА (ОПТИМИЗИРОВАННАЯ ВЕРСИЯ)")
     logger.info("=" * 50)
 
     try:
