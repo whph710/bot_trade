@@ -207,8 +207,8 @@ def parse_ai_response(ai_response: str) -> Optional[Dict]:
     return None
 
 
-async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
-    """Первичный анализ с ИИ (20 свечей)."""
+async def analyze_with_ai(data: Dict) -> Optional[Dict]:
+    """Первичный анализ с ИИ (20 свечей) - БЕЗ указания направления."""
     try:
         # Читаем промпт из prompt2.txt
         try:
@@ -222,14 +222,16 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
                        ВАЖНО: Данные свечей предоставлены в хронологическом порядке от старых к новым.
                        Последняя свеча в каждом массиве - самая свежая."""
 
-        system_prompt = f"""Рассматривай только {direction} сигналы. {prompt2}
+        # УБИРАЕМ упоминание направления из системного промпта
+        system_prompt = f"""{prompt2}
 
         ВАЖНАЯ ИНФОРМАЦИЯ О ДАННЫХ:
         - Все свечи расположены в хронологическом порядке (от старых к новым)
         - Индекс 0 = самая старая свеча, последний индекс = самая новая свеча
-        - Для анализа трендов используй эту хронологию"""
+        - Для анализа трендов используй эту хронологию
+        - Проанализируй данные и выбери наиболее перспективные торговые пары для дальнейшего анализа"""
 
-        logger.info(f"Первичный анализ ИИ: {len(data)} пар ({direction})")
+        logger.info(f"Первичный анализ ИИ: {len(data)} пар")
 
         ai_response = await deep_seek(
             data=str(data),
@@ -239,12 +241,12 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
         parsed_data = parse_ai_response(ai_response)
 
         if parsed_data and isinstance(parsed_data, dict) and 'pairs' in parsed_data:
-            logger.info(f"ИИ рекомендует {len(parsed_data['pairs'])} пар для {direction}")
+            logger.info(f"ИИ рекомендует {len(parsed_data['pairs'])} пар для дальнейшего анализа")
             return parsed_data
 
         # Fallback: возвращаем первые 5 пар из исходных данных
         available_pairs = list(data.keys())[:5]
-        logger.warning(f"Используем fallback для выбора пар ({direction})")
+        logger.warning(f"Используем fallback для выбора пар")
         return {'pairs': available_pairs}
 
     except Exception as e:
@@ -252,8 +254,8 @@ async def analyze_with_ai(data: Dict, direction: str) -> Optional[Dict]:
         return None
 
 
-async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
-    """Финальный анализ с ИИ (100 свечей)."""
+async def final_ai_analysis(data: Dict) -> Optional[str]:
+    """Финальный анализ с ИИ (100 свечей) - БЕЗ указания направления."""
     try:
         # Читаем основной промпт из prompt.txt
         try:
@@ -265,9 +267,8 @@ async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
             ВАЖНО: Данные свечей предоставлены в хронологическом порядке от старых к новым.
             Используй эту информацию для правильного анализа трендов и паттернов."""
 
-        system_prompt = f""" 
-
-        КРИТИЧЕСКИ ВАЖНАЯ ИНФОРМАЦИЯ О СТРУКТУРЕ ДАННЫХ:
+        # УБИРАЕМ упоминание направления из системного промпта
+        system_prompt = f"""КРИТИЧЕСКИ ВАЖНАЯ ИНФОРМАЦИЯ О СТРУКТУРЕ ДАННЫХ:
         - Каждая свеча представлена как [timestamp, open, high, low, close, volume, turnover]
         - Все массивы свечей отсортированы в хронологическом порядке (от старых к новым)
         - Индекс 0 = самая старая свеча, последний индекс = самая новая/текущая свеча
@@ -276,9 +277,7 @@ async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
 
         {main_prompt}"""
 
-
-
-        logger.info(f"Финальный анализ ИИ: {len(data)} пар ({direction})")
+        logger.info(f"Финальный анализ ИИ: {len(data)} пар")
 
         final_response = await deep_seek(
             data=str(data),
@@ -301,17 +300,33 @@ def get_user_direction() -> str:
         print("Некорректный ввод. Введите 'long' или 'short'")
 
 
+def filter_pairs_by_direction(direction: str, candlestick_signals: Dict) -> List[str]:
+    """Фильтрует пары по выбранному направлению локально."""
+    selected_pairs = candlestick_signals.get(direction, [])
+
+    if not selected_pairs:
+        logger.warning(f"Нет найденных паттернов для направления {direction}")
+        return []
+
+    logger.info(f"Найдено паттернов {direction}: {len(selected_pairs)} пар")
+    logger.info(f"Пары с паттернами: {', '.join(selected_pairs[:10])}{'...' if len(selected_pairs) > 10 else ''}")
+
+    return selected_pairs
+
+
 async def run_trading_analysis(direction: str) -> Optional[str]:
     """
     Основная функция анализа торговых сигналов.
 
     ВАЖНО: Все данные свечей обрабатываются в хронологическом порядке (от старых к новым).
+    Направление торговли используется только для локальной фильтрации и НЕ передается в ИИ.
 
     Этапы:
     1. Загрузка 100 свечей для всех пар (от старых к новым)
     2. Поиск паттернов в последних 3 свечах
-    3. Первичный анализ ИИ (20 свечей) для отбора лучших пар
-    4. Финальный анализ ИИ (100 свечей) для окончательных рекомендаций
+    3. Локальная фильтрация по направлению (long/short)
+    4. Первичный анализ ИИ (20 свечей) для отбора лучших пар
+    5. Финальный анализ ИИ (100 свечей) для окончательных рекомендаций
     """
     try:
         logger.info(f"ЗАПУСК АНАЛИЗА: {direction.upper()}")
@@ -339,23 +354,22 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         logger.info("ЭТАП 2: Поиск свечных паттернов")
         pattern_data = extract_data_for_patterns(all_data)
         candlestick_signals = detect_candlestick_signals(pattern_data)
-        selected_pairs = candlestick_signals.get(direction, [])
+
+        # Шаг 3: Локальная фильтрация по направлению (БЕЗ отправки в ИИ)
+        logger.info(f"ЭТАП 3: Фильтрация по направлению {direction.upper()}")
+        selected_pairs = filter_pairs_by_direction(direction, candlestick_signals)
 
         if not selected_pairs:
-            logger.warning(f"Нет найденных паттернов для направления {direction}")
             return f"К сожалению, не найдено свечных паттернов для направления {direction}. Попробуйте позже или выберите другое направление."
 
-        logger.info(f"Найдено паттернов {direction}: {len(selected_pairs)} пар")
-        logger.info(f"Пары с паттернами: {', '.join(selected_pairs[:10])}{'...' if len(selected_pairs) > 10 else ''}")
-
-        # Шаг 3: Первичный анализ ИИ (20 свечей)
-        logger.info("ЭТАП 3: Первичный анализ ИИ (20 свечей)")
+        # Шаг 4: Первичный анализ ИИ (20 свечей) - БЕЗ упоминания направления
+        logger.info("ЭТАП 4: Первичный анализ ИИ (20 свечей)")
         detailed_data = extract_data_subset(all_data, selected_pairs, "candles_20")
         if not detailed_data:
             logger.error("Не удалось извлечь данные для первичного анализа")
             return None
 
-        ai_analysis = await analyze_with_ai(detailed_data, direction)
+        ai_analysis = await analyze_with_ai(detailed_data)
         if not ai_analysis or 'pairs' not in ai_analysis:
             logger.error("Не удалось получить первичный анализ от ИИ")
             return None
@@ -364,9 +378,9 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         logger.info(f"ИИ отобрал для финального анализа: {len(final_pairs)} пар")
         logger.info(f"Финальные пары: {', '.join(final_pairs)}")
 
-        # Шаг 4: Финальный анализ (100 свечей)
+        # Шаг 5: Финальный анализ (100 свечей) - БЕЗ упоминания направления
         if final_pairs:
-            logger.info("ЭТАП 4: Финальный анализ (100 свечей)")
+            logger.info("ЭТАП 5: Финальный анализ (100 свечей)")
             extended_data = extract_data_subset(all_data, final_pairs, "candles_full")
 
             if not extended_data:
@@ -381,7 +395,7 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
                     logger.debug(
                         f"Финальные данные {pair}: {first_ts} -> {last_ts} ({'✓' if first_ts < last_ts else '✗'})")
 
-            final_result = await final_ai_analysis(extended_data, direction)
+            final_result = await final_ai_analysis(extended_data)
             return final_result
 
         return None
