@@ -163,7 +163,7 @@ async def analyze_with_ai(data: Dict) -> Optional[Dict]:
         system_prompt = f"""{prompt2}
 
         ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
-        Последний индекс = текущая свеча. Выбери наиболее перспективные пары."""
+        Последний индекс = текущая свеча. Выбери наиболее перспективные пары. Рассматривай Long/Short сделки"""
 
         logger.info(f"Первичный анализ ИИ: {len(data)} пар")
 
@@ -189,8 +189,8 @@ async def analyze_with_ai(data: Dict) -> Optional[Dict]:
         return None
 
 
-async def final_ai_analysis(data: Dict) -> Optional[str]:
-    """Оптимизированный финальный анализ."""
+async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
+    """Оптимизированный финальный анализ с учетом направления торговли."""
     try:
         try:
             with open('prompt.txt', 'r', encoding='utf-8') as file:
@@ -198,13 +198,20 @@ async def final_ai_analysis(data: Dict) -> Optional[str]:
         except FileNotFoundError:
             main_prompt = "Ты опытный трейдер. Проанализируй данные и дай рекомендации."
 
-        system_prompt = f"""ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
+        # Добавляем направление пользователя в системный промпт
+        direction_text = "LONG" if direction == "long" else "SHORT"
+
+        system_prompt = f"""
+        Один из возможных сценариев, основанный на свечных паттернах — движение в сторону {direction_text}. Используй это как один из факторов в анализе, не считая его окончательным выводом.
+
+        {main_prompt}
+
+        ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
         Формат: [timestamp, open, high, low, close, volume, turnover]
         Последний индекс = текущая свеча.
+        """
 
-        {main_prompt}"""
-
-        logger.info(f"Финальный анализ ИИ: {len(data)} пар")
+        logger.info(f"Финальный анализ ИИ: {len(data)} пар, направление: {direction_text}")
 
         return await deep_seek(
             data=str(data),
@@ -269,11 +276,11 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         final_pairs = ai_analysis['pairs']
         logger.info(f"ИИ выбрал: {len(final_pairs)} пар")
 
-        # Этап 5: Финальный анализ
+        # Этап 5: Финальный анализ с передачей направления
         if final_pairs:
             extended_data = extract_data_subset(all_data, final_pairs, "candles_full")
             if extended_data:
-                return await final_ai_analysis(extended_data)
+                return await final_ai_analysis(extended_data, direction)
 
         return None
 
