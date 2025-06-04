@@ -29,8 +29,6 @@ async def process_single_pair_full(pair: str, limit: int = 100, interval: str = 
         if not candles_raw or len(candles_raw) < 4:
             return None
 
-        # Убрали лишние проверки порядка - данные уже приходят правильно из func_async
-
         # Быстрая фильтрация по ATR с адаптивным порогом
         atr_candles = candles_raw[-20:] if len(candles_raw) >= 20 else candles_raw
         atr = calculate_atr(atr_candles)
@@ -61,7 +59,6 @@ async def collect_all_data() -> Dict[str, Dict]:
 
     try:
         usdt_pairs = await get_usdt_linear_symbols()
-        # Уменьшили семафор для стабильности
         semaphore = asyncio.Semaphore(30)
 
         async def process_with_semaphore(pair):
@@ -149,29 +146,51 @@ def parse_ai_response(ai_response: str) -> Optional[Dict]:
     return None
 
 
+def get_all_potential_pairs(candlestick_signals: Dict) -> List[str]:
+    """Получение всех потенциальных пар без фильтрации по направлению."""
+    all_pairs = set()
+
+    # Собираем пары из всех направлений
+    for direction in ['long', 'short']:
+        if direction in candlestick_signals:
+            all_pairs.update(candlestick_signals[direction])
+
+    selected_pairs = list(all_pairs)
+
+    if selected_pairs:
+        logger.info(f"Найдено {len(selected_pairs)} пар с потенциальными паттернами")
+    else:
+        logger.warning("Нет найденных паттернов")
+
+    return selected_pairs
+
+
 async def analyze_with_ai(data: Dict) -> Optional[Dict]:
-    """Оптимизированный первичный анализ с ИИ."""
+    """Первичный анализ с ИИ без предвзятости направления."""
     try:
-        # Читаем промпт с кэшированием
+        # Читаем обновленный промпт
         try:
             with open("prompt2.txt", 'r', encoding='utf-8') as file:
                 prompt2 = file.read()
         except FileNotFoundError:
             prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
-                       Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 10 лучших пар."""
+                       Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 10 лучших пар для торговли."""
 
         system_prompt = f"""{prompt2}
 
         ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
-        Последний индекс = текущая свеча. Выбери наиболее перспективные пары. Рассматривай Long/Short сделки"""
+        Последний индекс = текущая свеча. 
+
+        ВАЖНО: Анализируй ВСЕ возможности для Long И Short позиций.
+        Не ограничивайся одним направлением - ищи лучшие торговые возможности в любом направлении."""
 
         logger.info(f"Первичный анализ ИИ: {len(data)} пар")
 
         ai_response = await deep_seek(
             data=str(data),
             prompt=system_prompt,
-            max_tokens=2000,  # Уменьшили для скорости
-            timeout=45  # Уменьшили таймаут
+            max_tokens=2000,
+            timeout=45
         )
 
         parsed_data = parse_ai_response(ai_response)
@@ -189,8 +208,8 @@ async def analyze_with_ai(data: Dict) -> Optional[Dict]:
         return None
 
 
-async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
-    """Оптимизированный финальный анализ с учетом направления торговли."""
+async def final_ai_analysis(data: Dict) -> Optional[str]:
+    """Финальный анализ без предвзятого направления."""
     try:
         try:
             with open('prompt.txt', 'r', encoding='utf-8') as file:
@@ -198,20 +217,21 @@ async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
         except FileNotFoundError:
             main_prompt = "Ты опытный трейдер. Проанализируй данные и дай рекомендации."
 
-        # Добавляем направление пользователя в системный промпт
-        direction_text = "LONG" if direction == "long" else "SHORT"
-
         system_prompt = f"""
-        Один из возможных сценариев, основанный на свечных паттернах — движение в сторону {direction_text}. Используй это как один из факторов в анализе, не считая его окончательным выводом.
-
         {main_prompt}
 
         ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
         Формат: [timestamp, open, high, low, close, volume, turnover]
         Последний индекс = текущая свеча.
+
+        КРИТИЧЕСКИ ВАЖНО: 
+        - Самостоятельно определи оптимальное направление (long/short) для КАЖДОЙ пары
+        - Основывайся на ВСЕХ доступных технических индикаторах
+        - НЕ следуй предвзятым предположениям о направлении
+        - Выбери ОДНУ наиболее перспективную возможность
         """
 
-        logger.info(f"Финальный анализ ИИ: {len(data)} пар, направление: {direction_text}")
+        logger.info(f"Финальный анализ ИИ: {len(data)} пар")
 
         return await deep_seek(
             data=str(data),
@@ -224,45 +244,24 @@ async def final_ai_analysis(data: Dict, direction: str) -> Optional[str]:
         return None
 
 
-def get_user_direction() -> str:
-    """Получение направления торговли от пользователя."""
-    while True:
-        direction = input('Направление (long/short): ').strip().lower()
-        if direction in ['long', 'short']:
-            return direction
-        print("Введите 'long' или 'short'")
-
-
-def filter_pairs_by_direction(direction: str, candlestick_signals: Dict) -> List[str]:
-    """Быстрая фильтрация пар по направлению."""
-    selected_pairs = candlestick_signals.get(direction, [])
-
-    if selected_pairs:
-        logger.info(f"Найдено {len(selected_pairs)} паттернов {direction}")
-    else:
-        logger.warning(f"Нет паттернов для {direction}")
-
-    return selected_pairs
-
-
-async def run_trading_analysis(direction: str) -> Optional[str]:
-    """Основная оптимизированная функция анализа."""
+async def run_trading_analysis() -> Optional[str]:
+    """Основная функция анализа без предустановленного направления."""
     try:
-        logger.info(f"АНАЛИЗ: {direction.upper()}")
+        logger.info("АВТОНОМНЫЙ АНАЛИЗ ТОРГОВЫХ ВОЗМОЖНОСТЕЙ")
 
         # Этап 1: Сбор данных
         all_data = await collect_all_data()
         if not all_data:
             return None
 
-        # Этап 2: Поиск паттернов
+        # Этап 2: Поиск всех паттернов (без фильтрации по направлению)
         pattern_data = extract_data_for_patterns(all_data)
         candlestick_signals = detect_candlestick_signals(pattern_data)
 
-        # Этап 3: Фильтрация по направлению
-        selected_pairs = filter_pairs_by_direction(direction, candlestick_signals)
+        # Этап 3: Получение всех потенциальных пар
+        selected_pairs = get_all_potential_pairs(candlestick_signals)
         if not selected_pairs:
-            return f"Нет паттернов для {direction}. Попробуйте позже."
+            return "Нет найденных торговых паттернов. Попробуйте позже."
 
         # Этап 4: Первичный анализ ИИ
         detailed_data = extract_data_subset(all_data, selected_pairs, "candles_20")
@@ -274,13 +273,13 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
             return None
 
         final_pairs = ai_analysis['pairs']
-        logger.info(f"ИИ выбрал: {len(final_pairs)} пар")
+        logger.info(f"ИИ выбрал: {len(final_pairs)} пар для детального анализа")
 
-        # Этап 5: Финальный анализ с передачей направления
+        # Этап 5: Финальный анализ с автономным определением направления
         if final_pairs:
             extended_data = extract_data_subset(all_data, final_pairs, "candles_full")
             if extended_data:
-                return await final_ai_analysis(extended_data, direction)
+                return await final_ai_analysis(extended_data)
 
         return None
 
@@ -291,11 +290,10 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
 
 async def main():
     """Главная функция."""
-    logger.info("СТАРТ ТОРГОВОГО БОТА")
+    logger.info("СТАРТ АВТОНОМНОГО ТОРГОВОГО БОТА")
 
     try:
-        direction = get_user_direction()
-        result = await run_trading_analysis(direction)
+        result = await run_trading_analysis()
 
         if result:
             print(f"\n{result}\n")
