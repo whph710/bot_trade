@@ -127,6 +127,7 @@ async def test_deepseek_connection() -> bool:
         return False
 
 
+
 async def check_api_health() -> dict:
     """Быстрая проверка состояния API."""
     start_time = asyncio.get_event_loop().time()
