@@ -1,474 +1,508 @@
 import pandas as pd
 import numpy as np
+import math
+from typing import List, Dict, Tuple
 
 
-def calculate_atr(candles: list) -> float:
+class CVDNadarayaWatsonEMAIndicator:
+    def __init__(self,
+                 cvd_ma_length: int = 50,
+                 bandwidth: float = 7.0,
+                 mult: float = 1.1,
+                 repaint: bool = True,
+                 max_bars_back: int = 500,
+                 ema_fast: int = 7,
+                 ema_medium: int = 14,
+                 ema_slow: int = 28):
+        """
+        CVD + Nadaraya-Watson + 3 EMA Combined Indicator
+
+        Args:
+            cvd_ma_length: Length for CVD moving average
+            bandwidth: Bandwidth parameter for Nadaraya-Watson
+            mult: Multiplier for envelope width
+            repaint: Whether to use repainting mode
+            max_bars_back: Maximum bars to look back
+            ema_fast: Fast EMA period (default 7)
+            ema_medium: Medium EMA period (default 14)
+            ema_slow: Slow EMA period (default 28)
+        """
+        self.cvd_ma_length = cvd_ma_length
+        self.bandwidth = bandwidth
+        self.mult = mult
+        self.repaint = repaint
+        self.max_bars_back = max_bars_back
+        self.ema_fast = ema_fast
+        self.ema_medium = ema_medium
+        self.ema_slow = ema_slow
+
+    def calculate_ema(self, prices: np.ndarray, period: int) -> np.ndarray:
+        """
+        Calculate Exponential Moving Average (точно как в Pine Script)
+
+        Args:
+            prices: Array of prices
+            period: EMA period
+
+        Returns:
+            Array of EMA values
+        """
+        ema = np.zeros_like(prices)
+        alpha = 2.0 / (period + 1)
+
+        # Первое значение EMA равно первой цене
+        ema[0] = prices[0]
+
+        # Расчет последующих значений EMA
+        for i in range(1, len(prices)):
+            ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
+
+        return ema
+
+    def calculate_bull_bear_power(self, candles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Calculate bull and bear power from OHLCV data (точно как в Pine Script)
+        """
+        df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
+
+        bull_power = np.zeros(len(df))
+        bear_power = np.zeros(len(df))
+
+        for i in range(len(df)):
+            close_curr = df.iloc[i]['close']
+            open_curr = df.iloc[i]['open']
+            high_curr = df.iloc[i]['high']
+            low_curr = df.iloc[i]['low']
+
+            # Получаем предыдущий close
+            close_prev = df.iloc[i - 1]['close'] if i > 0 else open_curr
+
+            # Bull Power расчет (точно как в Pine Script)
+            if close_curr < open_curr:  # Красная свеча
+                if close_prev < open_curr:
+                    bull_power[i] = max(high_curr - close_prev, close_curr - low_curr)
+                else:
+                    bull_power[i] = max(high_curr - open_curr, close_curr - low_curr)
+            elif close_curr > open_curr:  # Зеленая свеча
+                if close_prev > open_curr:
+                    bull_power[i] = high_curr - low_curr
+                else:
+                    bull_power[i] = max(open_curr - close_prev, high_curr - low_curr)
+            else:  # Doji
+                if high_curr - close_curr > close_curr - low_curr:
+                    if close_prev < open_curr:
+                        bull_power[i] = max(high_curr - close_prev, close_curr - low_curr)
+                    else:
+                        bull_power[i] = high_curr - open_curr
+                elif high_curr - close_curr < close_curr - low_curr:
+                    if close_prev > open_curr:
+                        bull_power[i] = high_curr - low_curr
+                    else:
+                        bull_power[i] = max(open_curr - close_prev, high_curr - low_curr)
+                else:
+                    if close_prev > open_curr:
+                        bull_power[i] = max(high_curr - open_curr, close_curr - low_curr)
+                    elif close_prev < open_curr:
+                        bull_power[i] = max(open_curr - close_prev, high_curr - low_curr)
+                    else:
+                        bull_power[i] = high_curr - low_curr
+
+            # Bear Power расчет (точно как в Pine Script)
+            if close_curr < open_curr:  # Красная свеча
+                if close_prev > open_curr:
+                    bear_power[i] = max(close_prev - open_curr, high_curr - low_curr)
+                else:
+                    bear_power[i] = high_curr - low_curr
+            elif close_curr > open_curr:  # Зеленая свеча
+                if close_prev > open_curr:
+                    bear_power[i] = max(close_prev - low_curr, high_curr - close_curr)
+                else:
+                    bear_power[i] = max(open_curr - low_curr, high_curr - close_curr)
+            else:  # Doji
+                if high_curr - close_curr > close_curr - low_curr:
+                    if close_prev > open_curr:
+                        bear_power[i] = max(close_prev - open_curr, high_curr - low_curr)
+                    else:
+                        bear_power[i] = high_curr - low_curr
+                elif high_curr - close_curr < close_curr - low_curr:
+                    if close_prev > open_curr:
+                        bear_power[i] = max(close_prev - low_curr, high_curr - close_curr)
+                    else:
+                        bear_power[i] = open_curr - low_curr
+                else:
+                    if close_prev > open_curr:
+                        bear_power[i] = max(close_prev - open_curr, high_curr - low_curr)
+                    elif close_prev < open_curr:
+                        bear_power[i] = max(open_curr - low_curr, high_curr - close_curr)
+                    else:
+                        bear_power[i] = high_curr - low_curr
+
+        return bull_power, bear_power
+
+    def calculate_cvd(self, candles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculate Cumulative Volume Delta (CVD)
+        """
+        df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
+
+        bull_power, bear_power = self.calculate_bull_bear_power(candles)
+
+        # Расчет распределения объема
+        total_power = bull_power + bear_power
+        # Избегаем деления на ноль
+        total_power = np.where(total_power == 0, 1, total_power)
+
+        bull_volume = (bull_power / total_power) * df['volume'].values
+        bear_volume = (bear_power / total_power) * df['volume'].values
+
+        # Расчет дельты и кумулятивной дельты объема
+        delta = bull_volume - bear_volume
+        cvd = np.cumsum(delta)
+
+        # Расчет скользящего среднего CVD (SMA как в Pine Script)
+        cvd_ma = pd.Series(cvd).rolling(window=self.cvd_ma_length, min_periods=1).mean().values
+
+        # Направление CVD
+        cvd_bullish = cvd > cvd_ma
+        cvd_bearish = cvd < cvd_ma
+
+        return cvd, cvd_ma, cvd_bullish, cvd_bearish
+
+    def gauss_kernel(self, x: float, h: float) -> float:
+        """Gaussian kernel function"""
+        return math.exp(-(x * x) / (h * h * 2))
+
+    def calculate_nadaraya_watson(self, prices: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculate Nadaraya-Watson estimator and envelope (точно как в Pine Script)
+        """
+        n = len(prices)
+        max_lookback = min(self.max_bars_back, n)
+
+        nw_estimate = np.zeros(n)
+        mae_values = np.zeros(n)
+
+        if self.repaint:
+            # Режим перерисовки - используем все доступные данные
+            for i in range(n):
+                sum_weighted = 0.0
+                sum_weights = 0.0
+
+                # Используем симметричное окно вокруг текущей точки
+                for j in range(max(0, i - max_lookback + 1), min(n, i + max_lookback)):
+                    weight = self.gauss_kernel(i - j, self.bandwidth)
+                    sum_weighted += prices[j] * weight
+                    sum_weights += weight
+
+                if sum_weights > 0:
+                    nw_estimate[i] = sum_weighted / sum_weights
+                else:
+                    nw_estimate[i] = prices[i]
+
+                # Расчет MAE для конверта
+                errors = []
+                for j in range(max(0, i - max_lookback + 1), min(n, i + 1)):
+                    if j < len(nw_estimate):
+                        errors.append(abs(prices[j] - nw_estimate[j]))
+
+                if errors:
+                    mae_values[i] = np.mean(errors) * self.mult
+                else:
+                    mae_values[i] = 0
+        else:
+            # Режим без перерисовки - используем только исторические данные
+            coefs = np.array([self.gauss_kernel(i, self.bandwidth) for i in range(max_lookback)])
+            coefs_sum = np.sum(coefs)
+
+            for i in range(n):
+                sum_weighted = 0.0
+                available_bars = min(i + 1, max_lookback)
+
+                for j in range(available_bars):
+                    if i - j >= 0:
+                        sum_weighted += prices[i - j] * coefs[j]
+
+                nw_estimate[i] = sum_weighted / coefs_sum
+
+                # Расчет MAE
+                errors = []
+                for j in range(max(0, i - available_bars + 1), i + 1):
+                    errors.append(abs(prices[j] - nw_estimate[j]))
+
+                mae_values[i] = np.mean(errors) * self.mult if errors else 0
+
+        upper_envelope = nw_estimate + mae_values
+        lower_envelope = nw_estimate - mae_values
+
+        return nw_estimate, upper_envelope, lower_envelope
+
+    def parse_bybit_candles(self, raw_candles: List[List[str]]) -> List[List[float]]:
+        """
+        Parse Bybit candle data format to OHLCV floats
+        """
+        parsed_candles = []
+
+        # Реверсируем порядок, так как Bybit возвращает новейшие первыми
+        for candle in reversed(raw_candles):
+            # Извлекаем данные OHLCV
+            open_price = float(candle[1])
+            high_price = float(candle[2])
+            low_price = float(candle[3])
+            close_price = float(candle[4])
+            volume = float(candle[5])
+
+            parsed_candles.append([open_price, high_price, low_price, close_price, volume])
+
+        return parsed_candles
+
+    def check_ema_alignment(self, ema_fast: np.ndarray, ema_medium: np.ndarray, ema_slow: np.ndarray,
+                            signal_type: str, index: int) -> bool:
+        """
+        Check if EMA alignment supports the signal direction
+
+        Args:
+            ema_fast: Fast EMA values
+            ema_medium: Medium EMA values
+            ema_slow: Slow EMA values
+            signal_type: 'LONG' or 'SHORT'
+            index: Index to check
+
+        Returns:
+            True if EMA alignment supports the signal
+        """
+        if index < 0 or index >= len(ema_fast):
+            return False
+
+        fast = ema_fast[index]
+        medium = ema_medium[index]
+        slow = ema_slow[index]
+
+        if signal_type == 'LONG':
+            # Для LONG: Fast > Medium > Slow (бычье выравнивание)
+            return fast > medium > slow
+        elif signal_type == 'SHORT':
+            # Для SHORT: Fast < Medium < Slow (медвежье выравнивание)
+            return fast < medium < slow
+
+        return False
+
+    def get_last_candle_signal(self, raw_candles: List[List[str]]) -> Dict:
+        """
+        Get signal for the last candle with EMA confirmation
+        """
+        required_data = max(self.cvd_ma_length, self.ema_slow, self.max_bars_back) + 50
+
+        if len(raw_candles) < required_data:
+            return {
+                'signal': 'NO_SIGNAL',
+                'reason': 'INSUFFICIENT_DATA',
+                'last_price': float(raw_candles[0][4]) if raw_candles else 0,
+                'cvd_status': 'UNKNOWN',
+                'ema_alignment': 'UNKNOWN'
+            }
+
+        # Парсим свечи
+        candles = self.parse_bybit_candles(raw_candles)
+
+        # Рассчитываем все индикаторы
+        results = self.generate_signals(candles)
+
+        # Проверяем сигнал на последней свече
+        last_idx = len(results['prices']) - 1
+
+        # Проверяем наличие сигнала на последней свече
+        last_candle_signal = 'NO_SIGNAL'
+        signal_reason = 'NO_CROSS'
+        ema_alignment = 'NEUTRAL'
+
+        if last_idx > 0:
+            last_price = results['prices'][last_idx]
+            prev_price = results['prices'][last_idx - 1]
+
+            upper_last = results['upper_envelope'][last_idx]
+            lower_last = results['lower_envelope'][last_idx]
+            upper_prev = results['upper_envelope'][last_idx - 1]
+            lower_prev = results['lower_envelope'][last_idx - 1]
+
+            cvd_bullish_last = results['cvd_bullish'][last_idx]
+            cvd_bearish_last = results['cvd_bearish'][last_idx]
+
+            # Проверяем сигналы CVD + NW сначала
+            cvd_nw_signal = None
+
+            # Проверяем сигнал на LONG (цена пересекает снизу нижнюю границу конверта + CVD бычий)
+            if (prev_price >= lower_prev and last_price < lower_last and cvd_bullish_last):
+                cvd_nw_signal = 'LONG'
+                signal_reason = 'PRICE_CROSS_UNDER_LOWER_ENVELOPE_CVD_BULLISH'
+
+            # Проверяем сигнал на SHORT (цена пересекает сверху верхнюю границу конверта + CVD медвежий)
+            elif (prev_price <= upper_prev and last_price > upper_last and cvd_bearish_last):
+                cvd_nw_signal = 'SHORT'
+                signal_reason = 'PRICE_CROSS_OVER_UPPER_ENVELOPE_CVD_BEARISH'
+
+            # Если есть сигнал CVD + NW, проверяем подтверждение EMA
+            if cvd_nw_signal:
+                ema_supports_signal = self.check_ema_alignment(
+                    results['ema_fast'],
+                    results['ema_medium'],
+                    results['ema_slow'],
+                    cvd_nw_signal,
+                    last_idx
+                )
+
+                if ema_supports_signal:
+                    last_candle_signal = cvd_nw_signal
+                    ema_alignment = 'BULLISH' if cvd_nw_signal == 'LONG' else 'BEARISH'
+                    signal_reason += '_EMA_CONFIRMED'
+                else:
+                    signal_reason += '_EMA_NOT_ALIGNED'
+                    ema_alignment = 'CONFLICTING'
+            else:
+                # Проверяем текущее выравнивание EMA даже без сигнала
+                if self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
+                                            results['ema_slow'], 'LONG', last_idx):
+                    ema_alignment = 'BULLISH'
+                elif self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
+                                              results['ema_slow'], 'SHORT', last_idx):
+                    ema_alignment = 'BEARISH'
+                else:
+                    ema_alignment = 'NEUTRAL'
+
+        return {
+            'signal': last_candle_signal,
+            'reason': signal_reason,
+            'last_price': results['prices'][-1],
+            'cvd_status': results['current_cvd_status'],
+            'ema_alignment': ema_alignment,
+            'upper_envelope': results['upper_envelope'][-1],
+            'lower_envelope': results['lower_envelope'][-1],
+            'nadaraya_watson': results['nadaraya_watson'][-1],
+            'cvd_value': results['cvd'][-1],
+            'cvd_ma_value': results['cvd_ma'][-1],
+            'ema_fast_value': results['ema_fast'][-1],
+            'ema_medium_value': results['ema_medium'][-1],
+            'ema_slow_value': results['ema_slow'][-1]
+        }
+
+    def generate_signals(self, candles: List[List[float]]) -> Dict:
+        """
+        Generate trading signals based on CVD, Nadaraya-Watson envelope and EMA confirmation
+        """
+        df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
+        prices = df['close'].values
+
+        # Рассчитываем CVD
+        cvd, cvd_ma, cvd_bullish, cvd_bearish = self.calculate_cvd(candles)
+
+        # Рассчитываем Nadaraya-Watson envelope
+        nw_estimate, upper_envelope, lower_envelope = self.calculate_nadaraya_watson(prices)
+
+        # Рассчитываем 3 EMA
+        ema_fast = self.calculate_ema(prices, self.ema_fast)
+        ema_medium = self.calculate_ema(prices, self.ema_medium)
+        ema_slow = self.calculate_ema(prices, self.ema_slow)
+
+        # Генерируем сигналы с подтверждением EMA
+        long_signals = []
+        short_signals = []
+
+        for i in range(1, len(prices)):
+            # Сигнал на LONG: цена пересекает снизу нижнюю границу конверта И CVD бычий И EMA выравнивание бычье
+            if (prices[i - 1] >= lower_envelope[i - 1] and
+                    prices[i] < lower_envelope[i] and
+                    cvd_bullish[i] and
+                    self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'LONG', i)):
+                long_signals.append(i)
+
+            # Сигнал на SHORT: цена пересекает сверху верхнюю границу конверта И CVD медвежий И EMA выравнивание медвежье
+            if (prices[i - 1] <= upper_envelope[i - 1] and
+                    prices[i] > upper_envelope[i] and
+                    cvd_bearish[i] and
+                    self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'SHORT', i)):
+                short_signals.append(i)
+
+        return {
+            'cvd': cvd,
+            'cvd_ma': cvd_ma,
+            'cvd_bullish': cvd_bullish,
+            'cvd_bearish': cvd_bearish,
+            'nadaraya_watson': nw_estimate,
+            'upper_envelope': upper_envelope,
+            'lower_envelope': lower_envelope,
+            'ema_fast': ema_fast,
+            'ema_medium': ema_medium,
+            'ema_slow': ema_slow,
+            'long_signals': long_signals,
+            'short_signals': short_signals,
+            'current_cvd_status': 'BULLISH' if cvd_bullish[-1] else 'BEARISH',
+            'prices': prices
+        }
+
+
+def analyze_last_candle(bybit_candles: List[List[str]],
+                        cvd_ma_length: int = 50,
+                        bandwidth: float = 7.0,
+                        mult: float = 1.1,
+                        ema_fast: int = 7,
+                        ema_medium: int = 14,
+                        ema_slow: int = 28) -> str:
     """
-    Вычисляет Average True Range (ATR) на основе свечных данных.
+    Простая функция для получения сигнала на последней свече с подтверждением EMA
 
     Args:
-        candles: Список данных свечей формата
-               [['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'], ...]
+        bybit_candles: Данные свечей от Bybit
+        cvd_ma_length: Длина MA для CVD
+        bandwidth: Пропускная способность NW
+        mult: Множитель для конверта
+        ema_fast: Период быстрой EMA
+        ema_medium: Период средней EMA
+        ema_slow: Период медленной EMA
 
     Returns:
-        float: Значение ATR или 0, если недостаточно данных
+        Строка с результатом: 'LONG', 'SHORT', или 'NO_SIGNAL'
     """
-    if len(candles) < 2:
-        return 0.0  # Возвращаем 0, если недостаточно данных
-
-    tr_values = []
-    for i in range(1, len(candles)):
-        try:
-            high = float(candles[i][2])
-            low = float(candles[i][3])
-            prev_close = float(candles[i - 1][4])
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            tr_values.append(tr)
-        except (IndexError, ValueError):
-            # Пропускаем итерацию, если данные некорректные
-            continue
-
-    if not tr_values:
-        return 0.0  # Возвращаем 0, если не удалось вычислить TR
-
-    atr = sum(tr_values) / len(tr_values)
-    return atr
+    indicator = CVDNadarayaWatsonEMAIndicator(
+        cvd_ma_length=cvd_ma_length,
+        bandwidth=bandwidth,
+        mult=mult,
+        repaint=True,
+        ema_fast=ema_fast,
+        ema_medium=ema_medium,
+        ema_slow=ema_slow
+    )
+    result = indicator.get_last_candle_signal(bybit_candles)
+    return result['signal']
 
 
-def detect_candlestick_signals(data: dict) -> dict:
-    longs, shorts = set(), set()
-
-    for symbol, content in data.items():
-        candles = content['candles']
-        if len(candles) != 3:
-            continue
-
-        o = []; h = []; l = []; c = []
-        for ts, op, hi, lo, cl, *_ in candles:
-            op, hi, lo, cl = map(float, (op, hi, lo, cl))
-            o.append(op); h.append(hi); l.append(lo); c.append(cl)
-
-        bodies = [abs(c[i] - o[i]) for i in range(3)]
-        upper = [h[i] - max(o[i], c[i]) for i in range(3)]
-        lower = [min(o[i], c[i]) - l[i] for i in range(3)]
-        is_bull = [c[i] > o[i] for i in range(3)]
-        is_bear = [not b for b in is_bull]
-        mid1 = (o[0] + c[0]) / 2
-
-        # Hammer → long
-        if lower[2] >= 2*bodies[2] and upper[2] <= bodies[2]:
-            longs.add(symbol)
-        # Shooting Star → short
-        if upper[2] >= 2*bodies[2] and lower[2] <= bodies[2]:
-            shorts.add(symbol)
-        # Bullish Engulfing → long
-        if is_bear[0] and is_bull[1] and o[1] < c[0] and c[1] > o[0]:
-            longs.add(symbol)
-        # Bearish Engulfing → short
-        if is_bull[0] and is_bear[1] and o[1] > c[0] and c[1] < o[0]:
-            shorts.add(symbol)
-        # Piercing Line → long
-        if is_bear[0] and is_bull[1] and o[1] < l[0] and c[1] > mid1:
-            longs.add(symbol)
-        # Dark Cloud Cover → short
-        if is_bull[0] and is_bear[1] and o[1] > h[0] and c[1] < mid1:
-            shorts.add(symbol)
-        # Morning Star → long
-        if is_bear[0] and bodies[1] < (h[1]-l[1])*0.3 and is_bull[2] and c[2] > mid1:
-            longs.add(symbol)
-        # Evening Star → short
-        if is_bull[0] and bodies[1] < (h[1]-l[1])*0.3 and is_bear[2] and c[2] < mid1:
-            shorts.add(symbol)
-        # Three White Soldiers → long
-        if all(is_bull) and c[0] < c[1] < c[2]:
-            longs.add(symbol)
-        # Three Black Crows → short
-        if all(is_bear) and c[0] > c[1] > c[2]:
-            shorts.add(symbol)
-
-    return {
-        'long': sorted(longs),
-        'short': sorted(shorts)
-    }
-
-
-def compute_cvd_signals(data, period_ma=100):
+def get_detailed_signal_info(bybit_candles: List[List[str]],
+                             cvd_ma_length: int = 50,
+                             bandwidth: float = 7.0,
+                             mult: float = 1.1,
+                             ema_fast: int = 7,
+                             ema_medium: int = 14,
+                             ema_slow: int = 28) -> Dict:
     """
-    Реализация Cumulative Volume Delta индикатора по алгоритму в точности как в TradingView.
+    Получает детальную информацию о сигнале на последней свече с данными EMA
 
-    Параметры:
-    data: список строк формата [timestamp, open, high, low, close, volume, ...]
-    period_ma: длина периода скользящей средней, по умолчанию 100
+    Args:
+        bybit_candles: Данные свечей от Bybit
+        cvd_ma_length: Длина MA для CVD
+        bandwidth: Пропускная способность NW
+        mult: Множитель для конверта
+        ema_fast: Период быстрой EMA
+        ema_medium: Период средней EMA
+        ema_slow: Период медленной EMA
 
-    Возвращает:
-    список сигналов 'long'/'short' для каждой свечи
+    Returns:
+        Словарь с детальной информацией о сигнале
     """
-    # Подготовка данных
-    n = len(data)
-    opens = [float(row[1]) for row in data]
-    highs = [float(row[2]) for row in data]
-    lows = [float(row[3]) for row in data]
-    closes = [float(row[4]) for row in data]
-    volumes = [float(row[5]) for row in data]
-
-    # Инициализация массивов
-    bull_power = [0.0] * n
-    bear_power = [0.0] * n
-    bull_volume = [0.0] * n
-    bear_volume = [0.0] * n
-    delta = [0.0] * n
-    cvd = [0.0] * n
-    cvd_ma = [None] * n
-    signals = [None] * n
-
-    # Pine Script использует NaN для первых свечей, где не хватает истории
-    # Для простоты мы будем рассчитывать все со второй свечи
-    for i in range(n):
-        if i == 0:
-            # Для первой свечи нет предыдущих данных, нуль - безопасное значение
-            continue
-
-        c = closes[i]
-        o = opens[i]
-        h = highs[i]
-        l = lows[i]
-        c1 = closes[i - 1]  # close[1] в Pine Script
-        v = volumes[i]
-
-        # Точное вычисление bullPower согласно Pine Script логике
-        # Первый уровень: проверка close < open (медвежья свеча)
-        if c < o:
-            # Второй уровень: проверка close[1] < open
-            if c1 < o:
-                bull = max(h - c1, c - l)
-            else:
-                bull = max(h - o, c - l)
-        # Первый уровень: проверка close > open (бычья свеча)
-        elif c > o:
-            # Второй уровень: проверка close[1] > open
-            if c1 > o:
-                bull = h - l
-            else:
-                bull = max(o - c1, h - l)
-        # Первый уровень: close == open (доджи)
-        else:
-            # Второй уровень: проверка high - close > close - low
-            if h - c > c - l:
-                # Третий уровень: проверка close[1] < open
-                if c1 < o:
-                    bull = max(h - c1, c - l)
-                else:
-                    bull = h - o
-            # Второй уровень: проверка high - close < close - low
-            elif h - c < c - l:
-                # Третий уровень: проверка close[1] > open
-                if c1 > o:
-                    bull = h - l
-                else:
-                    bull = max(o - c1, h - l)
-            # Второй уровень: high - close == close - low
-            else:
-                # Третий уровень: проверка close[1] > open
-                if c1 > o:
-                    bull = max(h - o, c - l)
-                # Третий уровень: проверка close[1] < open
-                elif c1 < o:
-                    bull = max(o - c1, h - l)
-                # Третий уровень: close[1] == open
-                else:
-                    bull = h - l
-
-        # Точное вычисление bearPower согласно Pine Script логике
-        # Первый уровень: проверка close < open (медвежья свеча)
-        if c < o:
-            # Второй уровень: проверка close[1] > open
-            if c1 > o:
-                bear = max(c1 - o, h - l)
-            else:
-                bear = h - l
-        # Первый уровень: проверка close > open (бычья свеча)
-        elif c > o:
-            # Второй уровень: проверка close[1] > open
-            if c1 > o:
-                bear = max(c1 - l, h - c)
-            else:
-                bear = max(o - l, h - c)
-        # Первый уровень: close == open (доджи)
-        else:
-            # Второй уровень: проверка high - close > close - low
-            if h - c > c - l:
-                # Третий уровень: проверка close[1] > open
-                if c1 > o:
-                    bear = max(c1 - o, h - l)
-                else:
-                    bear = h - l
-            # Второй уровень: проверка high - close < close - low
-            elif h - c < c - l:
-                # Третий уровень: проверка close[1] > open
-                if c1 > o:
-                    bear = max(c1 - l, h - c)
-                else:
-                    bear = o - l
-            # Второй уровень: high - close == close - low
-            else:
-                # Третий уровень: проверка close[1] > open
-                if c1 > o:
-                    bear = max(c1 - o, h - l)
-                # Третий уровень: проверка close[1] < open
-                elif c1 < o:
-                    bear = max(o - l, h - c)
-                # Третий уровень: close[1] == open
-                else:
-                    bear = h - l
-
-        # Сохраняем значения
-        bull_power[i] = bull
-        bear_power[i] = bear
-
-        # Расчет Bull & Bear Volume
-        divisor = bull + bear
-        if divisor > 0:
-            bull_volume[i] = (bull / divisor) * v
-            bear_volume[i] = (bear / divisor) * v
-        else:
-            # Избегаем деления на ноль
-            bull_volume[i] = bear_volume[i] = 0.0
-
-        # Расчет Delta
-        delta[i] = bull_volume[i] - bear_volume[i]
-
-    # Расчет Cumulative Volume Delta (CVD)
-    # cum() в Pine Script вычисляет кумулятивную сумму
-    for i in range(n):
-        if i == 0:
-            cvd[i] = delta[i]
-        else:
-            cvd[i] = cvd[i - 1] + delta[i]
-
-    # Расчет Simple Moving Average (SMA) для CVD
-    for i in range(n):
-        if i >= period_ma - 1:  # Нужно иметь хотя бы period_ma значений
-            cvd_ma[i] = sum(cvd[i - (period_ma - 1):i + 1]) / period_ma
-
-            # Генерация сигналов
-            # В Pine Script: customColor = cvd > cvdMa ? color.teal : color.red
-            # Teal (бирюзовый) = bullish/long, Red = bearish/short
-            signals[i] = 'long' if cvd[i] > cvd_ma[i] else 'short'
-
-    return signals
-
-
-def compute_trend_signals(data, period_ma=100, ema_short=9, ema_medium=21, ema_long=50,
-                          rsi_period=14, rsi_overbought=70, rsi_oversold=30,
-                          macd_fast=12, macd_slow=26, macd_signal=9):
-    """
-    Комбинированный индикатор тренда, который заменяет CVD индикатор.
-
-    Параметры:
-    data: список строк формата [timestamp, open, high, low, close, volume, ...],
-          отсортированных от более старых к более новым свечам
-    period_ma: длина периода скользящей средней (не используется в этой реализации, но сохранен для совместимости)
-    ema_short, ema_medium, ema_long: периоды для экспоненциальных скользящих средних
-    rsi_period: период для расчета RSI
-    rsi_overbought, rsi_oversold: пороговые значения для RSI
-    macd_fast, macd_slow, macd_signal: периоды для расчета MACD
-
-    Возвращает:
-    список сигналов 'long'/'short'/None для каждой свечи в том же порядке (от старых к новым)
-    """
-    n = len(data)
-    opens = [float(row[1]) for row in data]
-    highs = [float(row[2]) for row in data]
-    lows = [float(row[3]) for row in data]
-    closes = [float(row[4]) for row in data]
-    volumes = [float(row[5]) for row in data]
-
-    # Инициализируем результаты
-    signals = [None] * n
-
-    # 1. Расчет EMA (экспоненциальная скользящая средняя)
-    ema_short_values = calculate_ema(closes, ema_short)
-    ema_medium_values = calculate_ema(closes, ema_medium)
-    ema_long_values = calculate_ema(closes, ema_long)
-
-    # 2. Расчет RSI (индекс относительной силы)
-    rsi_values = calculate_rsi(closes, rsi_period)
-
-    # 3. Расчет MACD
-    macd_line, signal_line, histogram = calculate_macd(closes, macd_fast, macd_slow, macd_signal)
-
-    # 4. Определение тренда по объему
-    volume_trend = analyze_volume_trend(closes, volumes, 5)
-
-    # 5. Определяем сигналы на основе комбинации индикаторов
-    for i in range(n):
-        # Пропускаем первые свечи, где недостаточно истории для расчета индикаторов
-        if i < max(ema_long, rsi_period, macd_slow + macd_signal):
-            continue
-
-        # Счетчики сигналов
-        bullish_signals = 0
-        bearish_signals = 0
-
-        # Проверяем EMA (тренд)
-        if ema_short_values[i] > ema_medium_values[i] > ema_long_values[i]:
-            bullish_signals += 2  # Сильный восходящий тренд
-        elif ema_short_values[i] > ema_medium_values[i]:
-            bullish_signals += 1  # Умеренный восходящий тренд
-        elif ema_short_values[i] < ema_medium_values[i] < ema_long_values[i]:
-            bearish_signals += 2  # Сильный нисходящий тренд
-        elif ema_short_values[i] < ema_medium_values[i]:
-            bearish_signals += 1  # Умеренный нисходящий тренд
-
-        # Проверяем RSI (перекупленность/перепроданность)
-        if rsi_values[i] < rsi_oversold:
-            bullish_signals += 1  # Потенциальный разворот вверх
-        elif rsi_values[i] > rsi_overbought:
-            bearish_signals += 1  # Потенциальный разворот вниз
-
-        # Проверяем MACD (импульс и развороты)
-        if macd_line[i] > signal_line[i] and macd_line[i] > 0:
-            bullish_signals += 1  # Положительный импульс
-        elif macd_line[i] < signal_line[i] and macd_line[i] < 0:
-            bearish_signals += 1  # Отрицательный импульс
-
-        # Проверяем пересечение MACD и сигнальной линии (более сильный сигнал)
-        if i > 0:
-            if macd_line[i] > signal_line[i] and macd_line[i - 1] <= signal_line[i - 1]:
-                bullish_signals += 2  # Бычье пересечение
-            elif macd_line[i] < signal_line[i] and macd_line[i - 1] >= signal_line[i - 1]:
-                bearish_signals += 2  # Медвежье пересечение
-
-        # Проверяем объемный тренд
-        if volume_trend[i] > 0:
-            bullish_signals += 1  # Повышение объема на росте
-        elif volume_trend[i] < 0:
-            bearish_signals += 1  # Повышение объема на падении
-
-        # Формируем итоговый сигнал на основе баланса бычьих и медвежьих сигналов
-        if bullish_signals >= 3 and bullish_signals > bearish_signals + 1:
-            signals[i] = 'long'
-        elif bearish_signals >= 3 and bearish_signals > bullish_signals + 1:
-            signals[i] = 'short'
-        else:
-            signals[i] = None
-
-    return signals
-
-
-def calculate_ema(prices, period):
-    """Рассчитывает экспоненциальную скользящую среднюю"""
-    ema = [None] * len(prices)
-    # Инициализация первого значения как SMA
-    ema[period - 1] = sum(prices[:period]) / period
-
-    # Множитель сглаживания
-    multiplier = 2 / (period + 1)
-
-    # Расчет EMA для остальных точек
-    for i in range(period, len(prices)):
-        ema[i] = prices[i] * multiplier + ema[i - 1] * (1 - multiplier)
-
-    return ema
-
-
-def calculate_rsi(prices, period):
-    """Рассчитывает индекс относительной силы (RSI)"""
-    rsi = [None] * len(prices)
-    gains = [0] * len(prices)
-    losses = [0] * len(prices)
-
-    # Вычисляем изменения цены
-    for i in range(1, len(prices)):
-        change = prices[i] - prices[i - 1]
-        if change > 0:
-            gains[i] = change
-        else:
-            losses[i] = abs(change)
-
-    # Первый средний выигрыш и проигрыш
-    avg_gain = sum(gains[1:period + 1]) / period
-    avg_loss = sum(losses[1:period + 1]) / period
-
-    # Рассчитываем RSI для каждой точки
-    for i in range(period, len(prices)):
-        if i > period:
-            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
-        if avg_loss == 0:
-            rsi[i] = 100
-        else:
-            rs = avg_gain / avg_loss
-            rsi[i] = 100 - (100 / (1 + rs))
-
-    return rsi
-
-
-def calculate_macd(prices, fast_period, slow_period, signal_period):
-    """Рассчитывает MACD (схождение-расхождение скользящих средних)"""
-    n = len(prices)
-    macd_line = [None] * n
-    signal_line = [None] * n
-    histogram = [None] * n
-
-    # Рассчитываем EMA для быстрого и медленного периодов
-    fast_ema = calculate_ema(prices, fast_period)
-    slow_ema = calculate_ema(prices, slow_period)
-
-    # Рассчитываем MACD линию (разница между быстрой и медленной EMA)
-    for i in range(slow_period - 1, n):
-        if fast_ema[i] is not None and slow_ema[i] is not None:
-            macd_line[i] = fast_ema[i] - slow_ema[i]
-
-    # Рассчитываем сигнальную линию (EMA от MACD линии)
-    # Берем только ненулевые значения MACD для расчета
-    macd_values = [v for v in macd_line if v is not None]
-
-    if len(macd_values) >= signal_period:
-        # Инициализация первого значения как SMA
-        start_idx = slow_period - 1 + signal_period - 1
-        signal_line[start_idx] = sum(macd_line[slow_period - 1:start_idx + 1]) / signal_period
-
-        # Множитель сглаживания
-        multiplier = 2 / (signal_period + 1)
-
-        # Расчет сигнальной линии
-        for i in range(start_idx + 1, n):
-            signal_line[i] = macd_line[i] * multiplier + signal_line[i - 1] * (1 - multiplier)
-
-    # Рассчитываем гистограмму (разница между MACD и сигнальной линией)
-    for i in range(n):
-        if macd_line[i] is not None and signal_line[i] is not None:
-            histogram[i] = macd_line[i] - signal_line[i]
-
-    return macd_line, signal_line, histogram
-
-
-def analyze_volume_trend(prices, volumes, period=5):
-    """Анализирует тренд объема относительно движения цены"""
-    n = len(prices)
-    volume_trend = [None] * n
-
-    for i in range(period, n):
-        price_change = prices[i] - prices[i - period]
-        avg_volume_current = sum(volumes[i - period + 1:i + 1]) / period
-        avg_volume_previous = sum(
-            volumes[i - 2 * period + 1:i - period + 1]) / period if i >= 2 * period else avg_volume_current
-
-        # Если цена растет и объем увеличивается = сильный восходящий тренд
-        if price_change > 0 and avg_volume_current > avg_volume_previous:
-            volume_trend[i] = 1
-        # Если цена падает и объем увеличивается = сильный нисходящий тренд
-        elif price_change < 0 and avg_volume_current > avg_volume_previous:
-            volume_trend[i] = -1
-        # Если цена растет, но объем падает = слабый восходящий тренд
-        elif price_change > 0 and avg_volume_current < avg_volume_previous:
-            volume_trend[i] = 0.5
-        # Если цена падает, но объем падает = слабый нисходящий тренд
-        elif price_change < 0 and avg_volume_current < avg_volume_previous:
-            volume_trend[i] = -0.5
-        else:
-            volume_trend[i] = 0
-
-    return volume_trend
+    indicator = CVDNadarayaWatsonEMAIndicator(
+        cvd_ma_length=cvd_ma_length,
+        bandwidth=bandwidth,
+        mult=mult,
+        repaint=True,
+        ema_fast=ema_fast,
+        ema_medium=ema_medium,
+        ema_slow=ema_slow
+    )
+    return indicator.get_last_candle_signal(bybit_candles)
