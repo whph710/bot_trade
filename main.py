@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
-    """Простое вычисление ATR для фильтрации пар."""
+    """Простое вычисление ATR для информационных целей."""
     if len(candles) < period:
         return 0.0
 
@@ -71,23 +71,16 @@ def get_user_direction_choice() -> str:
 
 
 async def process_single_pair_full(pair: str, limit: int = 100, interval: str = "15") -> Optional[Tuple[str, Dict]]:
-    """Обработка одной торговой пары с CVD + Nadaraya-Watson + EMA анализом."""
+    """Обработка одной торговой пары с CVD + Nadaraya-Watson + EMA анализом БЕЗ фильтрации по ATR."""
     try:
         candles_raw = await get_klines_async(symbol=pair, interval=interval, limit=limit)
 
         if not candles_raw or len(candles_raw) < 4:
             return None
 
-        # Быстрая фильтрация по ATR с адаптивным порогом
+        # Рассчитываем ATR только для информации, НЕ для фильтрации
         atr_candles = candles_raw[-20:] if len(candles_raw) >= 20 else candles_raw
         atr = calculate_atr(atr_candles)
-
-        # Адаптивный порог ATR на основе цены
-        price = float(candles_raw[-1][4])  # Последняя цена закрытия
-        min_atr = 0.01 if price < 1 else 0.02 if price < 100 else 0.05
-
-        if atr <= min_atr:
-            return None
 
         # CVD + Nadaraya-Watson + EMA анализ
         cvd_nw_ema_signal = None
@@ -121,22 +114,25 @@ async def process_single_pair_full(pair: str, limit: int = 100, interval: str = 
 
 
 async def collect_all_data() -> Dict[str, Dict]:
-    """Сбор данных с улучшенным контролем параллелизма."""
+    """Сбор данных БЕЗ фильтрации по ATR - анализируем ВСЕ пары."""
     start_time = time.time()
-    logger.info("Сбор данных по торговым парам...")
+    logger.info("Сбор данных по ВСЕМ торговым парам (без фильтрации по ATR)...")
 
     try:
         usdt_pairs = await get_usdt_linear_symbols()
-        semaphore = asyncio.Semaphore(30)
+        logger.info(f"Найдено {len(usdt_pairs)} пар для анализа")
+
+        semaphore = asyncio.Semaphore(25)  # Немного снизим нагрузку
 
         async def process_with_semaphore(pair):
             async with semaphore:
                 return await process_single_pair_full(pair, limit=250)
 
         # Батч-обработка для лучшей производительности
-        batch_size = 50
+        batch_size = 40  # Уменьшим размер батча
         filtered_data = {}
         error_count = 0
+        processed_count = 0
         cvd_ema_signals_count = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
 
         for i in range(0, len(usdt_pairs), batch_size):
@@ -151,6 +147,7 @@ async def collect_all_data() -> Dict[str, Dict]:
                 if result is not None:
                     pair, data = result
                     filtered_data[pair] = data
+                    processed_count += 1
 
                     # Подсчитываем CVD+NW+EMA сигналы
                     if data.get('cvd_nw_ema_signal'):
@@ -160,8 +157,12 @@ async def collect_all_data() -> Dict[str, Dict]:
             if i + batch_size < len(usdt_pairs):
                 await asyncio.sleep(0.1)
 
+            # Промежуточный лог каждые 100 пар
+            if processed_count % 100 == 0:
+                logger.info(f"Обработано {processed_count} пар...")
+
         elapsed_time = time.time() - start_time
-        logger.info(f"Загружено {len(filtered_data)} пар за {elapsed_time:.2f}с (ошибок: {error_count})")
+        logger.info(f"Обработано {processed_count} пар за {elapsed_time:.2f}с (ошибок: {error_count})")
         logger.info(
             f"CVD+NW+EMA сигналы: LONG={cvd_ema_signals_count['LONG']}, SHORT={cvd_ema_signals_count['SHORT']}, NO_SIGNAL={cvd_ema_signals_count['NO_SIGNAL']}")
 
@@ -468,7 +469,7 @@ async def main():
         # Получаем выбор пользователя
         direction = get_user_direction_choice()
 
-        print(f"\n🚀 Запуск анализа с CVD + Nadaraya-Watson + EMA...")
+        print(f"\n🚀 Запуск анализа с CVD + Nadaraya-Watson + EMA (БЕЗ фильтрации по ATR)...")
         print("-" * 50)
 
         # Запускаем анализ с выбранным направлением
