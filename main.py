@@ -7,10 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import (
-    CVDNadarayaWatsonIndicator,
-    calculate_atr,
-    detect_candlestick_signals,
-    compute_cvd_nw_signals,
+    CVDNadarayaWatsonEMAIndicator,
     analyze_last_candle,
     get_detailed_signal_info
 )
@@ -26,6 +23,63 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
+    """Простое вычисление ATR для фильтрации пар."""
+    if len(candles) < period:
+        return 0.0
+
+    true_ranges = []
+    for i in range(1, len(candles)):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i - 1][4])
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        true_ranges.append(tr)
+
+    return sum(true_ranges[-period:]) / period if true_ranges else 0.0
+
+
+def detect_candlestick_signals(pattern_data: Dict[str, Dict]) -> Dict[str, List[str]]:
+    """Простое обнаружение паттернов японских свечей."""
+    signals = {'long': [], 'short': []}
+
+    for pair, data in pattern_data.items():
+        candles = data['candles']
+        if len(candles) < 3:
+            continue
+
+        # Простые паттерны
+        last_candle = candles[-1]
+        prev_candle = candles[-2]
+
+        close = float(last_candle[4])
+        open_price = float(last_candle[1])
+        high = float(last_candle[2])
+        low = float(last_candle[3])
+
+        prev_close = float(prev_candle[4])
+        prev_open = float(prev_candle[1])
+
+        # Бычий паттерн
+        if (close > open_price and  # Зеленая свеча
+                close > prev_close and  # Закрытие выше предыдущего
+                (high - close) < (close - open_price) * 0.3):  # Небольшая верхняя тень
+            signals['long'].append(pair)
+
+        # Медвежий паттерн
+        elif (close < open_price and  # Красная свеча
+              close < prev_close and  # Закрытие ниже предыдущего
+              (close - low) < (open_price - close) * 0.3):  # Небольшая нижняя тень
+            signals['short'].append(pair)
+
+    return signals
 
 
 def get_user_direction_choice() -> str:
@@ -53,7 +107,7 @@ def get_user_direction_choice() -> str:
 
 
 async def process_single_pair_full(pair: str, limit: int = 100, interval: str = "15") -> Optional[Tuple[str, Dict]]:
-    """Оптимизированная обработка одной торговой пары с CVD + Nadaraya-Watson анализом."""
+    """Обработка одной торговой пары с CVD + Nadaraya-Watson + EMA анализом."""
     try:
         candles_raw = await get_klines_async(symbol=pair, interval=interval, limit=limit)
 
@@ -71,29 +125,29 @@ async def process_single_pair_full(pair: str, limit: int = 100, interval: str = 
         if atr <= min_atr:
             return None
 
-        # Добавляем CVD + Nadaraya-Watson анализ
-        cvd_nw_signal = None
-        cvd_nw_details = None
+        # CVD + Nadaraya-Watson + EMA анализ
+        cvd_nw_ema_signal = None
+        cvd_nw_ema_details = None
 
-        # Проверяем достаточно ли данных для CVD+NW анализа
-        if len(candles_raw) >= 150:  # Минимум для корректной работы CVD+NW
+        # Проверяем достаточно ли данных для анализа
+        if len(candles_raw) >= 150:  # Минимум для корректной работы
             try:
-                # Получаем простой сигнал
-                cvd_nw_signal = analyze_last_candle(candles_raw)
+                # Получаем простой сигнал с EMA подтверждением
+                cvd_nw_ema_signal = analyze_last_candle(candles_raw)
 
-                # Получаем детальную информацию
-                cvd_nw_details = get_detailed_signal_info(candles_raw)
+                # Получаем детальную информацию с EMA данными
+                cvd_nw_ema_details = get_detailed_signal_info(candles_raw)
 
             except Exception as e:
-                logger.warning(f"Ошибка CVD+NW анализа для {pair}: {e}")
+                logger.warning(f"Ошибка CVD+NW+EMA анализа для {pair}: {e}")
 
         return pair, {
             "candles_full": candles_raw,
             "candles_3": candles_raw[-3:],
             "candles_20": candles_raw[-20:] if len(candles_raw) >= 20 else candles_raw,
             "atr": atr,
-            "cvd_nw_signal": cvd_nw_signal,
-            "cvd_nw_details": cvd_nw_details
+            "cvd_nw_ema_signal": cvd_nw_ema_signal,
+            "cvd_nw_ema_details": cvd_nw_ema_details
         }
 
     except Exception as e:
@@ -102,7 +156,7 @@ async def process_single_pair_full(pair: str, limit: int = 100, interval: str = 
 
 
 async def collect_all_data() -> Dict[str, Dict]:
-    """Оптимизированный сбор данных с улучшенным контролем параллелизма."""
+    """Сбор данных с улучшенным контролем параллелизма."""
     start_time = time.time()
     logger.info("Сбор данных по торговым парам...")
 
@@ -112,13 +166,13 @@ async def collect_all_data() -> Dict[str, Dict]:
 
         async def process_with_semaphore(pair):
             async with semaphore:
-                return await process_single_pair_full(pair, limit=200)  # Увеличиваем лимит для CVD+NW
+                return await process_single_pair_full(pair, limit=200)
 
         # Батч-обработка для лучшей производительности
         batch_size = 50
         filtered_data = {}
         error_count = 0
-        cvd_signals_count = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
+        cvd_ema_signals_count = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
 
         for i in range(0, len(usdt_pairs), batch_size):
             batch = usdt_pairs[i:i + batch_size]
@@ -133,9 +187,9 @@ async def collect_all_data() -> Dict[str, Dict]:
                     pair, data = result
                     filtered_data[pair] = data
 
-                    # Подсчитываем CVD+NW сигналы
-                    if data.get('cvd_nw_signal'):
-                        cvd_signals_count[data['cvd_nw_signal']] += 1
+                    # Подсчитываем CVD+NW+EMA сигналы
+                    if data.get('cvd_nw_ema_signal'):
+                        cvd_ema_signals_count[data['cvd_nw_ema_signal']] += 1
 
             # Короткая пауза между батчами
             if i + batch_size < len(usdt_pairs):
@@ -144,7 +198,7 @@ async def collect_all_data() -> Dict[str, Dict]:
         elapsed_time = time.time() - start_time
         logger.info(f"Загружено {len(filtered_data)} пар за {elapsed_time:.2f}с (ошибок: {error_count})")
         logger.info(
-            f"CVD+NW сигналы: LONG={cvd_signals_count['LONG']}, SHORT={cvd_signals_count['SHORT']}, NO_SIGNAL={cvd_signals_count['NO_SIGNAL']}")
+            f"CVD+NW+EMA сигналы: LONG={cvd_ema_signals_count['LONG']}, SHORT={cvd_ema_signals_count['SHORT']}, NO_SIGNAL={cvd_ema_signals_count['NO_SIGNAL']}")
 
         return filtered_data
 
@@ -154,7 +208,7 @@ async def collect_all_data() -> Dict[str, Dict]:
 
 
 def extract_data_for_patterns(all_data: Dict[str, Dict]) -> Dict[str, Dict]:
-    """Упрощенное извлечение данных для паттернов без лишних проверок."""
+    """Извлечение данных для паттернов."""
     return {
         pair: {"candles": data["candles_3"]}
         for pair, data in all_data.items()
@@ -162,17 +216,17 @@ def extract_data_for_patterns(all_data: Dict[str, Dict]) -> Dict[str, Dict]:
     }
 
 
-def extract_cvd_signal_pairs(all_data: Dict[str, Dict], signal_type: str) -> List[str]:
-    """Извлечение пар с определенным CVD+NW сигналом."""
+def extract_cvd_ema_signal_pairs(all_data: Dict[str, Dict], signal_type: str) -> List[str]:
+    """Извлечение пар с определенным CVD+NW+EMA сигналом."""
     pairs = []
     for pair, data in all_data.items():
-        if data.get('cvd_nw_signal') == signal_type:
+        if data.get('cvd_nw_ema_signal') == signal_type:
             pairs.append(pair)
     return pairs
 
 
 def extract_data_subset(all_data: Dict[str, Dict], pairs: List[str], candle_key: str) -> Dict[str, List]:
-    """Упрощенное извлечение подмножества данных."""
+    """Извлечение подмножества данных."""
     return {
         pair: all_data[pair][candle_key]
         for pair in pairs
@@ -181,7 +235,7 @@ def extract_data_subset(all_data: Dict[str, Dict], pairs: List[str], candle_key:
 
 
 def parse_ai_response(ai_response: str) -> Optional[Dict]:
-    """Оптимизированный парсинг ответа ИИ."""
+    """Парсинг ответа ИИ."""
     if not ai_response or ai_response.strip() == "":
         return None
 
@@ -212,8 +266,8 @@ def parse_ai_response(ai_response: str) -> Optional[Dict]:
     return None
 
 
-def get_filtered_pairs_by_direction(candlestick_signals: Dict, cvd_signals: Dict, direction: str) -> List[str]:
-    """Получение пар, отфильтрованных по выбранному направлению с учетом CVD+NW сигналов."""
+def get_filtered_pairs_by_direction(candlestick_signals: Dict, cvd_ema_signals: Dict, direction: str) -> List[str]:
+    """Получение пар, отфильтрованных по выбранному направлению с учетом CVD+NW+EMA сигналов."""
     if direction == '0':
         # Автономный режим - возвращаем все пары
         all_pairs = set()
@@ -223,15 +277,16 @@ def get_filtered_pairs_by_direction(candlestick_signals: Dict, cvd_signals: Dict
             if dir_name in candlestick_signals:
                 all_pairs.update(candlestick_signals[dir_name])
 
-        # Добавляем пары из CVD+NW сигналов
-        all_pairs.update(cvd_signals.get('LONG', []))
-        all_pairs.update(cvd_signals.get('SHORT', []))
+        # Добавляем пары из CVD+NW+EMA сигналов
+        all_pairs.update(cvd_ema_signals.get('LONG', []))
+        all_pairs.update(cvd_ema_signals.get('SHORT', []))
 
         selected_pairs = list(all_pairs)
         logger.info(f"Автономный режим: найдено {len(selected_pairs)} пар с потенциальными паттернами")
         logger.info(
             f"  - Японские свечи: {len(candlestick_signals.get('long', []))} long, {len(candlestick_signals.get('short', []))} short")
-        logger.info(f"  - CVD+NW: {len(cvd_signals.get('LONG', []))} LONG, {len(cvd_signals.get('SHORT', []))} SHORT")
+        logger.info(
+            f"  - CVD+NW+EMA: {len(cvd_ema_signals.get('LONG', []))} LONG, {len(cvd_ema_signals.get('SHORT', []))} SHORT")
 
     else:
         # Фильтруем по выбранному направлению
@@ -241,10 +296,10 @@ def get_filtered_pairs_by_direction(candlestick_signals: Dict, cvd_signals: Dict
         if direction in candlestick_signals:
             selected_pairs.update(candlestick_signals[direction])
 
-        # Добавляем из CVD+NW сигналов
+        # Добавляем из CVD+NW+EMA сигналов
         cvd_direction = direction.upper()
-        if cvd_direction in cvd_signals:
-            selected_pairs.update(cvd_signals[cvd_direction])
+        if cvd_direction in cvd_ema_signals:
+            selected_pairs.update(cvd_ema_signals[cvd_direction])
 
         selected_pairs = list(selected_pairs)
         logger.info(f"Направление {direction.upper()}: найдено {len(selected_pairs)} пар")
@@ -258,14 +313,15 @@ def get_filtered_pairs_by_direction(candlestick_signals: Dict, cvd_signals: Dict
 def create_direction_system_prompt(base_prompt: str, direction: str) -> str:
     """Создание системного промпта с учетом направления."""
     if direction == '0':
-        # Автономный режим - не добавляем ограничения
+        # Автономный режим
         direction_addition = """
         КРИТИЧЕСКИ ВАЖНО: 
         - Самостоятельно определи оптимальное направление (long/short) для КАЖДОЙ пары
-        - Основывайся на ВСЕХ доступных технических индикаторах, включая CVD и Nadaraya-Watson
+        - Основывайся на ВСЕХ доступных технических индикаторах, включая CVD, Nadaraya-Watson и EMA
+        - EMA выравнивание: Fast > Medium > Slow для LONG, Fast < Medium < Slow для SHORT
         - НЕ следуй предвзятым предположениям о направлении
         - Выбери ОДНУ наиболее перспективную возможность
-        - Учитывай сигналы CVD (Cumulative Volume Delta) и Nadaraya-Watson envelope
+        - Учитывай подтверждение сигналов всеми тремя индикаторами (CVD + NW + EMA)
         """
     else:
         # Конкретное направление
@@ -274,49 +330,55 @@ def create_direction_system_prompt(base_prompt: str, direction: str) -> str:
 
         Анализируй данные исключительно с точки зрения {direction.upper()} позиций.
         Игнорируй возможности для противоположного направления.
-        Особое внимание уделяй CVD и Nadaraya-Watson сигналам для {direction.upper()} направления.
+        Особое внимание уделяй:
+        - CVD и Nadaraya-Watson сигналам для {direction.upper()} направления
+        - EMA выравниванию для {direction.upper()} (Fast>Medium>Slow для LONG, Fast<Medium<Slow для SHORT)
+        - Подтверждению всех трех систем индикаторов
         """
 
     return f"{base_prompt}\n{direction_addition}"
 
 
-async def analyze_with_ai(data: Dict, direction: str, cvd_data: Dict = None) -> Optional[Dict]:
-    """Первичный анализ с ИИ с учетом выбранного направления и CVD+NW данных."""
+async def analyze_with_ai(data: Dict, direction: str, cvd_ema_data: Dict = None) -> Optional[Dict]:
+    """Первичный анализ с ИИ с учетом выбранного направления и CVD+NW+EMA данных."""
     try:
-        # Читаем обновленный промпт
+        # Читаем промпт
         try:
             with open("prompt2.txt", 'r', encoding='utf-8') as file:
                 prompt2 = file.read()
         except FileNotFoundError:
             prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
                        Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 10 лучших пар для торговли.
-                       Учитывай CVD (Cumulative Volume Delta) и Nadaraya-Watson envelope сигналы."""
+                       Учитывай CVD (Cumulative Volume Delta), Nadaraya-Watson envelope и EMA сигналы."""
 
         base_system_prompt = f"""{prompt2}
 
         ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
         Последний индекс = текущая свеча.
 
-        ДОПОЛНИТЕЛЬНО: Доступны сигналы CVD + Nadaraya-Watson envelope:
+        ДОПОЛНИТЕЛЬНО: Доступны сигналы CVD + Nadaraya-Watson + EMA:
         - CVD показывает накопленную дельту объемов (бычий/медвежий sentiment)
         - Nadaraya-Watson envelope - адаптивный конверт для определения точек входа
-        - Сигналы: LONG (пересечение цены под нижней границей + бычий CVD), SHORT (пересечение над верхней границей + медвежий CVD)"""
+        - EMA (9, 21, 50) - подтверждение направления тренда
+        - Сигналы генерируются только при подтверждении ВСЕХ трех систем индикаторов
+        - LONG: пересечение цены под нижней границей + бычий CVD + EMA 9>21>50
+        - SHORT: пересечение над верхней границей + медвежий CVD + EMA 9<21<50"""
 
         # Создаем промпт с учетом направления
         if direction == '0':
-            system_prompt = f"{base_system_prompt}\n\nВАЖНО: Анализируй ВСЕ возможности для Long И Short позиций. Не ограничивайся одним направлением - ищи лучшие торговые возможности в любом направлении. Особое внимание уделяй сигналам CVD+NW."
+            system_prompt = f"{base_system_prompt}\n\nВАЖНО: Анализируй ВСЕ возможности для Long И Short позиций. Не ограничивайся одним направлением - ищи лучшие торговые возможности в любом направлении. Особое внимание уделяй сигналам CVD+NW+EMA с полным подтверждением."
         else:
-            system_prompt = f"{base_system_prompt}\n\nВАЖНОЕ ОГРАНИЧЕНИЕ: Рассматривать сделки ТОЛЬКО {direction.upper()}\nАнализируй данные исключительно с точки зрения {direction.upper()} позиций. Приоритет - сигналам CVD+NW для {direction.upper()}."
+            system_prompt = f"{base_system_prompt}\n\nВАЖНОЕ ОГРАНИЧЕНИЕ: Рассматривать сделки ТОЛЬКО {direction.upper()}\nАнализируй данные исключительно с точки зрения {direction.upper()} позиций. Приоритет - сигналам CVD+NW+EMA с полным подтверждением для {direction.upper()}."
 
-        # Добавляем информацию о CVD сигналах в контекст
-        cvd_context = ""
-        if cvd_data:
-            cvd_context = f"\n\nCVD+NW СИГНАЛЫ:\n"
-            for signal_type, pairs in cvd_data.items():
+        # Добавляем информацию о CVD+EMA сигналах в контекст
+        cvd_ema_context = ""
+        if cvd_ema_data:
+            cvd_ema_context = f"\n\nCVD+NW+EMA СИГНАЛЫ (С ПОЛНЫМ ПОДТВЕРЖДЕНИЕМ):\n"
+            for signal_type, pairs in cvd_ema_data.items():
                 if pairs:
-                    cvd_context += f"- {signal_type}: {', '.join(pairs[:10])}\n"
+                    cvd_ema_context += f"- {signal_type}: {', '.join(pairs[:10])}\n"
 
-        full_prompt = system_prompt + cvd_context
+        full_prompt = system_prompt + cvd_ema_context
 
         logger.info(f"Первичный анализ ИИ: {len(data)} пар, направление: {direction if direction != '0' else 'AUTO'}")
 
@@ -343,14 +405,14 @@ async def analyze_with_ai(data: Dict, direction: str, cvd_data: Dict = None) -> 
 
 
 async def final_ai_analysis(data: Dict, direction: str, all_data: Dict = None) -> Optional[str]:
-    """Финальный анализ с учетом выбранного направления и CVD+NW данных."""
+    """Финальный анализ с учетом выбранного направления и CVD+NW+EMA данных."""
     try:
         try:
             with open('prompt.txt', 'r', encoding='utf-8') as file:
                 main_prompt = file.read()
         except FileNotFoundError:
             main_prompt = """Ты опытный трейдер. Проанализируй данные и дай рекомендации.
-                           Обрати особое внимание на сигналы CVD (Cumulative Volume Delta) и Nadaraya-Watson envelope."""
+                           Обрати особое внимание на сигналы CVD (Cumulative Volume Delta), Nadaraya-Watson envelope и EMA."""
 
         base_system_prompt = f"""
         {main_prompt}
@@ -362,21 +424,24 @@ async def final_ai_analysis(data: Dict, direction: str, all_data: Dict = None) -
         ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ:
         - CVD (Cumulative Volume Delta): Показывает накопленную дельту объемов
         - Nadaraya-Watson Envelope: Адаптивный конверт для определения точек входа
+        - EMA (9, 21, 50): Подтверждение направления тренда
         - Японские свечи: Классические паттерны разворота и продолжения
         - ATR: Для определения волатильности
+
+        ВАЖНО: Сигналы генерируются только при подтверждении ВСЕХ систем индикаторов.
         """
 
-        # Добавляем информацию о CVD+NW сигналах для анализируемых пар
-        cvd_info = ""
+        # Добавляем информацию о CVD+NW+EMA сигналах для анализируемых пар
+        cvd_ema_info = ""
         if all_data:
-            cvd_info = "\n\nCVD+NW АНАЛИЗ ДЛЯ ВЫБРАННЫХ ПАР:\n"
+            cvd_ema_info = "\n\nCVD+NW+EMA АНАЛИЗ ДЛЯ ВЫБРАННЫХ ПАР:\n"
             for pair in data.keys():
-                if pair in all_data and all_data[pair].get('cvd_nw_details'):
-                    details = all_data[pair]['cvd_nw_details']
-                    cvd_info += f"- {pair}: Сигнал={details.get('signal', 'N/A')}, CVD={details.get('cvd_status', 'N/A')}, Цена={details.get('last_price', 'N/A')}\n"
+                if pair in all_data and all_data[pair].get('cvd_nw_ema_details'):
+                    details = all_data[pair]['cvd_nw_ema_details']
+                    cvd_ema_info += f"- {pair}: Сигнал={details.get('signal', 'N/A')}, CVD={details.get('cvd_status', 'N/A')}, EMA={details.get('ema_alignment', 'N/A')}, Цена={details.get('last_price', 'N/A')}\n"
 
         # Создаем финальный промпт с учетом направления
-        system_prompt = create_direction_system_prompt(base_system_prompt + cvd_info, direction)
+        system_prompt = create_direction_system_prompt(base_system_prompt + cvd_ema_info, direction)
 
         direction_display = direction.upper() if direction != '0' else 'АВТОНОМНЫЙ'
         logger.info(f"Финальный анализ ИИ: {len(data)} пар, режим: {direction_display}")
@@ -393,7 +458,7 @@ async def final_ai_analysis(data: Dict, direction: str, all_data: Dict = None) -
 
 
 async def run_trading_analysis(direction: str) -> Optional[str]:
-    """Основная функция анализа с учетом выбранного направления и CVD+NW."""
+    """Основная функция анализа с учетом выбранного направления и CVD+NW+EMA."""
     try:
         direction_display = direction.upper() if direction != '0' else 'АВТОНОМНЫЙ'
         logger.info(f"АНАЛИЗ ТОРГОВЫХ ВОЗМОЖНОСТЕЙ - РЕЖИМ: {direction_display}")
@@ -407,14 +472,14 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         pattern_data = extract_data_for_patterns(all_data)
         candlestick_signals = detect_candlestick_signals(pattern_data)
 
-        # Этап 3: Извлечение CVD+NW сигналов
-        cvd_signals = {
-            'LONG': extract_cvd_signal_pairs(all_data, 'LONG'),
-            'SHORT': extract_cvd_signal_pairs(all_data, 'SHORT')
+        # Этап 3: Извлечение CVD+NW+EMA сигналов
+        cvd_ema_signals = {
+            'LONG': extract_cvd_ema_signal_pairs(all_data, 'LONG'),
+            'SHORT': extract_cvd_ema_signal_pairs(all_data, 'SHORT')
         }
 
         # Этап 4: Фильтрация по направлению
-        selected_pairs = get_filtered_pairs_by_direction(candlestick_signals, cvd_signals, direction)
+        selected_pairs = get_filtered_pairs_by_direction(candlestick_signals, cvd_ema_signals, direction)
         if not selected_pairs:
             direction_msg = f"для направления {direction.upper()}" if direction != '0' else ""
             return f"Нет найденных торговых паттернов {direction_msg}. Попробуйте позже или выберите другое направление."
@@ -424,7 +489,7 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
         if not detailed_data:
             return None
 
-        ai_analysis = await analyze_with_ai(detailed_data, direction, cvd_signals)
+        ai_analysis = await analyze_with_ai(detailed_data, direction, cvd_ema_signals)
         if not ai_analysis or 'pairs' not in ai_analysis:
             return None
 
@@ -446,13 +511,13 @@ async def run_trading_analysis(direction: str) -> Optional[str]:
 
 async def main():
     """Главная функция с интерактивным выбором направления."""
-    logger.info("СТАРТ ТОРГОВОГО БОТА С CVD + NADARAYA-WATSON")
+    logger.info("СТАРТ ТОРГОВОГО БОТА С CVD + NADARAYA-WATSON + EMA")
 
     try:
         # Получаем выбор пользователя
         direction = get_user_direction_choice()
 
-        print(f"\n🚀 Запуск анализа с CVD + Nadaraya-Watson...")
+        print(f"\n🚀 Запуск анализа с CVD + Nadaraya-Watson + EMA...")
         print("-" * 50)
 
         # Запускаем анализ с выбранным направлением
@@ -460,7 +525,7 @@ async def main():
 
         if result:
             print(f"\n{'=' * 60}")
-            print("РЕЗУЛЬТАТ АНАЛИЗА (CVD + NADARAYA-WATSON)")
+            print("РЕЗУЛЬТАТ АНАЛИЗА (CVD + NADARAYA-WATSON + EMA)")
             print("=" * 60)
             print(f"{result}")
             print("=" * 60)
