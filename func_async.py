@@ -37,7 +37,7 @@ async def get_klines_async(symbol: str, interval: int = 15, limit: int = 100) ->
                     if int(klines[0][0]) > int(klines[-1][0]):
                         klines.reverse()
                     # Исключаем последнюю незакрытую свечу
-                    klines = klines[:-1]
+                    # klines = klines[:-1]
 
                 logger.debug(f"Получено {len(klines)} свечей для {symbol}")
                 return klines
