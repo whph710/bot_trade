@@ -1,18 +1,21 @@
 import pandas as pd
 import numpy as np
 import math
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 
-class CVDNadarayaWatsonIndicator:
+class CVDNadarayaWatsonEMAIndicator:
     def __init__(self,
                  cvd_ma_length: int = 50,
                  bandwidth: float = 7.0,
                  mult: float = 1.1,
                  repaint: bool = True,
-                 max_bars_back: int = 500):
+                 max_bars_back: int = 500,
+                 ema_fast: int = 9,
+                 ema_medium: int = 21,
+                 ema_slow: int = 50):
         """
-        CVD + Nadaraya-Watson Envelope Combined Indicator
+        CVD + Nadaraya-Watson + 3 EMA Combined Indicator for 15m timeframe
 
         Args:
             cvd_ma_length: Length for CVD moving average
@@ -20,22 +23,45 @@ class CVDNadarayaWatsonIndicator:
             mult: Multiplier for envelope width
             repaint: Whether to use repainting mode
             max_bars_back: Maximum bars to look back
+            ema_fast: Fast EMA period (default 9)
+            ema_medium: Medium EMA period (default 21)
+            ema_slow: Slow EMA period (default 50)
         """
         self.cvd_ma_length = cvd_ma_length
         self.bandwidth = bandwidth
         self.mult = mult
         self.repaint = repaint
         self.max_bars_back = max_bars_back
+        self.ema_fast = ema_fast
+        self.ema_medium = ema_medium
+        self.ema_slow = ema_slow
+
+    def calculate_ema(self, prices: np.ndarray, period: int) -> np.ndarray:
+        """
+        Calculate Exponential Moving Average
+
+        Args:
+            prices: Array of prices
+            period: EMA period
+
+        Returns:
+            Array of EMA values
+        """
+        ema = np.zeros_like(prices)
+        multiplier = 2 / (period + 1)
+
+        # First EMA value is the first price
+        ema[0] = prices[0]
+
+        # Calculate subsequent EMA values
+        for i in range(1, len(prices)):
+            ema[i] = (prices[i] * multiplier) + (ema[i - 1] * (1 - multiplier))
+
+        return ema
 
     def calculate_bull_bear_power(self, candles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate bull and bear power from OHLCV data
-
-        Args:
-            candles: List of candles [open, high, low, close, volume, ...]
-
-        Returns:
-            Tuple of (bull_power, bear_power) arrays
         """
         df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
 
@@ -116,9 +142,6 @@ class CVDNadarayaWatsonIndicator:
     def calculate_cvd(self, candles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate Cumulative Volume Delta (CVD)
-
-        Returns:
-            Tuple of (cvd, cvd_ma, cvd_bullish, cvd_bearish)
         """
         df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
 
@@ -152,9 +175,6 @@ class CVDNadarayaWatsonIndicator:
     def calculate_nadaraya_watson(self, prices: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate Nadaraya-Watson estimator and envelope
-
-        Returns:
-            Tuple of (nw_estimate, upper_envelope, lower_envelope)
         """
         n = len(prices)
         max_lookback = min(self.max_bars_back, n)
@@ -218,13 +238,6 @@ class CVDNadarayaWatsonIndicator:
     def parse_bybit_candles(self, raw_candles: List[List[str]]) -> List[List[float]]:
         """
         Parse Bybit candle data format to OHLCV floats
-
-        Args:
-            raw_candles: List of candles in Bybit format
-                        [timestamp, open, high, low, close, volume, turnover]
-
-        Returns:
-            List of [open, high, low, close, volume] as floats
         """
         parsed_candles = []
 
@@ -241,22 +254,50 @@ class CVDNadarayaWatsonIndicator:
 
         return parsed_candles
 
-    def get_last_candle_signal(self, raw_candles: List[List[str]]) -> Dict:
+    def check_ema_alignment(self, ema_fast: np.ndarray, ema_medium: np.ndarray, ema_slow: np.ndarray,
+                            signal_type: str, index: int) -> bool:
         """
-        Get signal for the last candle
+        Check if EMA alignment supports the signal direction
 
         Args:
-            raw_candles: List of candles in Bybit format
+            ema_fast: Fast EMA values
+            ema_medium: Medium EMA values
+            ema_slow: Slow EMA values
+            signal_type: 'LONG' or 'SHORT'
+            index: Index to check
 
         Returns:
-            Dictionary with signal information for the last candle
+            True if EMA alignment supports the signal
         """
-        if len(raw_candles) < self.cvd_ma_length + 50:  # Need enough data for calculations
+        if index < 0 or index >= len(ema_fast):
+            return False
+
+        fast = ema_fast[index]
+        medium = ema_medium[index]
+        slow = ema_slow[index]
+
+        if signal_type == 'LONG':
+            # For LONG: Fast > Medium > Slow (bullish alignment)
+            return fast > medium > slow
+        elif signal_type == 'SHORT':
+            # For SHORT: Fast < Medium < Slow (bearish alignment)
+            return fast < medium < slow
+
+        return False
+
+    def get_last_candle_signal(self, raw_candles: List[List[str]]) -> Dict:
+        """
+        Get signal for the last candle with EMA confirmation
+        """
+        required_data = max(self.cvd_ma_length, self.ema_slow) + 50
+
+        if len(raw_candles) < required_data:
             return {
                 'signal': 'NO_SIGNAL',
                 'reason': 'INSUFFICIENT_DATA',
                 'last_price': float(raw_candles[0][4]) if raw_candles else 0,
-                'cvd_status': 'UNKNOWN'
+                'cvd_status': 'UNKNOWN',
+                'ema_alignment': 'UNKNOWN'
             }
 
         # Parse candles
@@ -271,6 +312,7 @@ class CVDNadarayaWatsonIndicator:
         # Check if there's a signal on the last candle
         last_candle_signal = 'NO_SIGNAL'
         signal_reason = 'NO_CROSS'
+        ema_alignment = 'NEUTRAL'
 
         if last_idx > 0:
             last_price = results['prices'][last_idx]
@@ -284,47 +326,66 @@ class CVDNadarayaWatsonIndicator:
             cvd_bullish_last = results['cvd_bullish'][last_idx]
             cvd_bearish_last = results['cvd_bearish'][last_idx]
 
+            # Check CVD + NW signals first
+            cvd_nw_signal = None
+
             # Check for LONG signal (price crosses under lower envelope + CVD bullish)
             if (prev_price >= lower_prev and last_price < lower_last and cvd_bullish_last):
-                last_candle_signal = 'LONG'
+                cvd_nw_signal = 'LONG'
                 signal_reason = 'PRICE_CROSS_UNDER_LOWER_ENVELOPE_CVD_BULLISH'
 
             # Check for SHORT signal (price crosses over upper envelope + CVD bearish)
             elif (prev_price <= upper_prev and last_price > upper_last and cvd_bearish_last):
-                last_candle_signal = 'SHORT'
+                cvd_nw_signal = 'SHORT'
                 signal_reason = 'PRICE_CROSS_OVER_UPPER_ENVELOPE_CVD_BEARISH'
 
-            # Check if price is near envelope but no cross
-            elif last_price <= lower_last and cvd_bullish_last:
-                signal_reason = 'PRICE_BELOW_LOWER_ENVELOPE_CVD_BULLISH'
-            elif last_price >= upper_last and cvd_bearish_last:
-                signal_reason = 'PRICE_ABOVE_UPPER_ENVELOPE_CVD_BEARISH'
-            elif last_price <= lower_last and cvd_bearish_last:
-                signal_reason = 'PRICE_BELOW_LOWER_ENVELOPE_CVD_BEARISH'
-            elif last_price >= upper_last and cvd_bullish_last:
-                signal_reason = 'PRICE_ABOVE_UPPER_ENVELOPE_CVD_BULLISH'
+            # If we have a CVD + NW signal, check EMA confirmation
+            if cvd_nw_signal:
+                ema_supports_signal = self.check_ema_alignment(
+                    results['ema_fast'],
+                    results['ema_medium'],
+                    results['ema_slow'],
+                    cvd_nw_signal,
+                    last_idx
+                )
+
+                if ema_supports_signal:
+                    last_candle_signal = cvd_nw_signal
+                    ema_alignment = 'BULLISH' if cvd_nw_signal == 'LONG' else 'BEARISH'
+                    signal_reason += '_EMA_CONFIRMED'
+                else:
+                    signal_reason += '_EMA_NOT_ALIGNED'
+                    ema_alignment = 'CONFLICTING'
+            else:
+                # Check current EMA alignment even without signal
+                if self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
+                                            results['ema_slow'], 'LONG', last_idx):
+                    ema_alignment = 'BULLISH'
+                elif self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
+                                              results['ema_slow'], 'SHORT', last_idx):
+                    ema_alignment = 'BEARISH'
+                else:
+                    ema_alignment = 'NEUTRAL'
 
         return {
             'signal': last_candle_signal,
             'reason': signal_reason,
             'last_price': results['prices'][-1],
             'cvd_status': results['current_cvd_status'],
+            'ema_alignment': ema_alignment,
             'upper_envelope': results['upper_envelope'][-1],
             'lower_envelope': results['lower_envelope'][-1],
             'nadaraya_watson': results['nadaraya_watson'][-1],
             'cvd_value': results['cvd'][-1],
-            'cvd_ma_value': results['cvd_ma'][-1]
+            'cvd_ma_value': results['cvd_ma'][-1],
+            'ema_fast_value': results['ema_fast'][-1],
+            'ema_medium_value': results['ema_medium'][-1],
+            'ema_slow_value': results['ema_slow'][-1]
         }
 
     def generate_signals(self, candles: List[List[float]]) -> Dict:
         """
-        Generate trading signals based on CVD and Nadaraya-Watson envelope
-
-        Args:
-            candles: List of OHLCV candles (parsed format)
-
-        Returns:
-            Dictionary containing all indicator values and signals
+        Generate trading signals based on CVD, Nadaraya-Watson envelope and EMA confirmation
         """
         df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
         prices = df['close'].values
@@ -335,21 +396,28 @@ class CVDNadarayaWatsonIndicator:
         # Calculate Nadaraya-Watson envelope
         nw_estimate, upper_envelope, lower_envelope = self.calculate_nadaraya_watson(prices)
 
-        # Generate signals
+        # Calculate 3 EMAs
+        ema_fast = self.calculate_ema(prices, self.ema_fast)
+        ema_medium = self.calculate_ema(prices, self.ema_medium)
+        ema_slow = self.calculate_ema(prices, self.ema_slow)
+
+        # Generate signals with EMA confirmation
         long_signals = []
         short_signals = []
 
         for i in range(1, len(prices)):
-            # Long signal: price crosses under lower envelope AND CVD is bullish
+            # Long signal: price crosses under lower envelope AND CVD is bullish AND EMA alignment is bullish
             if (prices[i - 1] >= lower_envelope[i - 1] and
                     prices[i] < lower_envelope[i] and
-                    cvd_bullish[i]):
+                    cvd_bullish[i] and
+                    self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'LONG', i)):
                 long_signals.append(i)
 
-            # Short signal: price crosses over upper envelope AND CVD is bearish
+            # Short signal: price crosses over upper envelope AND CVD is bearish AND EMA alignment is bearish
             if (prices[i - 1] <= upper_envelope[i - 1] and
                     prices[i] > upper_envelope[i] and
-                    cvd_bearish[i]):
+                    cvd_bearish[i] and
+                    self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'SHORT', i)):
                 short_signals.append(i)
 
         return {
@@ -360,6 +428,9 @@ class CVDNadarayaWatsonIndicator:
             'nadaraya_watson': nw_estimate,
             'upper_envelope': upper_envelope,
             'lower_envelope': lower_envelope,
+            'ema_fast': ema_fast,
+            'ema_medium': ema_medium,
+            'ema_slow': ema_slow,
             'long_signals': long_signals,
             'short_signals': short_signals,
             'current_cvd_status': 'BULLISH' if cvd_bullish[-1] else 'BEARISH',
@@ -367,253 +438,70 @@ class CVDNadarayaWatsonIndicator:
         }
 
 
-def calculate_atr(candles: list) -> float:
-    """
-    Вычисляет Average True Range (ATR) на основе свечных данных.
-
-    Args:
-        candles: Список данных свечей формата
-               [['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'], ...]
-
-    Returns:
-        float: Значение ATR или 0, если недостаточно данных
-    """
-    if len(candles) < 2:
-        return 0.0  # Возвращаем 0, если недостаточно данных
-
-    tr_values = []
-    for i in range(1, len(candles)):
-        try:
-            high = float(candles[i][2])
-            low = float(candles[i][3])
-            prev_close = float(candles[i - 1][4])
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            tr_values.append(tr)
-        except (IndexError, ValueError):
-            # Пропускаем итерацию, если данные некорректные
-            continue
-
-    if not tr_values:
-        return 0.0  # Возвращаем 0, если не удалось вычислить TR
-
-    atr = sum(tr_values) / len(tr_values)
-    return atr
-
-
-def detect_candlestick_signals(data: dict) -> dict:
-    """
-    Определяет сигналы на основе паттернов японских свечей
-
-    Args:
-        data: Словарь с данными свечей по символам
-
-    Returns:
-        dict: Словарь с сигналами 'long' и 'short' для каждого символа
-    """
-    longs, shorts = set(), set()
-
-    for symbol, content in data.items():
-        candles = content['candles']
-        if len(candles) != 3:
-            continue
-
-        o = []
-        h = []
-        l = []
-        c = []
-        for ts, op, hi, lo, cl, *_ in candles:
-            op, hi, lo, cl = map(float, (op, hi, lo, cl))
-            o.append(op)
-            h.append(hi)
-            l.append(lo)
-            c.append(cl)
-
-        bodies = [abs(c[i] - o[i]) for i in range(3)]
-        upper = [h[i] - max(o[i], c[i]) for i in range(3)]
-        lower = [min(o[i], c[i]) - l[i] for i in range(3)]
-        is_bull = [c[i] > o[i] for i in range(3)]
-        is_bear = [not b for b in is_bull]
-        mid1 = (o[0] + c[0]) / 2
-
-        # Hammer → long
-        if lower[2] >= 2 * bodies[2] and upper[2] <= bodies[2]:
-            longs.add(symbol)
-        # Shooting Star → short
-        if upper[2] >= 2 * bodies[2] and lower[2] <= bodies[2]:
-            shorts.add(symbol)
-        # Bullish Engulfing → long
-        if is_bear[0] and is_bull[1] and o[1] < c[0] and c[1] > o[0]:
-            longs.add(symbol)
-        # Bearish Engulfing → short
-        if is_bull[0] and is_bear[1] and o[1] > c[0] and c[1] < o[0]:
-            shorts.add(symbol)
-        # Piercing Line → long
-        if is_bear[0] and is_bull[1] and o[1] < l[0] and c[1] > mid1:
-            longs.add(symbol)
-        # Dark Cloud Cover → short
-        if is_bull[0] and is_bear[1] and o[1] > h[0] and c[1] < mid1:
-            shorts.add(symbol)
-        # Morning Star → long
-        if is_bear[0] and bodies[1] < (h[1] - l[1]) * 0.3 and is_bull[2] and c[2] > mid1:
-            longs.add(symbol)
-        # Evening Star → short
-        if is_bull[0] and bodies[1] < (h[1] - l[1]) * 0.3 and is_bear[2] and c[2] < mid1:
-            shorts.add(symbol)
-        # Three White Soldiers → long
-        if all(is_bull) and c[0] < c[1] < c[2]:
-            longs.add(symbol)
-        # Three Black Crows → short
-        if all(is_bear) and c[0] > c[1] > c[2]:
-            shorts.add(symbol)
-
-    return {
-        'long': sorted(longs),
-        'short': sorted(shorts)
-    }
-
-
-def compute_cvd_nw_signals(data, cvd_ma_length=100, bandwidth=7.0, mult=1.0, repaint=True):
-    """
-    Новая функция для вычисления сигналов на основе CVD + Nadaraya-Watson
-
-    Args:
-        data: список строк формата [timestamp, open, high, low, close, volume, ...]
-        cvd_ma_length: длина периода скользящей средней для CVD
-        bandwidth: параметр bandwidth для Nadaraya-Watson
-        mult: множитель для конверта
-        repaint: использовать ли режим repaint
-
-    Returns:
-        список сигналов 'long'/'short'/None для каждой свечи
-    """
-    # Создаем индикатор
-    indicator = CVDNadarayaWatsonIndicator(
-        cvd_ma_length=cvd_ma_length,
-        bandwidth=bandwidth,
-        mult=mult,
-        repaint=repaint
-    )
-
-    # Парсим данные в нужный формат
-    candles = indicator.parse_bybit_candles(data)
-
-    # Если недостаточно данных
-    if len(candles) < cvd_ma_length + 50:
-        return [None] * len(data)
-
-    # Генерируем сигналы
-    results = indicator.generate_signals(candles)
-
-    # Создаем массив сигналов для каждой свечи
-    signals = [None] * len(data)
-
-    # Заполняем сигналы на основе индексов long/short сигналов
-    for idx in results['long_signals']:
-        # Учитываем, что data в обратном порядке (newest first)
-        signal_idx = len(data) - 1 - idx
-        if 0 <= signal_idx < len(signals):
-            signals[signal_idx] = 'long'
-
-    for idx in results['short_signals']:
-        # Учитываем, что data в обратном порядке (newest first)
-        signal_idx = len(data) - 1 - idx
-        if 0 <= signal_idx < len(signals):
-            signals[signal_idx] = 'short'
-
-    return signals
-
-
 def analyze_last_candle(bybit_candles: List[List[str]],
-                        cvd_ma_length: int = 100,
+                        cvd_ma_length: int = 50,
                         bandwidth: float = 7.0,
-                        mult: float = 1.0) -> str:
+                        mult: float = 1.1,
+                        ema_fast: int = 9,
+                        ema_medium: int = 21,
+                        ema_slow: int = 50) -> str:
     """
-    Простая функция для получения сигнала на последней свече
+    Простая функция для получения сигнала на последней свече с подтверждением EMA
 
     Args:
         bybit_candles: Данные свечей от Bybit
         cvd_ma_length: Длина MA для CVD
         bandwidth: Пропускная способность NW
         mult: Множитель для конверта
+        ema_fast: Период быстрой EMA
+        ema_medium: Период средней EMA
+        ema_slow: Период медленной EMA
 
     Returns:
         Строка с результатом: 'LONG', 'SHORT', или 'NO_SIGNAL'
     """
-    indicator = CVDNadarayaWatsonIndicator(cvd_ma_length, bandwidth, mult, True)
+    indicator = CVDNadarayaWatsonEMAIndicator(
+        cvd_ma_length=cvd_ma_length,
+        bandwidth=bandwidth,
+        mult=mult,
+        repaint=True,
+        ema_fast=ema_fast,
+        ema_medium=ema_medium,
+        ema_slow=ema_slow
+    )
     result = indicator.get_last_candle_signal(bybit_candles)
     return result['signal']
 
 
 def get_detailed_signal_info(bybit_candles: List[List[str]],
-                             cvd_ma_length: int = 100,
+                             cvd_ma_length: int = 50,
                              bandwidth: float = 7.0,
-                             mult: float = 1.0) -> Dict:
+                             mult: float = 1.1,
+                             ema_fast: int = 9,
+                             ema_medium: int = 21,
+                             ema_slow: int = 50) -> Dict:
     """
-    Получает детальную информацию о сигнале на последней свече
+    Получает детальную информацию о сигнале на последней свече с данными EMA
 
     Args:
         bybit_candles: Данные свечей от Bybit
         cvd_ma_length: Длина MA для CVD
         bandwidth: Пропускная способность NW
         mult: Множитель для конверта
+        ema_fast: Период быстрой EMA
+        ema_medium: Период средней EMA
+        ema_slow: Период медленной EMA
 
     Returns:
         Словарь с детальной информацией о сигнале
     """
-    indicator = CVDNadarayaWatsonIndicator(cvd_ma_length, bandwidth, mult, True)
+    indicator = CVDNadarayaWatsonEMAIndicator(
+        cvd_ma_length=cvd_ma_length,
+        bandwidth=bandwidth,
+        mult=mult,
+        repaint=True,
+        ema_fast=ema_fast,
+        ema_medium=ema_medium,
+        ema_slow=ema_slow
+    )
     return indicator.get_last_candle_signal(bybit_candles)
-
-
-# Для совместимости со старым кодом
-def compute_cvd_signals(data, period_ma=100):
-    """
-    Заменяем старую функцию CVD на новую логику CVD + Nadaraya-Watson
-
-    Args:
-        data: список строк формата [timestamp, open, high, low, close, volume, ...]
-        period_ma: длина периода скользящей средней (используется как cvd_ma_length)
-
-    Returns:
-        список сигналов 'long'/'short'/None для каждой свечи
-    """
-    return compute_cvd_nw_signals(data, cvd_ma_length=period_ma)
-
-
-def compute_trend_signals(data, period_ma=100, ema_short=9, ema_medium=21, ema_long=50,
-                          rsi_period=14, rsi_overbought=70, rsi_oversold=30,
-                          macd_fast=12, macd_slow=26, macd_signal=9):
-    """
-    Заменяем тренд сигналы на CVD + Nadaraya-Watson
-
-    Args:
-        data: список строк формата [timestamp, open, high, low, close, volume, ...]
-        period_ma: длина периода скользящей средней (используется как cvd_ma_length)
-        остальные параметры игнорируются для совместимости
-
-    Returns:
-        список сигналов 'long'/'short'/None для каждой свечи
-    """
-    return compute_cvd_nw_signals(data, cvd_ma_length=period_ma)
-
-
-# Пример использования
-if __name__ == "__main__":
-    # Пример данных от Bybit (как в вашем формате)
-    sample_bybit_data = [
-        ["1751452440000", "107718.3", "107718.4", "107718.3", "107718.3", "2.073", "223300.2326"],
-        ["1751452380000", "107717.4", "107719.6", "107704.9", "107718.3", "21.662", "2333275.5709"],
-        ["1751452320000", "107737.7", "107737.7", "107695.2", "107717.4", "43.68", "4704647.5787"],
-        # ... больше данных нужно для корректной работы
-    ]
-
-    # Простой способ получить сигнал
-    signal = analyze_last_candle(sample_bybit_data)
-    print(f"Простой сигнал: {signal}")
-
-    # Детальная информация
-    detailed_info = get_detailed_signal_info(sample_bybit_data)
-    print(f"Детальная информация: {detailed_info}")
-
-    # Сигналы для всех свечей
-    all_signals = compute_cvd_nw_signals(sample_bybit_data)
-    print(f"Все сигналы: {all_signals}")
