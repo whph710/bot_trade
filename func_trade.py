@@ -11,11 +11,11 @@ class CVDNadarayaWatsonEMAIndicator:
                  mult: float = 1.1,
                  repaint: bool = True,
                  max_bars_back: int = 500,
-                 ema_fast: int = 9,
-                 ema_medium: int = 21,
-                 ema_slow: int = 50):
+                 ema_fast: int = 7,
+                 ema_medium: int = 14,
+                 ema_slow: int = 28):
         """
-        CVD + Nadaraya-Watson + 3 EMA Combined Indicator for 15m timeframe
+        CVD + Nadaraya-Watson + 3 EMA Combined Indicator
 
         Args:
             cvd_ma_length: Length for CVD moving average
@@ -23,9 +23,9 @@ class CVDNadarayaWatsonEMAIndicator:
             mult: Multiplier for envelope width
             repaint: Whether to use repainting mode
             max_bars_back: Maximum bars to look back
-            ema_fast: Fast EMA period (default 9)
-            ema_medium: Medium EMA period (default 21)
-            ema_slow: Slow EMA period (default 50)
+            ema_fast: Fast EMA period (default 7)
+            ema_medium: Medium EMA period (default 14)
+            ema_slow: Slow EMA period (default 28)
         """
         self.cvd_ma_length = cvd_ma_length
         self.bandwidth = bandwidth
@@ -38,7 +38,7 @@ class CVDNadarayaWatsonEMAIndicator:
 
     def calculate_ema(self, prices: np.ndarray, period: int) -> np.ndarray:
         """
-        Calculate Exponential Moving Average
+        Calculate Exponential Moving Average (точно как в Pine Script)
 
         Args:
             prices: Array of prices
@@ -48,20 +48,20 @@ class CVDNadarayaWatsonEMAIndicator:
             Array of EMA values
         """
         ema = np.zeros_like(prices)
-        multiplier = 2 / (period + 1)
+        alpha = 2.0 / (period + 1)
 
-        # First EMA value is the first price
+        # Первое значение EMA равно первой цене
         ema[0] = prices[0]
 
-        # Calculate subsequent EMA values
+        # Расчет последующих значений EMA
         for i in range(1, len(prices)):
-            ema[i] = (prices[i] * multiplier) + (ema[i - 1] * (1 - multiplier))
+            ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
 
         return ema
 
     def calculate_bull_bear_power(self, candles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calculate bull and bear power from OHLCV data
+        Calculate bull and bear power from OHLCV data (точно как в Pine Script)
         """
         df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
 
@@ -74,16 +74,16 @@ class CVDNadarayaWatsonEMAIndicator:
             high_curr = df.iloc[i]['high']
             low_curr = df.iloc[i]['low']
 
-            # Get previous close
+            # Получаем предыдущий close
             close_prev = df.iloc[i - 1]['close'] if i > 0 else open_curr
 
-            # Bull Power calculation
-            if close_curr < open_curr:  # Red candle
+            # Bull Power расчет (точно как в Pine Script)
+            if close_curr < open_curr:  # Красная свеча
                 if close_prev < open_curr:
                     bull_power[i] = max(high_curr - close_prev, close_curr - low_curr)
                 else:
                     bull_power[i] = max(high_curr - open_curr, close_curr - low_curr)
-            elif close_curr > open_curr:  # Green candle
+            elif close_curr > open_curr:  # Зеленая свеча
                 if close_prev > open_curr:
                     bull_power[i] = high_curr - low_curr
                 else:
@@ -107,13 +107,13 @@ class CVDNadarayaWatsonEMAIndicator:
                     else:
                         bull_power[i] = high_curr - low_curr
 
-            # Bear Power calculation
-            if close_curr < open_curr:  # Red candle
+            # Bear Power расчет (точно как в Pine Script)
+            if close_curr < open_curr:  # Красная свеча
                 if close_prev > open_curr:
                     bear_power[i] = max(close_prev - open_curr, high_curr - low_curr)
                 else:
                     bear_power[i] = high_curr - low_curr
-            elif close_curr > open_curr:  # Green candle
+            elif close_curr > open_curr:  # Зеленая свеча
                 if close_prev > open_curr:
                     bear_power[i] = max(close_prev - low_curr, high_curr - close_curr)
                 else:
@@ -147,22 +147,22 @@ class CVDNadarayaWatsonEMAIndicator:
 
         bull_power, bear_power = self.calculate_bull_bear_power(candles)
 
-        # Calculate volume distribution
+        # Расчет распределения объема
         total_power = bull_power + bear_power
-        # Avoid division by zero
+        # Избегаем деления на ноль
         total_power = np.where(total_power == 0, 1, total_power)
 
         bull_volume = (bull_power / total_power) * df['volume'].values
         bear_volume = (bear_power / total_power) * df['volume'].values
 
-        # Calculate delta and cumulative volume delta
+        # Расчет дельты и кумулятивной дельты объема
         delta = bull_volume - bear_volume
         cvd = np.cumsum(delta)
 
-        # Calculate CVD moving average
+        # Расчет скользящего среднего CVD (SMA как в Pine Script)
         cvd_ma = pd.Series(cvd).rolling(window=self.cvd_ma_length, min_periods=1).mean().values
 
-        # CVD direction
+        # Направление CVD
         cvd_bullish = cvd > cvd_ma
         cvd_bearish = cvd < cvd_ma
 
@@ -174,7 +174,7 @@ class CVDNadarayaWatsonEMAIndicator:
 
     def calculate_nadaraya_watson(self, prices: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Calculate Nadaraya-Watson estimator and envelope
+        Calculate Nadaraya-Watson estimator and envelope (точно как в Pine Script)
         """
         n = len(prices)
         max_lookback = min(self.max_bars_back, n)
@@ -183,11 +183,12 @@ class CVDNadarayaWatsonEMAIndicator:
         mae_values = np.zeros(n)
 
         if self.repaint:
-            # Repainting mode - use all available data
+            # Режим перерисовки - используем все доступные данные
             for i in range(n):
                 sum_weighted = 0.0
                 sum_weights = 0.0
 
+                # Используем симметричное окно вокруг текущей точки
                 for j in range(max(0, i - max_lookback + 1), min(n, i + max_lookback)):
                     weight = self.gauss_kernel(i - j, self.bandwidth)
                     sum_weighted += prices[j] * weight
@@ -198,7 +199,7 @@ class CVDNadarayaWatsonEMAIndicator:
                 else:
                     nw_estimate[i] = prices[i]
 
-                # Calculate MAE for envelope
+                # Расчет MAE для конверта
                 errors = []
                 for j in range(max(0, i - max_lookback + 1), min(n, i + 1)):
                     if j < len(nw_estimate):
@@ -209,7 +210,7 @@ class CVDNadarayaWatsonEMAIndicator:
                 else:
                     mae_values[i] = 0
         else:
-            # Non-repainting mode - use only historical data
+            # Режим без перерисовки - используем только исторические данные
             coefs = np.array([self.gauss_kernel(i, self.bandwidth) for i in range(max_lookback)])
             coefs_sum = np.sum(coefs)
 
@@ -223,7 +224,7 @@ class CVDNadarayaWatsonEMAIndicator:
 
                 nw_estimate[i] = sum_weighted / coefs_sum
 
-                # Calculate MAE
+                # Расчет MAE
                 errors = []
                 for j in range(max(0, i - available_bars + 1), i + 1):
                     errors.append(abs(prices[j] - nw_estimate[j]))
@@ -241,9 +242,9 @@ class CVDNadarayaWatsonEMAIndicator:
         """
         parsed_candles = []
 
-        # Reverse the order since Bybit returns newest first, we need oldest first
+        # Реверсируем порядок, так как Bybit возвращает новейшие первыми
         for candle in reversed(raw_candles):
-            # Extract OHLCV data (skip timestamp and turnover)
+            # Извлекаем данные OHLCV
             open_price = float(candle[1])
             high_price = float(candle[2])
             low_price = float(candle[3])
@@ -277,10 +278,10 @@ class CVDNadarayaWatsonEMAIndicator:
         slow = ema_slow[index]
 
         if signal_type == 'LONG':
-            # For LONG: Fast > Medium > Slow (bullish alignment)
+            # Для LONG: Fast > Medium > Slow (бычье выравнивание)
             return fast > medium > slow
         elif signal_type == 'SHORT':
-            # For SHORT: Fast < Medium < Slow (bearish alignment)
+            # Для SHORT: Fast < Medium < Slow (медвежье выравнивание)
             return fast < medium < slow
 
         return False
@@ -289,7 +290,7 @@ class CVDNadarayaWatsonEMAIndicator:
         """
         Get signal for the last candle with EMA confirmation
         """
-        required_data = max(self.cvd_ma_length, self.ema_slow) + 50
+        required_data = max(self.cvd_ma_length, self.ema_slow, self.max_bars_back) + 50
 
         if len(raw_candles) < required_data:
             return {
@@ -300,16 +301,16 @@ class CVDNadarayaWatsonEMAIndicator:
                 'ema_alignment': 'UNKNOWN'
             }
 
-        # Parse candles
+        # Парсим свечи
         candles = self.parse_bybit_candles(raw_candles)
 
-        # Calculate all indicators
+        # Рассчитываем все индикаторы
         results = self.generate_signals(candles)
 
-        # Check signal on the last candle
+        # Проверяем сигнал на последней свече
         last_idx = len(results['prices']) - 1
 
-        # Check if there's a signal on the last candle
+        # Проверяем наличие сигнала на последней свече
         last_candle_signal = 'NO_SIGNAL'
         signal_reason = 'NO_CROSS'
         ema_alignment = 'NEUTRAL'
@@ -326,20 +327,20 @@ class CVDNadarayaWatsonEMAIndicator:
             cvd_bullish_last = results['cvd_bullish'][last_idx]
             cvd_bearish_last = results['cvd_bearish'][last_idx]
 
-            # Check CVD + NW signals first
+            # Проверяем сигналы CVD + NW сначала
             cvd_nw_signal = None
 
-            # Check for LONG signal (price crosses under lower envelope + CVD bullish)
+            # Проверяем сигнал на LONG (цена пересекает снизу нижнюю границу конверта + CVD бычий)
             if (prev_price >= lower_prev and last_price < lower_last and cvd_bullish_last):
                 cvd_nw_signal = 'LONG'
                 signal_reason = 'PRICE_CROSS_UNDER_LOWER_ENVELOPE_CVD_BULLISH'
 
-            # Check for SHORT signal (price crosses over upper envelope + CVD bearish)
+            # Проверяем сигнал на SHORT (цена пересекает сверху верхнюю границу конверта + CVD медвежий)
             elif (prev_price <= upper_prev and last_price > upper_last and cvd_bearish_last):
                 cvd_nw_signal = 'SHORT'
                 signal_reason = 'PRICE_CROSS_OVER_UPPER_ENVELOPE_CVD_BEARISH'
 
-            # If we have a CVD + NW signal, check EMA confirmation
+            # Если есть сигнал CVD + NW, проверяем подтверждение EMA
             if cvd_nw_signal:
                 ema_supports_signal = self.check_ema_alignment(
                     results['ema_fast'],
@@ -357,7 +358,7 @@ class CVDNadarayaWatsonEMAIndicator:
                     signal_reason += '_EMA_NOT_ALIGNED'
                     ema_alignment = 'CONFLICTING'
             else:
-                # Check current EMA alignment even without signal
+                # Проверяем текущее выравнивание EMA даже без сигнала
                 if self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
                                             results['ema_slow'], 'LONG', last_idx):
                     ema_alignment = 'BULLISH'
@@ -390,30 +391,30 @@ class CVDNadarayaWatsonEMAIndicator:
         df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
         prices = df['close'].values
 
-        # Calculate CVD
+        # Рассчитываем CVD
         cvd, cvd_ma, cvd_bullish, cvd_bearish = self.calculate_cvd(candles)
 
-        # Calculate Nadaraya-Watson envelope
+        # Рассчитываем Nadaraya-Watson envelope
         nw_estimate, upper_envelope, lower_envelope = self.calculate_nadaraya_watson(prices)
 
-        # Calculate 3 EMAs
+        # Рассчитываем 3 EMA
         ema_fast = self.calculate_ema(prices, self.ema_fast)
         ema_medium = self.calculate_ema(prices, self.ema_medium)
         ema_slow = self.calculate_ema(prices, self.ema_slow)
 
-        # Generate signals with EMA confirmation
+        # Генерируем сигналы с подтверждением EMA
         long_signals = []
         short_signals = []
 
         for i in range(1, len(prices)):
-            # Long signal: price crosses under lower envelope AND CVD is bullish AND EMA alignment is bullish
+            # Сигнал на LONG: цена пересекает снизу нижнюю границу конверта И CVD бычий И EMA выравнивание бычье
             if (prices[i - 1] >= lower_envelope[i - 1] and
                     prices[i] < lower_envelope[i] and
                     cvd_bullish[i] and
                     self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'LONG', i)):
                 long_signals.append(i)
 
-            # Short signal: price crosses over upper envelope AND CVD is bearish AND EMA alignment is bearish
+            # Сигнал на SHORT: цена пересекает сверху верхнюю границу конверта И CVD медвежий И EMA выравнивание медвежье
             if (prices[i - 1] <= upper_envelope[i - 1] and
                     prices[i] > upper_envelope[i] and
                     cvd_bearish[i] and
@@ -442,9 +443,9 @@ def analyze_last_candle(bybit_candles: List[List[str]],
                         cvd_ma_length: int = 50,
                         bandwidth: float = 7.0,
                         mult: float = 1.1,
-                        ema_fast: int = 9,
-                        ema_medium: int = 21,
-                        ema_slow: int = 50) -> str:
+                        ema_fast: int = 7,
+                        ema_medium: int = 14,
+                        ema_slow: int = 28) -> str:
     """
     Простая функция для получения сигнала на последней свече с подтверждением EMA
 
@@ -477,9 +478,9 @@ def get_detailed_signal_info(bybit_candles: List[List[str]],
                              cvd_ma_length: int = 50,
                              bandwidth: float = 7.0,
                              mult: float = 1.1,
-                             ema_fast: int = 9,
-                             ema_medium: int = 21,
-                             ema_slow: int = 50) -> Dict:
+                             ema_fast: int = 7,
+                             ema_medium: int = 14,
+                             ema_slow: int = 28) -> Dict:
     """
     Получает детальную информацию о сигнале на последней свече с данными EMA
 
