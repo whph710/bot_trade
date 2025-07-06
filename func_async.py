@@ -107,3 +107,57 @@ async def get_ticker_info(symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Ошибка получения тикера для {symbol}: {e}")
         raise
+
+
+async def get_orderbook_async(symbol: str, limit: int = 25) -> Dict[str, Any]:
+    """
+    Асинхронно получает стакан заявок для торговой пары.
+
+    Args:
+        symbol: Торговая пара (например, "BTCUSDT")
+        limit: Количество уровней стакана (1-200, по умолчанию 25)
+
+    Returns:
+        Dict с данными стакана: {"s": symbol, "b": bids, "a": asks, "ts": timestamp, "u": updateId, "seq": seq, "cts": cts}
+
+    Raises:
+        Exception: При ошибках API или сети
+    """
+    url = "https://api.bybit.com/v5/market/orderbook"
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "limit": limit
+    }
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params=params) as response:
+                data = await response.json()
+
+                if data.get("retCode") != 0:
+                    error_msg = data.get('retMsg', 'Unknown API error')
+                    logger.error(f"API ошибка для стакана {symbol}: {error_msg}")
+                    raise Exception(f"Bybit API Error for orderbook {symbol}: {error_msg}")
+
+                # Извлекаем только нужные данные из result
+                result = data["result"]
+                orderbook_data = {
+                    "s": result.get("s"),
+                    "b": result.get("b", []),
+                    "a": result.get("a", []),
+                    "ts": result.get("ts"),
+                    "u": result.get("u"),
+                    "seq": result.get("seq"),
+                    "cts": result.get("cts")
+                }
+
+                return orderbook_data
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Сетевая ошибка для стакана {symbol}: {e}")
+        raise Exception(f"Network error for orderbook {symbol}: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка получения стакана для {symbol}: {e}")
+        raise
