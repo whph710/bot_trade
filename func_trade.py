@@ -3,168 +3,142 @@ import numpy as np
 from typing import List, Dict, Tuple
 
 
-class EMAIndicator:
-    def __init__(self, ema_fast: int = 7, ema_medium: int = 14, ema_slow: int = 28):
-        """
-        Simple EMA Indicator for filtering pairs
+def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
+    """
+    Вычисление ATR (Average True Range) для определения волатильности
 
-        Args:
-            ema_fast: Fast EMA period (default 7)
-            ema_medium: Medium EMA period (default 14)
-            ema_slow: Slow EMA period (default 28)
-        """
-        self.ema_fast = ema_fast
-        self.ema_medium = ema_medium
-        self.ema_slow = ema_slow
+    Args:
+        candles: Данные свечей в формате Bybit [timestamp, open, high, low, close, volume, turnover]
+        period: Период для расчета ATR (по умолчанию 14)
 
-    def calculate_ema(self, prices: np.ndarray, period: int) -> np.ndarray:
-        """
-        Calculate Exponential Moving Average (точно как в Pine Script)
+    Returns:
+        Значение ATR
+    """
+    if len(candles) < period:
+        return 0.0
 
-        Args:
-            prices: Array of prices
-            period: EMA period
+    true_ranges = []
+    for i in range(1, len(candles)):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i - 1][4])
 
-        Returns:
-            Array of EMA values
-        """
-        ema = np.zeros_like(prices)
-        alpha = 2.0 / (period + 1)
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        true_ranges.append(tr)
 
-        # Первое значение EMA равно первой цене
-        ema[0] = prices[0]
+    return sum(true_ranges[-period:]) / period if true_ranges else 0.0
 
-        # Расчет последующих значений EMA
-        for i in range(1, len(prices)):
-            ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
 
-        return ema
+def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
+    """
+    Расчет Exponential Moving Average (точно как в Pine Script)
 
-    def parse_bybit_candles(self, raw_candles: List[List[str]]) -> List[List[float]]:
-        """
-        Parse Bybit candle data format to OHLCV floats
-        """
-        parsed_candles = []
+    Args:
+        prices: Массив цен
+        period: Период EMA
 
-        # Реверсируем порядок, так как Bybit возвращает новейшие первыми
-        for candle in reversed(raw_candles):
-            # Извлекаем данные OHLCV
-            open_price = float(candle[1])
-            high_price = float(candle[2])
-            low_price = float(candle[3])
-            close_price = float(candle[4])
-            volume = float(candle[5])
+    Returns:
+        Массив значений EMA
+    """
+    ema = np.zeros_like(prices)
+    alpha = 2.0 / (period + 1)
 
-            parsed_candles.append([open_price, high_price, low_price, close_price, volume])
+    # Первое значение EMA равно первой цене
+    ema[0] = prices[0]
 
-        return parsed_candles
+    # Расчет последующих значений EMA
+    for i in range(1, len(prices)):
+        ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
 
-    def check_ema_alignment(self, ema_fast: np.ndarray, ema_medium: np.ndarray, ema_slow: np.ndarray,
-                            signal_type: str, index: int) -> bool:
-        """
-        Check if EMA alignment supports the signal direction
+    return ema
 
-        Args:
-            ema_fast: Fast EMA values
-            ema_medium: Medium EMA values
-            ema_slow: Slow EMA values
-            signal_type: 'LONG' or 'SHORT'
-            index: Index to check
 
-        Returns:
-            True if EMA alignment supports the signal
-        """
-        if index < 0 or index >= len(ema_fast):
-            return False
+def calculate_three_ema(prices: np.ndarray,
+                        fast_period: int = 7,
+                        medium_period: int = 14,
+                        slow_period: int = 28) -> Dict[str, np.ndarray]:
+    """
+    Расчет трех EMA для анализа тренда
 
-        fast = ema_fast[index]
-        medium = ema_medium[index]
-        slow = ema_slow[index]
+    Args:
+        prices: Массив цен закрытия
+        fast_period: Период быстрой EMA (по умолчанию 7)
+        medium_period: Период средней EMA (по умолчанию 14)
+        slow_period: Период медленной EMA (по умолчанию 28)
 
-        if signal_type == 'LONG':
-            # Для LONG: Fast > Medium > Slow (бычье выравнивание)
-            return fast > medium > slow
-        elif signal_type == 'SHORT':
-            # Для SHORT: Fast < Medium < Slow (медвежье выравнивание)
-            return fast < medium < slow
+    Returns:
+        Словарь с тремя массивами EMA
+    """
+    return {
+        'ema_fast': calculate_ema(prices, fast_period),
+        'ema_medium': calculate_ema(prices, medium_period),
+        'ema_slow': calculate_ema(prices, slow_period)
+    }
 
+
+def check_ema_alignment(ema_fast: np.ndarray,
+                        ema_medium: np.ndarray,
+                        ema_slow: np.ndarray,
+                        signal_type: str,
+                        index: int) -> bool:
+    """
+    Проверка выравнивания EMA для определения направления тренда
+
+    Args:
+        ema_fast: Быстрая EMA
+        ema_medium: Средняя EMA
+        ema_slow: Медленная EMA
+        signal_type: Тип сигнала ('LONG' или 'SHORT')
+        index: Индекс для проверки
+
+    Returns:
+        True если выравнивание поддерживает сигнал
+    """
+    if index < 0 or index >= len(ema_fast):
         return False
 
-    def get_last_candle_signal(self, raw_candles: List[List[str]]) -> Dict:
-        """
-        Get EMA alignment signal for the last candle
-        """
-        required_data = max(self.ema_slow, 50) + 10
+    fast = ema_fast[index]
+    medium = ema_medium[index]
+    slow = ema_slow[index]
 
-        if len(raw_candles) < required_data:
-            return {
-                'signal': 'NO_SIGNAL',
-                'reason': 'INSUFFICIENT_DATA',
-                'last_price': float(raw_candles[0][4]) if raw_candles else 0,
-                'ema_alignment': 'UNKNOWN'
-            }
+    if signal_type == 'LONG':
+        # Для LONG: Fast > Medium > Slow (бычье выравнивание)
+        return fast > medium > slow
+    elif signal_type == 'SHORT':
+        # Для SHORT: Fast < Medium < Slow (медвежье выравнивание)
+        return fast < medium < slow
 
-        # Парсим свечи
-        candles = self.parse_bybit_candles(raw_candles)
+    return False
 
-        # Рассчитываем EMA
-        results = self.generate_signals(candles)
 
-        # Проверяем сигнал на последней свече
-        last_idx = len(results['prices']) - 1
-        ema_alignment = 'NEUTRAL'
-        signal_type = 'NO_SIGNAL'
+def parse_bybit_candles(raw_candles: List[List[str]]) -> List[List[float]]:
+    """
+    Парсинг данных свечей Bybit в формат OHLCV
 
-        if last_idx >= 0:
-            # Проверяем текущее выравнивание EMA
-            if self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
-                                        results['ema_slow'], 'LONG', last_idx):
-                ema_alignment = 'BULLISH'
-                signal_type = 'LONG'
-            elif self.check_ema_alignment(results['ema_fast'], results['ema_medium'],
-                                          results['ema_slow'], 'SHORT', last_idx):
-                ema_alignment = 'BEARISH'
-                signal_type = 'SHORT'
+    Args:
+        raw_candles: Сырые данные свечей от Bybit
 
-        return {
-            'signal': signal_type,
-            'reason': f'EMA_ALIGNMENT_{ema_alignment}',
-            'last_price': results['prices'][-1],
-            'ema_alignment': ema_alignment,
-            'ema_fast_value': results['ema_fast'][-1],
-            'ema_medium_value': results['ema_medium'][-1],
-            'ema_slow_value': results['ema_slow'][-1]
-        }
+    Returns:
+        Список свечей в формате OHLCV
+    """
+    parsed_candles = []
 
-    def generate_signals(self, candles: List[List[float]]) -> Dict:
-        """
-        Generate EMA-based signals
-        """
-        df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
-        prices = df['close'].values
+    # Реверсируем порядок, так как Bybit возвращает новейшие первыми
+    for candle in reversed(raw_candles):
+        # Извлекаем данные OHLCV
+        open_price = float(candle[1])
+        high_price = float(candle[2])
+        low_price = float(candle[3])
+        close_price = float(candle[4])
+        volume = float(candle[5])
 
-        # Рассчитываем 3 EMA
-        ema_fast = self.calculate_ema(prices, self.ema_fast)
-        ema_medium = self.calculate_ema(prices, self.ema_medium)
-        ema_slow = self.calculate_ema(prices, self.ema_slow)
+        parsed_candles.append([open_price, high_price, low_price, close_price, volume])
 
-        # Определяем текущее выравнивание
-        current_alignment = 'NEUTRAL'
-        last_idx = len(prices) - 1
-
-        if last_idx >= 0:
-            if self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'LONG', last_idx):
-                current_alignment = 'BULLISH'
-            elif self.check_ema_alignment(ema_fast, ema_medium, ema_slow, 'SHORT', last_idx):
-                current_alignment = 'BEARISH'
-
-        return {
-            'ema_fast': ema_fast,
-            'ema_medium': ema_medium,
-            'ema_slow': ema_slow,
-            'current_alignment': current_alignment,
-            'prices': prices
-        }
+    return parsed_candles
 
 
 def analyze_last_candle(bybit_candles: List[List[str]],
@@ -172,7 +146,7 @@ def analyze_last_candle(bybit_candles: List[List[str]],
                         ema_medium: int = 14,
                         ema_slow: int = 28) -> str:
     """
-    Простая функция для получения EMA сигнала на последней свече
+    Анализ последней свечи для получения EMA сигнала
 
     Args:
         bybit_candles: Данные свечей от Bybit
@@ -183,13 +157,32 @@ def analyze_last_candle(bybit_candles: List[List[str]],
     Returns:
         Строка с результатом: 'LONG', 'SHORT', или 'NO_SIGNAL'
     """
-    indicator = EMAIndicator(
-        ema_fast=ema_fast,
-        ema_medium=ema_medium,
-        ema_slow=ema_slow
-    )
-    result = indicator.get_last_candle_signal(bybit_candles)
-    return result['signal']
+    required_data = max(ema_slow, 50) + 10
+
+    if len(bybit_candles) < required_data:
+        return 'NO_SIGNAL'
+
+    # Парсим свечи
+    candles = parse_bybit_candles(bybit_candles)
+
+    # Извлекаем цены закрытия
+    df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
+    prices = df['close'].values
+
+    # Рассчитываем EMA
+    ema_data = calculate_three_ema(prices, ema_fast, ema_medium, ema_slow)
+
+    # Проверяем сигнал на последней свече
+    last_idx = len(prices) - 1
+
+    if check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
+                           ema_data['ema_slow'], 'LONG', last_idx):
+        return 'LONG'
+    elif check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
+                             ema_data['ema_slow'], 'SHORT', last_idx):
+        return 'SHORT'
+
+    return 'NO_SIGNAL'
 
 
 def get_detailed_signal_info(bybit_candles: List[List[str]],
@@ -197,7 +190,7 @@ def get_detailed_signal_info(bybit_candles: List[List[str]],
                              ema_medium: int = 14,
                              ema_slow: int = 28) -> Dict:
     """
-    Получает детальную информацию о EMA сигнале на последней свече
+    Получение детальной информации о EMA сигнале
 
     Args:
         bybit_candles: Данные свечей от Bybit
@@ -208,9 +201,47 @@ def get_detailed_signal_info(bybit_candles: List[List[str]],
     Returns:
         Словарь с детальной информацией о сигнале
     """
-    indicator = EMAIndicator(
-        ema_fast=ema_fast,
-        ema_medium=ema_medium,
-        ema_slow=ema_slow
-    )
-    return indicator.get_last_candle_signal(bybit_candles)
+    required_data = max(ema_slow, 50) + 10
+
+    if len(bybit_candles) < required_data:
+        return {
+            'signal': 'NO_SIGNAL',
+            'reason': 'INSUFFICIENT_DATA',
+            'last_price': float(bybit_candles[0][4]) if bybit_candles else 0,
+            'ema_alignment': 'UNKNOWN'
+        }
+
+    # Парсим свечи
+    candles = parse_bybit_candles(bybit_candles)
+
+    # Извлекаем цены закрытия
+    df = pd.DataFrame(candles, columns=['open', 'high', 'low', 'close', 'volume'])
+    prices = df['close'].values
+
+    # Рассчитываем EMA
+    ema_data = calculate_three_ema(prices, ema_fast, ema_medium, ema_slow)
+
+    # Проверяем сигнал на последней свече
+    last_idx = len(prices) - 1
+    ema_alignment = 'NEUTRAL'
+    signal_type = 'NO_SIGNAL'
+
+    if last_idx >= 0:
+        if check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
+                               ema_data['ema_slow'], 'LONG', last_idx):
+            ema_alignment = 'BULLISH'
+            signal_type = 'LONG'
+        elif check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
+                                 ema_data['ema_slow'], 'SHORT', last_idx):
+            ema_alignment = 'BEARISH'
+            signal_type = 'SHORT'
+
+    return {
+        'signal': signal_type,
+        'reason': f'EMA_ALIGNMENT_{ema_alignment}',
+        'last_price': prices[-1],
+        'ema_alignment': ema_alignment,
+        'ema_fast_value': ema_data['ema_fast'][-1],
+        'ema_medium_value': ema_data['ema_medium'][-1],
+        'ema_slow_value': ema_data['ema_slow'][-1]
+    }

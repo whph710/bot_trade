@@ -5,8 +5,9 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
-from func_async import get_usdt_linear_symbols, get_klines_async
+from func_async import get_usdt_linear_symbols, get_klines_async, get_orderbook_async
 from func_trade import (
+    calculate_atr,
     analyze_last_candle,
     get_detailed_signal_info
 )
@@ -24,467 +25,473 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
-    """Простое вычисление ATR для информационных целей."""
-    if len(candles) < period:
-        return 0.0
+class TradingAnalyzer:
+    def __init__(self, atr_threshold: float = 0.005, min_pairs_per_direction: int = 14):
+        """
+        Инициализация анализатора торговли
 
-    true_ranges = []
-    for i in range(1, len(candles)):
-        high = float(candles[i][2])
-        low = float(candles[i][3])
-        prev_close = float(candles[i - 1][4])
+        Args:
+            atr_threshold: Минимальный порог ATR для фильтрации
+            min_pairs_per_direction: Минимальное количество пар для анализа в каждом направлении
+        """
+        self.atr_threshold = atr_threshold
+        self.min_pairs_per_direction = min_pairs_per_direction
 
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        true_ranges.append(tr)
+    async def collect_and_filter_by_atr(self) -> List[str]:
+        """
+        Этап 1: Сбор всех пар и фильтрация по ATR
 
-    return sum(true_ranges[-period:]) / period if true_ranges else 0.0
+        Returns:
+            Список пар, прошедших фильтрацию по ATR
+        """
+        logger.info("Этап 1: Сбор данных и фильтрация по ATR")
 
+        # Получаем все USDT пары
+        all_pairs = await get_usdt_linear_symbols()
+        logger.info(f"Найдено {len(all_pairs)} торговых пар")
 
-def get_user_direction_choice() -> str:
-    """Получение выбора направления от пользователя."""
-    while True:
-        print("\n" + "=" * 50)
-        print("ВЫБОР НАПРАВЛЕНИЯ ТОРГОВЛИ")
-        print("=" * 50)
-        print("Выберите направление для анализа:")
-        print("1. long  - только длинные позиции")
-        print("2. short - только короткие позиции")
-        print("3. 0     - все направления (автономный выбор)")
-        print("-" * 50)
+        # Фильтруем по ATR
+        filtered_pairs = []
+        semaphore = asyncio.Semaphore(20)
 
-        choice = input("Введите ваш выбор (long/short/0): ").strip().lower()
-
-        if choice in ['long', 'short', '0']:
-            if choice == '0':
-                print(f"✓ Выбрано: АВТОНОМНЫЙ АНАЛИЗ (все направления)")
-            else:
-                print(f"✓ Выбрано направление: {choice.upper()}")
-            return choice
-        else:
-            print("❌ Неверный выбор! Введите: long, short или 0")
-
-
-async def process_single_pair_full(pair: str, limit: int = 100, interval: str = "15") -> Optional[Tuple[str, Dict]]:
-    """Обработка одной торговой пары с EMA анализом."""
-    try:
-        candles_raw = await get_klines_async(symbol=pair, interval=interval, limit=limit)
-
-        if not candles_raw or len(candles_raw) < 4:
-            return None
-
-        # Рассчитываем ATR только для информации
-        atr_candles = candles_raw[-20:] if len(candles_raw) >= 20 else candles_raw
-        atr = calculate_atr(atr_candles)
-
-        # EMA анализ
-        ema_signal = None
-        ema_details = None
-
-        # Проверяем достаточно ли данных для EMA анализа
-        min_candles_required = max(50, 28 + 10)  # ema_slow + buffer
-
-        if len(candles_raw) >= min_candles_required:
-            try:
-                # Получаем простой EMA сигнал
-                ema_signal = analyze_last_candle(candles_raw)
-
-                # Получаем детальную информацию о EMA
-                ema_details = get_detailed_signal_info(candles_raw)
-
-            except Exception as e:
-                logger.warning(f"Ошибка EMA анализа для {pair}: {e}")
-
-        return pair, {
-            "candles_full": candles_raw,
-            "candles_20": candles_raw[-20:] if len(candles_raw) >= 20 else candles_raw,
-            "atr": atr,
-            "ema_signal": ema_signal,
-            "ema_details": ema_details
-        }
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки {pair}: {e}")
-        return None
-
-
-async def collect_all_data() -> Dict[str, Dict]:
-    """Сбор данных - анализируем ВСЕ пары."""
-    start_time = time.time()
-    logger.info("Сбор данных по ВСЕМ торговым парам...")
-
-    try:
-        usdt_pairs = await get_usdt_linear_symbols()
-        logger.info(f"Найдено {len(usdt_pairs)} пар для анализа")
-
-        semaphore = asyncio.Semaphore(25)
-
-        async def process_with_semaphore(pair):
+        async def check_atr_for_pair(pair: str) -> Optional[str]:
             async with semaphore:
-                return await process_single_pair_full(pair, limit=250)
+                try:
+                    candles = await get_klines_async(symbol=pair, interval=15, limit=50)
+                    if not candles or len(candles) < 20:
+                        return None
 
-        # Батч-обработка для лучшей производительности
-        batch_size = 40
-        filtered_data = {}
-        error_count = 0
-        processed_count = 0
-        ema_signals_count = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
+                    atr = calculate_atr(candles, period=14)
+                    if atr >= self.atr_threshold:
+                        return pair
+                    return None
+                except Exception as e:
+                    logger.debug(f"Ошибка проверки ATR для {pair}: {e}")
+                    return None
 
-        for i in range(0, len(usdt_pairs), batch_size):
-            batch = usdt_pairs[i:i + batch_size]
-            tasks = [process_with_semaphore(pair) for pair in batch]
+        # Обрабатываем батчами
+        batch_size = 50
+        for i in range(0, len(all_pairs), batch_size):
+            batch = all_pairs[i:i + batch_size]
+            tasks = [check_atr_for_pair(pair) for pair in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for result in results:
-                if isinstance(result, Exception):
-                    error_count += 1
-                    continue
-                if result is not None:
+                if isinstance(result, str):
+                    filtered_pairs.append(result)
+
+            logger.info(f"Обработано {min(i + batch_size, len(all_pairs))} пар, отфильтровано: {len(filtered_pairs)}")
+            await asyncio.sleep(0.1)
+
+        logger.info(f"Фильтрация по ATR завершена: {len(filtered_pairs)} пар прошли фильтр")
+        return filtered_pairs
+
+    async def analyze_ema_signals(self, pairs: List[str]) -> Dict[str, List[str]]:
+        """
+        Этап 2: Анализ EMA сигналов и разделение на направления
+
+        Args:
+            pairs: Список пар для анализа
+
+        Returns:
+            Словарь с парами, разделенными по направлениям
+        """
+        logger.info("Этап 2: Анализ EMA сигналов")
+
+        long_pairs = []
+        short_pairs = []
+        semaphore = asyncio.Semaphore(25)
+
+        async def analyze_pair_ema(pair: str) -> Optional[Tuple[str, str]]:
+            async with semaphore:
+                try:
+                    candles = await get_klines_async(symbol=pair, interval=15, limit=100)
+                    if not candles or len(candles) < 50:
+                        return None
+
+                    signal = analyze_last_candle(candles)
+                    if signal in ['LONG', 'SHORT']:
+                        return pair, signal
+                    return None
+                except Exception as e:
+                    logger.debug(f"Ошибка EMA анализа для {pair}: {e}")
+                    return None
+
+        # Анализируем EMA сигналы
+        batch_size = 40
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
+            tasks = [analyze_pair_ema(pair) for pair in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, tuple):
+                    pair, signal = result
+                    if signal == 'LONG':
+                        long_pairs.append(pair)
+                    elif signal == 'SHORT':
+                        short_pairs.append(pair)
+
+            await asyncio.sleep(0.1)
+
+        logger.info(f"EMA анализ завершен: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
+        return {'LONG': long_pairs, 'SHORT': short_pairs}
+
+    async def add_orderbook_data(self, pairs: List[str]) -> Dict[str, Dict]:
+        """
+        Этап 3: Добавление данных стакана к парам
+
+        Args:
+            pairs: Список пар для получения данных стакана
+
+        Returns:
+            Словарь с данными пар и их стаканами
+        """
+        logger.info(f"Этап 3: Получение данных стакана для {len(pairs)} пар")
+
+        pairs_with_data = {}
+        semaphore = asyncio.Semaphore(15)
+
+        async def get_pair_full_data(pair: str) -> Optional[Tuple[str, Dict]]:
+            async with semaphore:
+                try:
+                    # Получаем свечи и стакан параллельно
+                    candles_task = get_klines_async(symbol=pair, interval=15, limit=100)
+                    orderbook_task = get_orderbook_async(symbol=pair, limit=25)
+
+                    candles, orderbook = await asyncio.gather(candles_task, orderbook_task)
+
+                    if not candles or len(candles) < 50:
+                        return None
+
+                    # Получаем детальную информацию о EMA
+                    ema_details = get_detailed_signal_info(candles)
+                    atr = calculate_atr(candles, period=14)
+
+                    return pair, {
+                        'candles': candles,
+                        'orderbook': orderbook,
+                        'ema_details': ema_details,
+                        'atr': atr
+                    }
+                except Exception as e:
+                    logger.debug(f"Ошибка получения данных для {pair}: {e}")
+                    return None
+
+        # Получаем данные батчами
+        batch_size = 20
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
+            tasks = [get_pair_full_data(pair) for pair in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, tuple):
                     pair, data = result
-                    filtered_data[pair] = data
-                    processed_count += 1
+                    pairs_with_data[pair] = data
 
-                    # Подсчитываем EMA сигналы
-                    if data.get('ema_signal'):
-                        ema_signals_count[data['ema_signal']] += 1
+            await asyncio.sleep(0.1)
 
-            # Короткая пауза между батчами
-            if i + batch_size < len(usdt_pairs):
-                await asyncio.sleep(0.1)
+        logger.info(f"Данные стакана получены для {len(pairs_with_data)} пар")
+        return pairs_with_data
 
-            # Промежуточный лог каждые 100 пар
-            if processed_count % 100 == 0:
-                logger.info(f"Обработано {processed_count} пар...")
+    async def analyze_direction_with_ai(self, pairs_data: Dict[str, Dict], direction: str) -> Optional[str]:
+        """
+        Этап 4: Анализ направления с помощью ИИ
 
-        elapsed_time = time.time() - start_time
-        logger.info(f"Обработано {processed_count} пар за {elapsed_time:.2f}с (ошибок: {error_count})")
-        logger.info(
-            f"EMA сигналы: LONG={ema_signals_count['LONG']}, SHORT={ema_signals_count['SHORT']}, NO_SIGNAL={ema_signals_count['NO_SIGNAL']}")
+        Args:
+            pairs_data: Данные пар для анализа
+            direction: Направление анализа ('LONG' или 'SHORT')
 
-        return filtered_data
+        Returns:
+            Выбранная ИИ пара или None
+        """
+        if not pairs_data:
+            logger.warning(f"Нет данных для анализа направления {direction}")
+            return None
 
-    except Exception as e:
-        logger.error(f"Критическая ошибка при сборе данных: {e}")
-        return {}
+        logger.info(f"Этап 4: Анализ направления {direction} с помощью ИИ ({len(pairs_data)} пар)")
 
-
-def extract_ema_signal_pairs(all_data: Dict[str, Dict], signal_type: str) -> List[str]:
-    """Извлечение пар с определенным EMA сигналом."""
-    pairs = []
-    for pair, data in all_data.items():
-        if data.get('ema_signal') == signal_type:
-            pairs.append(pair)
-    return pairs
-
-
-def extract_data_subset(all_data: Dict[str, Dict], pairs: List[str], candle_key: str) -> Dict[str, List]:
-    """Извлечение подмножества данных."""
-    return {
-        pair: all_data[pair][candle_key]
-        for pair in pairs
-        if pair in all_data and candle_key in all_data[pair]
-    }
-
-
-def parse_ai_response(ai_response: str) -> Optional[Dict]:
-    """Парсинг ответа ИИ."""
-    if not ai_response or ai_response.strip() == "":
-        return None
-
-    # Быстрая проверка на JSON
-    try:
-        return json.loads(ai_response.strip())
-    except json.JSONDecodeError:
-        pass
-
-    # Поиск JSON блока
-    json_pattern = r'\{[^{}]*"pairs"[^{}]*\[[^\]]*\][^{}]*\}'
-    json_match = re.search(json_pattern, ai_response, re.DOTALL)
-
-    if json_match:
         try:
-            return json.loads(json_match.group())
+            # Читаем промпт для первичного анализа
+            try:
+                with open("prompt2.txt", 'r', encoding='utf-8') as file:
+                    prompt2 = file.read()
+            except FileNotFoundError:
+                prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
+                           Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 5 лучших пар для торговли.
+                           Учитывай EMA сигналы, ATR и данные стакана."""
+
+            # Подготавливаем данные для ИИ
+            analysis_data = {}
+            for pair, data in pairs_data.items():
+                analysis_data[pair] = {
+                    'candles_recent': data['candles'][-20:],  # Последние 20 свечей
+                    'ema_signal': data['ema_details']['signal'],
+                    'ema_alignment': data['ema_details']['ema_alignment'],
+                    'atr': data['atr'],
+                    'orderbook_bids': data['orderbook']['b'][:5],  # Топ 5 бидов
+                    'orderbook_asks': data['orderbook']['a'][:5],  # Топ 5 асков
+                    'last_price': data['ema_details']['last_price']
+                }
+
+            # Формируем промпт с указанием направления
+            direction_prompt = f"""
+            {prompt2}
+
+            КРИТИЧЕСКИ ВАЖНО: Анализируй ТОЛЬКО {direction} позиции!
+
+            Направление: {direction}
+            EMA Сигналы: Все представленные пары имеют {direction} сигнал
+
+            Данные включают:
+            - Свечи (последние 20)
+            - EMA сигналы и выравнивание
+            - ATR для волатильности
+            - Данные стакана (5 лучших бидов/асков)
+            """
+
+            # Первичный анализ
+            ai_response = await deep_seek(
+                data=str(analysis_data),
+                prompt=direction_prompt,
+                max_tokens=1500,
+                timeout=30
+            )
+
+            # Парсим ответ
+            selected_pairs = self.parse_ai_response(ai_response)
+            if not selected_pairs:
+                logger.warning(f"ИИ не смог выбрать пары для {direction}")
+                return None
+
+            logger.info(f"ИИ выбрал {len(selected_pairs)} пар для {direction}: {selected_pairs}")
+
+            # Берем первую пару для финального анализа
+            selected_pair = selected_pairs[0]
+            return selected_pair
+
+        except Exception as e:
+            logger.error(f"Ошибка при анализе направления {direction}: {e}")
+            return None
+
+    async def final_analysis_with_ai(self, pair: str, pair_data: Dict, direction: str) -> Optional[Dict]:
+        """
+        Этап 5: Финальный анализ с получением точки входа, стопа и тейка
+
+        Args:
+            pair: Выбранная пара
+            pair_data: Данные пары
+            direction: Направление торговли
+
+        Returns:
+            Словарь с торговыми рекомендациями
+        """
+        logger.info(f"Этап 5: Финальный анализ для {pair} ({direction})")
+
+        try:
+            # Читаем промпт для финального анализа
+            try:
+                with open("prompt.txt", 'r', encoding='utf-8') as file:
+                    main_prompt = file.read()
+            except FileNotFoundError:
+                main_prompt = """Ты опытный трейдер. Проанализируй данные и дай торговые рекомендации.
+                               Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо."""
+
+            # Подготавливаем полные данные для финального анализа
+            full_data = {
+                'pair': pair,
+                'direction': direction,
+                'full_candles': pair_data['candles'],
+                'ema_details': pair_data['ema_details'],
+                'atr': pair_data['atr'],
+                'orderbook': pair_data['orderbook'],
+                'current_price': pair_data['ema_details']['last_price']
+            }
+
+            # Формируем финальный промпт
+            final_prompt = f"""
+            {main_prompt}
+
+            ТОРГОВОЕ ЗАДАНИЕ:
+            Пара: {pair}
+            Направление: {direction}
+
+            Требуется определить:
+            1. Точку входа (Entry)
+            2. Стоп-лосс (Stop Loss)
+            3. Тейк-профит (Take Profit)
+            4. Рекомендуемое плечо (Leverage)
+
+            Данные включают:
+            - Полные свечи для технического анализа
+            - EMA сигналы (7, 14, 28)
+            - ATR для определения волатильности
+            - Текущий стакан заявок
+            - Текущую цену
+
+            ВАЖНО: Все рекомендации должны соответствовать направлению {direction}!
+            """
+
+            # Финальный анализ
+            ai_response = await deep_seek(
+                data=str(full_data),
+                prompt=final_prompt,
+                max_tokens=2000,
+                timeout=45
+            )
+
+            return {
+                'pair': pair,
+                'direction': direction,
+                'analysis': ai_response,
+                'current_price': pair_data['ema_details']['last_price'],
+                'atr': pair_data['atr'],
+                'ema_signal': pair_data['ema_details']['signal']
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка при финальном анализе {pair}: {e}")
+            return None
+
+    def parse_ai_response(self, ai_response: str) -> List[str]:
+        """Парсинг ответа ИИ для извлечения пар"""
+        if not ai_response:
+            return []
+
+        # Поиск JSON
+        try:
+            data = json.loads(ai_response.strip())
+            if isinstance(data, dict) and 'pairs' in data:
+                return data['pairs'][:5]  # Максимум 5 пар
         except json.JSONDecodeError:
             pass
 
-    # Fallback - поиск пар в тексте
-    pairs_pattern = r'["\']([A-Z]+USDT)["\']'
-    found_pairs = re.findall(pairs_pattern, ai_response)
+        # Поиск пар в тексте
+        pairs_pattern = r'["\']([A-Z]+USDT)["\']'
+        found_pairs = re.findall(pairs_pattern, ai_response)
 
-    if found_pairs:
-        unique_pairs = list(dict.fromkeys(found_pairs))[:10]
-        return {'pairs': unique_pairs}
+        if found_pairs:
+            return list(dict.fromkeys(found_pairs))[:5]  # Убираем дубликаты, максимум 5
 
-    return None
+        return []
 
-
-def get_filtered_pairs_by_direction(ema_signals: Dict, direction: str) -> List[str]:
-    """Получение пар, отфильтрованных по выбранному направлению с учетом EMA сигналов."""
-    if direction == '0':
-        # Автономный режим - возвращаем все пары с сигналами
-        all_pairs = set()
-        all_pairs.update(ema_signals.get('LONG', []))
-        all_pairs.update(ema_signals.get('SHORT', []))
-
-        selected_pairs = list(all_pairs)
-        logger.info(f"Автономный режим: найдено {len(selected_pairs)} пар с EMA сигналами")
-        logger.info(
-            f"  - EMA: {len(ema_signals.get('LONG', []))} LONG, {len(ema_signals.get('SHORT', []))} SHORT")
-
-    else:
-        # Фильтруем по выбранному направлению
-        ema_direction = direction.upper()
-        selected_pairs = ema_signals.get(ema_direction, [])
-
-        logger.info(f"Направление {direction.upper()}: найдено {len(selected_pairs)} пар")
-
-        if not selected_pairs:
-            logger.warning(f"Нет найденных EMA сигналов для направления {direction.upper()}")
-
-    return selected_pairs
-
-
-def create_direction_system_prompt(base_prompt: str, direction: str) -> str:
-    """Создание системного промпта с учетом направления."""
-    if direction == '0':
-        # Автономный режим
-        direction_addition = """
-        КРИТИЧЕСКИ ВАЖНО: 
-        - Самостоятельно определи оптимальное направление (long/short) для КАЖДОЙ пары
-        - Основывайся на EMA индикаторах (7, 14, 28)
-        - EMA выравнивание: Fast(7) > Medium(14) > Slow(28) для LONG, Fast(7) < Medium(14) < Slow(28) для SHORT
-        - НЕ следуй предвзятым предположениям о направлении
-        - Выбери ОДНУ наиболее перспективную возможность
-        - Учитывай подтверждение сигналов EMA выравниванием
+    async def run_full_analysis(self) -> Dict[str, Optional[Dict]]:
         """
-    else:
-        # Конкретное направление
-        direction_addition = f"""
-        ВАЖНОЕ ОГРАНИЧЕНИЕ: Рассматривать сделки ТОЛЬКО {direction.upper()}
+        Основная функция - полный анализ для обоих направлений
 
-        Анализируй данные исключительно с точки зрения {direction.upper()} позиций.
-        Игнорируй возможности для противоположного направления.
-        Особое внимание уделяй:
-        - EMA выравниванию для {direction.upper()} (Fast>Medium>Slow для LONG, Fast<Medium<Slow для SHORT)
-        - Подтверждению EMA сигналов
+        Returns:
+            Словарь с результатами для LONG и SHORT
         """
+        logger.info("🚀 ЗАПУСК ПОЛНОГО ТОРГОВОГО АНАЛИЗА")
+        start_time = time.time()
 
-    return f"{base_prompt}\n{direction_addition}"
-
-
-async def analyze_with_ai(data: Dict, direction: str, ema_data: Dict = None) -> Optional[Dict]:
-    """Первичный анализ с ИИ с учетом выбранного направления и EMA данных."""
-    try:
-        # Читаем промпт
         try:
-            with open("prompt2.txt", 'r', encoding='utf-8') as file:
-                prompt2 = file.read()
-        except FileNotFoundError:
-            prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
-                       Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 10 лучших пар для торговли.
-                       Учитывай EMA сигналы (7, 14, 28 периодов)."""
+            # Этап 1: Фильтрация по ATR
+            atr_filtered_pairs = await self.collect_and_filter_by_atr()
+            if len(atr_filtered_pairs) < 20:
+                logger.warning("Недостаточно пар прошло фильтрацию по ATR")
+                return {'LONG': None, 'SHORT': None}
 
-        base_system_prompt = f"""{prompt2}
+            # Этап 2: Анализ EMA сигналов
+            ema_signals = await self.analyze_ema_signals(atr_filtered_pairs)
 
-        ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
-        Последний индекс = текущая свеча.
+            results = {}
 
-        АНАЛИЗ ОСНОВАН НА EMA (7, 14, 28):
-        - EMA (7, 14, 28) - тройное подтверждение направления тренда
-        - Сигналы генерируются при правильном выравнивании EMA
-        - LONG: EMA7 > EMA14 > EMA28 (бычье выравнивание)
-        - SHORT: EMA7 < EMA14 < EMA28 (медвежье выравнивание)
-        - EMA рассчитывается с коэффициентом alpha = 2/(period+1)"""
+            # Анализируем каждое направление
+            for direction in ['LONG', 'SHORT']:
+                direction_pairs = ema_signals.get(direction, [])
 
-        # Создаем промпт с учетом направления
-        if direction == '0':
-            system_prompt = f"{base_system_prompt}\n\nВАЖНО: Анализируй ВСЕ возможности для Long И Short позиций. Не ограничивайся одним направлением - ищи лучшие торговые возможности в любом направлении. Особое внимание уделяй EMA сигналам с полным подтверждением."
+                if len(direction_pairs) < self.min_pairs_per_direction:
+                    logger.warning(f"Недостаточно пар для {direction}: {len(direction_pairs)}")
+                    results[direction] = None
+                    continue
+
+                # Этап 3: Добавляем данные стакана
+                pairs_with_data = await self.add_orderbook_data(direction_pairs)
+
+                if not pairs_with_data:
+                    logger.warning(f"Нет данных для анализа {direction}")
+                    results[direction] = None
+                    continue
+
+                # Этап 4: Первичный анализ с ИИ
+                selected_pair = await self.analyze_direction_with_ai(pairs_with_data, direction)
+
+                if not selected_pair or selected_pair not in pairs_with_data:
+                    logger.warning(f"ИИ не выбрал пару для {direction}")
+                    results[direction] = None
+                    continue
+
+                # Этап 5: Финальный анализ
+                final_result = await self.final_analysis_with_ai(
+                    selected_pair,
+                    pairs_with_data[selected_pair],
+                    direction
+                )
+
+                results[direction] = final_result
+
+            elapsed_time = time.time() - start_time
+            logger.info(f"✅ Полный анализ завершен за {elapsed_time:.2f} секунд")
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Критическая ошибка в полном анализе: {e}")
+            return {'LONG': None, 'SHORT': None}
+
+
+def print_results(results: Dict[str, Optional[Dict]]):
+    """Вывод результатов анализа"""
+    print("\n" + "=" * 80)
+    print("🎯 РЕЗУЛЬТАТЫ ТОРГОВОГО АНАЛИЗА")
+    print("=" * 80)
+
+    for direction in ['LONG', 'SHORT']:
+        result = results.get(direction)
+
+        print(f"\n📊 {direction} ПОЗИЦИЯ:")
+        print("-" * 40)
+
+        if result:
+            print(f"Пара: {result['pair']}")
+            print(f"Направление: {result['direction']}")
+            print(f"Текущая цена: {result['current_price']}")
+            print(f"ATR: {result['atr']:.6f}")
+            print(f"EMA сигнал: {result['ema_signal']}")
+            print(f"\nАНАЛИЗ:")
+            print("-" * 20)
+            print(result['analysis'])
         else:
-            system_prompt = f"{base_system_prompt}\n\nВАЖНОЕ ОГРАНИЧЕНИЕ: Рассматривать сделки ТОЛЬКО {direction.upper()}\nАнализируй данные исключительно с точки зрения {direction.upper()} позиций. Приоритет - EMA сигналам с полным подтверждением для {direction.upper()}."
+            print("❌ Не найдено подходящих возможностей")
 
-        # Добавляем информацию о EMA сигналах в контекст
-        ema_context = ""
-        if ema_data:
-            ema_context = f"\n\nEMA СИГНАЛЫ (С ПОЛНЫМ ПОДТВЕРЖДЕНИЕМ):\n"
-            for signal_type, pairs in ema_data.items():
-                if pairs:
-                    ema_context += f"- {signal_type}: {', '.join(pairs[:10])}\n"
-
-        full_prompt = system_prompt + ema_context
-
-        logger.info(f"Первичный анализ ИИ: {len(data)} пар, направление: {direction if direction != '0' else 'AUTO'}")
-
-        ai_response = await deep_seek(
-            data=str(data),
-            prompt=full_prompt,
-            max_tokens=2000,
-            timeout=45
-        )
-
-        parsed_data = parse_ai_response(ai_response)
-
-        if parsed_data and isinstance(parsed_data, dict) and 'pairs' in parsed_data:
-            return parsed_data
-
-        # Fallback
-        available_pairs = list(data.keys())[:5]
-        logger.warning("Используем fallback для выбора пар")
-        return {'pairs': available_pairs}
-
-    except Exception as e:
-        logger.error(f"Ошибка при анализе с ИИ: {e}")
-        return None
-
-
-async def final_ai_analysis(data: Dict, direction: str, all_data: Dict = None) -> Optional[str]:
-    """Финальный анализ с учетом выбранного направления и EMA данных."""
-    try:
-        try:
-            with open('prompt.txt', 'r', encoding='utf-8') as file:
-                main_prompt = file.read()
-        except FileNotFoundError:
-            main_prompt = """Ты опытный трейдер. Проанализируй данные и дай рекомендации.
-                           Обрати особое внимание на EMA сигналы (7, 14, 28 периодов)."""
-
-        base_system_prompt = f"""
-        {main_prompt}
-
-        ДАННЫЕ: Свечи в хронологическом порядке (от старых к новым).
-        Формат: [timestamp, open, high, low, close, volume, turnover]
-        Последний индекс = текущая свеча.
-
-        ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ:
-        - EMA (7, 14, 28): Тройное подтверждение тренда
-        - ATR: Для определения волатильности
-
-        ДЕТАЛИ РАСЧЕТА:
-        - EMA рассчитывается точно как в Pine Script с alpha = 2/(period+1)
-        - Первое значение EMA равно первой цене
-        - Последующие значения: EMA[i] = alpha * price[i] + (1 - alpha) * EMA[i-1]
-
-        ВАЖНО: Сигналы генерируются при правильном выравнивании EMA:
-        - LONG: EMA7 > EMA14 > EMA28 (бычье выравнивание)
-        - SHORT: EMA7 < EMA14 < EMA28 (медвежье выравнивание)
-        """
-
-        # Добавляем детальную информацию о EMA сигналах для анализируемых пар
-        ema_info = ""
-        if all_data:
-            ema_info = "\n\nДЕТАЛЬНЫЙ EMA АНАЛИЗ ДЛЯ ВЫБРАННЫХ ПАР:\n"
-            for pair in data.keys():
-                if pair in all_data and all_data[pair].get('ema_details'):
-                    details = all_data[pair]['ema_details']
-                    ema_info += f"- {pair}:\n"
-                    ema_info += f"  * Сигнал: {details.get('signal', 'N/A')}\n"
-                    ema_info += f"  * Причина: {details.get('reason', 'N/A')}\n"
-                    ema_info += f"  * EMA выравнивание: {details.get('ema_alignment', 'N/A')}\n"
-                    ema_info += f"  * Цена: {details.get('last_price', 'N/A')}\n"
-                    ema_info += f"  * EMA7: {details.get('ema_fast_value', 'N/A')}\n"
-                    ema_info += f"  * EMA14: {details.get('ema_medium_value', 'N/A')}\n"
-                    ema_info += f"  * EMA28: {details.get('ema_slow_value', 'N/A')}\n"
-
-        # Создаем финальный промпт с учетом направления
-        system_prompt = create_direction_system_prompt(base_system_prompt + ema_info, direction)
-
-        direction_display = direction.upper() if direction != '0' else 'АВТОНОМНЫЙ'
-        logger.info(f"Финальный анализ ИИ: {len(data)} пар, режим: {direction_display}")
-
-        return await deep_seek(
-            data=str(data),
-            prompt=system_prompt,
-            timeout=60
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка при финальном анализе: {e}")
-        return None
-
-
-async def run_trading_analysis(direction: str) -> Optional[str]:
-    """Основная функция анализа с учетом выбранного направления и EMA."""
-    try:
-        direction_display = direction.upper() if direction != '0' else 'АВТОНОМНЫЙ'
-        logger.info(f"АНАЛИЗ ТОРГОВЫХ ВОЗМОЖНОСТЕЙ - РЕЖИМ: {direction_display}")
-
-        # Этап 1: Сбор данных
-        all_data = await collect_all_data()
-        if not all_data:
-            return None
-
-        # Этап 2: Извлечение EMA сигналов
-        ema_signals = {
-            'LONG': extract_ema_signal_pairs(all_data, 'LONG'),
-            'SHORT': extract_ema_signal_pairs(all_data, 'SHORT')
-        }
-
-        # Этап 3: Фильтрация по направлению
-        selected_pairs = get_filtered_pairs_by_direction(ema_signals, direction)
-        if not selected_pairs:
-            direction_msg = f"для направления {direction.upper()}" if direction != '0' else ""
-            return f"Нет найденных EMA сигналов {direction_msg}. Попробуйте позже или выберите другое направление."
-
-        # Этап 4: Первичный анализ ИИ
-        detailed_data = extract_data_subset(all_data, selected_pairs, "candles_20")
-        if not detailed_data:
-            return None
-
-        ai_analysis = await analyze_with_ai(detailed_data, direction, ema_signals)
-        if not ai_analysis or 'pairs' not in ai_analysis:
-            return None
-
-        final_pairs = ai_analysis['pairs']
-        logger.info(f"ИИ выбрал: {len(final_pairs)} пар для детального анализа")
-
-        # Этап 5: Финальный анализ
-        if final_pairs:
-            extended_data = extract_data_subset(all_data, final_pairs, "candles_full")
-            if extended_data:
-                return await final_ai_analysis(extended_data, direction, all_data)
-
-        return None
-
-    except Exception as e:
-        logger.error(f"Ошибка в анализе: {e}")
-        return None
+    print("\n" + "=" * 80)
 
 
 async def main():
-    """Главная функция с интерактивным выбором направления."""
-    logger.info("СТАРТ ТОРГОВОГО БОТА С EMA ФИЛЬТРОМ")
+    """Главная функция"""
+    logger.info("🔥 ЗАПУСК ТОРГОВОГО БОТА")
 
     try:
-        # Получаем выбор пользователя
-        direction = get_user_direction_choice()
+        # Создаем анализатор
+        analyzer = TradingAnalyzer(
+            atr_threshold=0.001,  # Минимальный ATR
+            min_pairs_per_direction=5  # Минимум пар для анализа
+        )
 
-        print(f"\n🚀 Запуск анализа с EMA фильтром (7, 14, 28)...")
-        print("-" * 50)
+        # Запускаем полный анализ
+        results = await analyzer.run_full_analysis()
 
-        # Запускаем анализ с выбранным направлением
-        result = await run_trading_analysis(direction)
-
-        if result:
-            print(f"\n{'=' * 60}")
-            print("РЕЗУЛЬТАТ АНАЛИЗА (EMA ФИЛЬТР)")
-            print("=" * 60)
-            print(f"{result}")
-            print("=" * 60)
-        else:
-            logger.error("Анализ не завершен")
-            print("\n❌ Анализ не удался. Проверьте логи для подробностей.")
+        # Выводим результаты
+        print_results(results)
 
     except KeyboardInterrupt:
-        logger.info("Остановлено пользователем")
-        print("\n⏹️  Работа прервана пользователем")
+        logger.info("⏹️  Остановлено пользователем")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
-        print(f"\n❌ Критическая ошибка: {e}")
+        logger.error(f"❌ Критическая ошибка: {e}")
     finally:
-        logger.info("ЗАВЕРШЕНИЕ")
-        print("\n👋 Завершение работы")
+        logger.info("👋 Завершение работы")
 
 
 if __name__ == "__main__":
