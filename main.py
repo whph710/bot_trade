@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class TradingAnalyzer:
-    def __init__(self, atr_threshold: float = 0.005, min_pairs_per_direction: int = 14):
+    def __init__(self, atr_threshold: float = 0.01, min_pairs_per_direction: int = 14):
         """
         Инициализация анализатора торговли
 
@@ -476,7 +476,7 @@ async def main():
     try:
         # Создаем анализатор
         analyzer = TradingAnalyzer(
-            atr_threshold=0.001,  # Минимальный ATR
+            atr_threshold=0.01,  # Минимальный ATR
             min_pairs_per_direction=5  # Минимум пар для анализа
         )
 
