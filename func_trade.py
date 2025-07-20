@@ -146,6 +146,7 @@ def check_tsi_confirmation(candles: List[List[str]],
                            signal_length: int = 13) -> bool:
     """
     Проверка подтверждения сигнала с помощью TSI
+    Проверяет пересечения на последних 3 свечах для большей гибкости
 
     Args:
         candles: Данные свечей от Bybit
@@ -159,21 +160,33 @@ def check_tsi_confirmation(candles: List[List[str]],
     """
     tsi_data = calculate_tsi(candles, long_length, short_length, signal_length)
 
-    if len(tsi_data['tsi']) < 2:
+    if len(tsi_data['tsi']) < 4:  # Нужно минимум 4 точки для проверки 3 пересечений
         return False
 
-    # Текущие и предыдущие значения
-    current_tsi = tsi_data['tsi'][-1]
-    current_signal = tsi_data['signal'][-1]
-    prev_tsi = tsi_data['tsi'][-2]
-    prev_signal = tsi_data['signal'][-2]
+    tsi_values = tsi_data['tsi']
+    signal_values = tsi_data['signal']
 
-    if signal_type == 'LONG':
-        # Для LONG: TSI должен пересечь сигнальную линию снизу вверх
-        return prev_tsi <= prev_signal and current_tsi > current_signal
-    elif signal_type == 'SHORT':
-        # Для SHORT: TSI должен пересечь сигнальную линию сверху вниз
-        return prev_tsi >= prev_signal and current_tsi < current_signal
+    # Проверяем последние 3 пересечения (индексы -3, -2, -1)
+    for i in range(-3, 0):  # Проверяем 3 последние свечи
+        if len(tsi_values) + i < 1:  # Защита от выхода за границы
+            continue
+
+        current_idx = i
+        prev_idx = i - 1
+
+        current_tsi = tsi_values[current_idx]
+        current_signal = signal_values[current_idx]
+        prev_tsi = tsi_values[prev_idx]
+        prev_signal = signal_values[prev_idx]
+
+        if signal_type == 'LONG':
+            # Для LONG: TSI должен пересечь сигнальную линию снизу вверх
+            if prev_tsi <= prev_signal and current_tsi > current_signal:
+                return True
+        elif signal_type == 'SHORT':
+            # Для SHORT: TSI должен пересечь сигнальную линию сверху вниз
+            if prev_tsi >= prev_signal and current_tsi < current_signal:
+                return True
 
     return False
 
@@ -452,7 +465,7 @@ def analyze_last_candle_with_tsi(bybit_candles: List[List[str]],
                                  signal_length: int = 13) -> str:
     """
     Анализ последней свечи с использованием только TSI индикатора
-    (функция из paste.txt для совместимости)
+    Теперь проверяет пересечения на последних 3 свечах
 
     Args:
         bybit_candles: Данные свечей от Bybit
@@ -470,19 +483,29 @@ def analyze_last_candle_with_tsi(bybit_candles: List[List[str]],
 
     tsi_data = calculate_tsi(bybit_candles, long_length, short_length, signal_length)
 
-    if len(tsi_data['tsi']) < 2:
+    if len(tsi_data['tsi']) < 4:  # Нужно минимум 4 точки
         return 'NO_SIGNAL'
 
-    # Текущие и предыдущие значения
-    current_tsi = tsi_data['tsi'][-1]
-    current_signal = tsi_data['signal'][-1]
-    prev_tsi = tsi_data['tsi'][-2]
-    prev_signal = tsi_data['signal'][-2]
+    tsi_values = tsi_data['tsi']
+    signal_values = tsi_data['signal']
 
-    # Пересечение TSI и сигнальной линии
-    if prev_tsi <= prev_signal and current_tsi > current_signal:
-        return 'LONG'
-    elif prev_tsi >= prev_signal and current_tsi < current_signal:
-        return 'SHORT'
+    # Проверяем последние 3 пересечения
+    for i in range(-3, 0):  # Проверяем 3 последние свечи
+        if len(tsi_values) + i < 1:  # Защита от выхода за границы
+            continue
+
+        current_idx = i
+        prev_idx = i - 1
+
+        current_tsi = tsi_values[current_idx]
+        current_signal = signal_values[current_idx]
+        prev_tsi = tsi_values[prev_idx]
+        prev_signal = signal_values[prev_idx]
+
+        # Пересечение TSI и сигнальной линии
+        if prev_tsi <= prev_signal and current_tsi > current_signal:
+            return 'LONG'
+        elif prev_tsi >= prev_signal and current_tsi < current_signal:
+            return 'SHORT'
 
     return 'NO_SIGNAL'
