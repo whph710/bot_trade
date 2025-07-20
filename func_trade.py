@@ -57,6 +57,127 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
     return ema
 
 
+def double_smooth(src: np.ndarray, long_period: int, short_period: int) -> np.ndarray:
+    """
+    Двойное сглаживание с помощью EMA (как в Pine Script)
+
+    Args:
+        src: Исходные данные
+        long_period: Длинный период для первого сглаживания
+        short_period: Короткий период для второго сглаживания
+
+    Returns:
+        Массив двойно сглаженных значений
+    """
+    # Первое сглаживание
+    first_smooth = calculate_ema(src, long_period)
+
+    # Второе сглаживание
+    second_smooth = calculate_ema(first_smooth, short_period)
+
+    return second_smooth
+
+
+def calculate_tsi(candles: List[List[str]],
+                  long_length: int = 25,
+                  short_length: int = 13,
+                  signal_length: int = 13) -> Dict[str, np.ndarray]:
+    """
+    Расчет True Strength Index (TSI) - индикатор момента тренда
+
+    TSI является двойно сглаженным индикатором RSI, который использует
+    экспоненциальные скользящие средние для фильтрации шума цены.
+
+    Args:
+        candles: Данные свечей в формате Bybit [timestamp, open, high, low, close, volume, turnover]
+        long_length: Длинный период сглаживания (по умолчанию 25)
+        short_length: Короткий период сглаживания (по умолчанию 13)
+        signal_length: Период сигнальной линии (по умолчанию 13)
+
+    Returns:
+        Словарь с массивами:
+        - 'tsi': значения TSI
+        - 'signal': сигнальная линия (EMA от TSI)
+        - 'histogram': разность между TSI и сигнальной линией
+    """
+    if len(candles) < max(long_length, short_length, signal_length) + 10:
+        return {
+            'tsi': np.array([]),
+            'signal': np.array([]),
+            'histogram': np.array([])
+        }
+
+    # Извлекаем цены закрытия
+    prices = np.array([float(candle[4]) for candle in candles])
+
+    # Вычисляем изменения цены (price change)
+    pc = np.diff(prices, prepend=prices[0])  # Первое значение = 0
+
+    # Двойное сглаживание изменений цены
+    double_smoothed_pc = double_smooth(pc, long_length, short_length)
+
+    # Двойное сглаживание абсолютных изменений цены
+    abs_pc = np.abs(pc)
+    double_smoothed_abs_pc = double_smooth(abs_pc, long_length, short_length)
+
+    # Рассчитываем TSI (избегаем деление на ноль)
+    tsi_values = np.zeros_like(double_smoothed_pc)
+    non_zero_mask = double_smoothed_abs_pc != 0
+    tsi_values[non_zero_mask] = 100 * (double_smoothed_pc[non_zero_mask] /
+                                       double_smoothed_abs_pc[non_zero_mask])
+
+    # Сигнальная линия - EMA от TSI
+    signal_line = calculate_ema(tsi_values, signal_length)
+
+    # Гистограмма - разность между TSI и сигнальной линией
+    histogram = tsi_values - signal_line
+
+    return {
+        'tsi': tsi_values,
+        'signal': signal_line,
+        'histogram': histogram
+    }
+
+
+def check_tsi_confirmation(candles: List[List[str]],
+                           signal_type: str,
+                           long_length: int = 25,
+                           short_length: int = 13,
+                           signal_length: int = 13) -> bool:
+    """
+    Проверка подтверждения сигнала с помощью TSI
+
+    Args:
+        candles: Данные свечей от Bybit
+        signal_type: Тип сигнала ('LONG' или 'SHORT')
+        long_length: Длинный период TSI
+        short_length: Короткий период TSI
+        signal_length: Период сигнальной линии
+
+    Returns:
+        True если TSI подтверждает сигнал
+    """
+    tsi_data = calculate_tsi(candles, long_length, short_length, signal_length)
+
+    if len(tsi_data['tsi']) < 2:
+        return False
+
+    # Текущие и предыдущие значения
+    current_tsi = tsi_data['tsi'][-1]
+    current_signal = tsi_data['signal'][-1]
+    prev_tsi = tsi_data['tsi'][-2]
+    prev_signal = tsi_data['signal'][-2]
+
+    if signal_type == 'LONG':
+        # Для LONG: TSI должен пересечь сигнальную линию снизу вверх
+        return prev_tsi <= prev_signal and current_tsi > current_signal
+    elif signal_type == 'SHORT':
+        # Для SHORT: TSI должен пересечь сигнальную линию сверху вниз
+        return prev_tsi >= prev_signal and current_tsi < current_signal
+
+    return False
+
+
 def calculate_three_ema(prices: np.ndarray,
                         fast_period: int = 7,
                         medium_period: int = 14,
@@ -144,20 +265,28 @@ def parse_bybit_candles(raw_candles: List[List[str]]) -> List[List[float]]:
 def analyze_last_candle(bybit_candles: List[List[str]],
                         ema_fast: int = 7,
                         ema_medium: int = 14,
-                        ema_slow: int = 28) -> str:
+                        ema_slow: int = 28,
+                        use_tsi_filter: bool = True,
+                        tsi_long: int = 25,
+                        tsi_short: int = 13,
+                        tsi_signal: int = 13) -> str:
     """
-    Анализ последней свечи для получения EMA сигнала
+    Анализ последней свечи для получения EMA сигнала с TSI подтверждением
 
     Args:
         bybit_candles: Данные свечей от Bybit
         ema_fast: Период быстрой EMA
         ema_medium: Период средней EMA
         ema_slow: Период медленной EMA
+        use_tsi_filter: Использовать TSI фильтр (по умолчанию True)
+        tsi_long: Длинный период TSI
+        tsi_short: Короткий период TSI
+        tsi_signal: Период сигнальной линии TSI
 
     Returns:
         Строка с результатом: 'LONG', 'SHORT', или 'NO_SIGNAL'
     """
-    required_data = max(ema_slow, 50) + 10
+    required_data = max(ema_slow, tsi_long, 50) + 20
 
     if len(bybit_candles) < required_data:
         return 'NO_SIGNAL'
@@ -172,43 +301,68 @@ def analyze_last_candle(bybit_candles: List[List[str]],
     # Рассчитываем EMA
     ema_data = calculate_three_ema(prices, ema_fast, ema_medium, ema_slow)
 
-    # Проверяем сигнал на последней свече
+    # Проверяем EMA сигнал на последней свече
     last_idx = len(prices) - 1
+    ema_signal = 'NO_SIGNAL'
 
     if check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
                            ema_data['ema_slow'], 'LONG', last_idx):
-        return 'LONG'
+        ema_signal = 'LONG'
     elif check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
                              ema_data['ema_slow'], 'SHORT', last_idx):
-        return 'SHORT'
+        ema_signal = 'SHORT'
 
-    return 'NO_SIGNAL'
+    # Если нет EMA сигнала, возвращаем NO_SIGNAL
+    if ema_signal == 'NO_SIGNAL':
+        return 'NO_SIGNAL'
+
+    # Если TSI фильтр отключен, возвращаем EMA сигнал
+    if not use_tsi_filter:
+        return ema_signal
+
+    # Проверяем подтверждение TSI
+    tsi_confirmed = check_tsi_confirmation(
+        bybit_candles, ema_signal, tsi_long, tsi_short, tsi_signal
+    )
+
+    # Возвращаем сигнал только если он подтвержден TSI
+    return ema_signal if tsi_confirmed else 'NO_SIGNAL'
 
 
 def get_detailed_signal_info(bybit_candles: List[List[str]],
                              ema_fast: int = 7,
                              ema_medium: int = 14,
-                             ema_slow: int = 28) -> Dict:
+                             ema_slow: int = 28,
+                             use_tsi_filter: bool = True,
+                             tsi_long: int = 25,
+                             tsi_short: int = 13,
+                             tsi_signal: int = 13) -> Dict:
     """
-    Получение детальной информации о EMA сигнале
+    Получение детальной информации о EMA сигнале с TSI подтверждением
 
     Args:
         bybit_candles: Данные свечей от Bybit
         ema_fast: Период быстрой EMA
         ema_medium: Период средней EMA
         ema_slow: Период медленной EMA
+        use_tsi_filter: Использовать TSI фильтр
+        tsi_long: Длинный период TSI
+        tsi_short: Короткий период TSI
+        tsi_signal: Период сигнальной линии TSI
 
     Returns:
         Словарь с детальной информацией о сигнале
     """
-    required_data = max(ema_slow, 50) + 10
+    required_data = max(ema_slow, tsi_long, 50) + 20
 
     if len(bybit_candles) < required_data:
         return {
             'signal': 'NO_SIGNAL',
             'reason': 'INSUFFICIENT_DATA',
             'last_price': float(bybit_candles[0][4]) if bybit_candles else 0,
-            'ema_alignment': 'UNKNOWN'
+            'ema_alignment': 'UNKNOWN',
+            'tsi_confirmed': False,
+            'tsi_used': use_tsi_filter
         }
 
     # Парсим свечи
@@ -221,27 +375,114 @@ def get_detailed_signal_info(bybit_candles: List[List[str]],
     # Рассчитываем EMA
     ema_data = calculate_three_ema(prices, ema_fast, ema_medium, ema_slow)
 
-    # Проверяем сигнал на последней свече
+    # Проверяем EMA сигнал на последней свече
     last_idx = len(prices) - 1
     ema_alignment = 'NEUTRAL'
-    signal_type = 'NO_SIGNAL'
+    ema_signal_type = 'NO_SIGNAL'
 
     if last_idx >= 0:
         if check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
                                ema_data['ema_slow'], 'LONG', last_idx):
             ema_alignment = 'BULLISH'
-            signal_type = 'LONG'
+            ema_signal_type = 'LONG'
         elif check_ema_alignment(ema_data['ema_fast'], ema_data['ema_medium'],
                                  ema_data['ema_slow'], 'SHORT', last_idx):
             ema_alignment = 'BEARISH'
-            signal_type = 'SHORT'
+            ema_signal_type = 'SHORT'
 
-    return {
-        'signal': signal_type,
-        'reason': f'EMA_ALIGNMENT_{ema_alignment}',
+    # Проверяем TSI подтверждение
+    tsi_confirmed = False
+    tsi_data = None
+    final_signal = ema_signal_type
+
+    if use_tsi_filter and ema_signal_type != 'NO_SIGNAL':
+        tsi_confirmed = check_tsi_confirmation(
+            bybit_candles, ema_signal_type, tsi_long, tsi_short, tsi_signal
+        )
+
+        # Получаем TSI данные для дополнительной информации
+        tsi_result = calculate_tsi(bybit_candles, tsi_long, tsi_short, tsi_signal)
+        if len(tsi_result['tsi']) > 0:
+            tsi_data = {
+                'tsi_value': tsi_result['tsi'][-1],
+                'tsi_signal_value': tsi_result['signal'][-1],
+                'tsi_histogram': tsi_result['histogram'][-1]
+            }
+
+        # Финальный сигнал только если подтвержден TSI
+        if not tsi_confirmed:
+            final_signal = 'NO_SIGNAL'
+
+    # Определяем причину
+    if final_signal == 'NO_SIGNAL':
+        if ema_signal_type == 'NO_SIGNAL':
+            reason = 'NO_EMA_ALIGNMENT'
+        elif use_tsi_filter and not tsi_confirmed:
+            reason = 'TSI_NOT_CONFIRMED'
+        else:
+            reason = 'UNKNOWN'
+    else:
+        reason = f'EMA_ALIGNMENT_{ema_alignment}'
+        if use_tsi_filter and tsi_confirmed:
+            reason += '_TSI_CONFIRMED'
+
+    result = {
+        'signal': final_signal,
+        'reason': reason,
         'last_price': prices[-1],
         'ema_alignment': ema_alignment,
         'ema_fast_value': ema_data['ema_fast'][-1],
         'ema_medium_value': ema_data['ema_medium'][-1],
-        'ema_slow_value': ema_data['ema_slow'][-1]
+        'ema_slow_value': ema_data['ema_slow'][-1],
+        'tsi_used': use_tsi_filter,
+        'tsi_confirmed': tsi_confirmed
     }
+
+    # Добавляем TSI данные если доступны
+    if tsi_data:
+        result.update(tsi_data)
+
+    return result
+
+
+# Дополнительная функция для анализа последней свечи с TSI (совместимость с paste.txt)
+def analyze_last_candle_with_tsi(bybit_candles: List[List[str]],
+                                 long_length: int = 25,
+                                 short_length: int = 13,
+                                 signal_length: int = 13) -> str:
+    """
+    Анализ последней свечи с использованием только TSI индикатора
+    (функция из paste.txt для совместимости)
+
+    Args:
+        bybit_candles: Данные свечей от Bybit
+        long_length: Длинный период TSI
+        short_length: Короткий период TSI
+        signal_length: Период сигнальной линии
+
+    Returns:
+        Строка с результатом: 'LONG', 'SHORT', или 'NO_SIGNAL'
+    """
+    required_data = max(long_length, short_length, signal_length) + 20
+
+    if len(bybit_candles) < required_data:
+        return 'NO_SIGNAL'
+
+    tsi_data = calculate_tsi(bybit_candles, long_length, short_length, signal_length)
+
+    if len(tsi_data['tsi']) < 2:
+        return 'NO_SIGNAL'
+
+    # Текущие и предыдущие значения
+    current_tsi = tsi_data['tsi'][-1]
+    current_signal = tsi_data['signal'][-1]
+    prev_tsi = tsi_data['tsi'][-2]
+    prev_signal = tsi_data['signal'][-2]
+
+    # Пересечение TSI и сигнальной линии
+    if prev_tsi <= prev_signal and current_tsi > current_signal:
+        return 'LONG'
+    elif prev_tsi >= prev_signal and current_tsi < current_signal:
+        return 'SHORT'
+
+    return 'NO_SIGNAL'
