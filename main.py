@@ -26,16 +26,35 @@ logger = logging.getLogger(__name__)
 
 
 class TradingAnalyzer:
-    def __init__(self, atr_threshold: float = 0.01, min_pairs_per_direction: int = 14):
+    def __init__(self,
+                 atr_threshold: float = 0.01,
+                 min_pairs_per_direction: int = 5,
+                 use_tsi_filter: bool = True,
+                 tsi_long: int = 25,
+                 tsi_short: int = 13,
+                 tsi_signal: int = 13):
         """
         Инициализация анализатора торговли
 
         Args:
             atr_threshold: Минимальный порог ATR для фильтрации
             min_pairs_per_direction: Минимальное количество пар для анализа в каждом направлении
+            use_tsi_filter: Использовать TSI как дополнительный фильтр
+            tsi_long: Длинный период TSI
+            tsi_short: Короткий период TSI
+            tsi_signal: Период сигнальной линии TSI
         """
         self.atr_threshold = atr_threshold
         self.min_pairs_per_direction = min_pairs_per_direction
+        self.use_tsi_filter = use_tsi_filter
+        self.tsi_long = tsi_long
+        self.tsi_short = tsi_short
+        self.tsi_signal = tsi_signal
+
+        if use_tsi_filter:
+            logger.info(f"🔍 TSI фильтр ВКЛЮЧЕН (периоды: {tsi_long}, {tsi_short}, {tsi_signal})")
+        else:
+            logger.info("⚠️  TSI фильтр ОТКЛЮЧЕН")
 
     async def collect_and_filter_by_atr(self) -> List[str]:
         """
@@ -88,7 +107,7 @@ class TradingAnalyzer:
 
     async def analyze_ema_signals(self, pairs: List[str]) -> Dict[str, List[str]]:
         """
-        Этап 2: Анализ EMA сигналов и разделение на направления
+        Этап 2: Анализ EMA сигналов с TSI подтверждением и разделение на направления
 
         Args:
             pairs: Список пар для анализа
@@ -96,7 +115,7 @@ class TradingAnalyzer:
         Returns:
             Словарь с парами, разделенными по направлениям
         """
-        logger.info("Этап 2: Анализ EMA сигналов")
+        logger.info(f"Этап 2: Анализ EMA сигналов {'с TSI подтверждением' if self.use_tsi_filter else 'без TSI'}")
 
         long_pairs = []
         short_pairs = []
@@ -105,11 +124,21 @@ class TradingAnalyzer:
         async def analyze_pair_ema(pair: str) -> Optional[Tuple[str, str]]:
             async with semaphore:
                 try:
-                    candles = await get_klines_async(symbol=pair, interval=15, limit=100)
-                    if not candles or len(candles) < 50:
+                    # Нужно больше данных для TSI
+                    limit = 150 if self.use_tsi_filter else 100
+                    candles = await get_klines_async(symbol=pair, interval=15, limit=limit)
+
+                    if not candles or len(candles) < (100 if self.use_tsi_filter else 50):
                         return None
 
-                    signal = analyze_last_candle(candles)
+                    signal = analyze_last_candle(
+                        candles,
+                        use_tsi_filter=self.use_tsi_filter,
+                        tsi_long=self.tsi_long,
+                        tsi_short=self.tsi_short,
+                        tsi_signal=self.tsi_signal
+                    )
+
                     if signal in ['LONG', 'SHORT']:
                         return pair, signal
                     return None
@@ -134,7 +163,8 @@ class TradingAnalyzer:
 
             await asyncio.sleep(0.1)
 
-        logger.info(f"EMA анализ завершен: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
+        tsi_status = f" (с TSI: {len(long_pairs + short_pairs)} подтверждены)" if self.use_tsi_filter else ""
+        logger.info(f"EMA анализ завершен{tsi_status}: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
         return {'LONG': long_pairs, 'SHORT': short_pairs}
 
     async def prepare_pairs_data(self, pairs: List[str]) -> Dict[str, Dict]:
@@ -155,14 +185,21 @@ class TradingAnalyzer:
         async def get_pair_data(pair: str) -> Optional[Tuple[str, Dict]]:
             async with semaphore:
                 try:
-                    # Получаем свечи
-                    candles = await get_klines_async(symbol=pair, interval=15, limit=100)
+                    # Получаем свечи (больше данных для TSI)
+                    limit = 150 if self.use_tsi_filter else 100
+                    candles = await get_klines_async(symbol=pair, interval=15, limit=limit)
 
-                    if not candles or len(candles) < 50:
+                    if not candles or len(candles) < (100 if self.use_tsi_filter else 50):
                         return None
 
-                    # Получаем детальную информацию о EMA
-                    ema_details = get_detailed_signal_info(candles)
+                    # Получаем детальную информацию о EMA с TSI
+                    ema_details = get_detailed_signal_info(
+                        candles,
+                        use_tsi_filter=self.use_tsi_filter,
+                        tsi_long=self.tsi_long,
+                        tsi_short=self.tsi_short,
+                        tsi_signal=self.tsi_signal
+                    )
                     atr = calculate_atr(candles, period=14)
 
                     return pair, {
@@ -216,36 +253,49 @@ class TradingAnalyzer:
             except FileNotFoundError:
                 prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
                            Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 5 лучших пар для торговли.
-                           Учитывай EMA сигналы и ATR для определения лучших возможностей."""
+                           Учитывай EMA сигналы, TSI подтверждение и ATR для определения лучших возможностей."""
 
             # Подготавливаем данные для ИИ
             analysis_data = {}
             for pair, data in pairs_data.items():
+                ema_details = data['ema_details']
                 analysis_data[pair] = {
                     'candles_recent': data['candles'][-20:],  # Последние 20 свечей
-                    'ema_signal': data['ema_details']['signal'],
-                    'ema_alignment': data['ema_details']['ema_alignment'],
+                    'ema_signal': ema_details['signal'],
+                    'ema_alignment': ema_details['ema_alignment'],
                     'atr': data['atr'],
-                    'last_price': data['ema_details']['last_price'],
-                    'ema_fast_value': data['ema_details']['ema_fast_value'],
-                    'ema_medium_value': data['ema_details']['ema_medium_value'],
-                    'ema_slow_value': data['ema_details']['ema_slow_value']
+                    'last_price': ema_details['last_price'],
+                    'ema_fast_value': ema_details['ema_fast_value'],
+                    'ema_medium_value': ema_details['ema_medium_value'],
+                    'ema_slow_value': ema_details['ema_slow_value'],
+                    'tsi_used': ema_details.get('tsi_used', self.use_tsi_filter),
+                    'tsi_confirmed': ema_details.get('tsi_confirmed', False)
                 }
 
+                # Добавляем TSI данные если доступны
+                if 'tsi_value' in ema_details:
+                    analysis_data[pair]['tsi_value'] = ema_details['tsi_value']
+                    analysis_data[pair]['tsi_signal_value'] = ema_details['tsi_signal_value']
+                    analysis_data[pair]['tsi_histogram'] = ema_details['tsi_histogram']
+
             # Формируем промпт с указанием направления
+            tsi_info = f" с TSI подтверждением (периоды: {self.tsi_long}, {self.tsi_short}, {self.tsi_signal})" if self.use_tsi_filter else ""
             direction_prompt = f"""
             {prompt2}
 
             КРИТИЧЕСКИ ВАЖНО: Анализируй ТОЛЬКО {direction} позиции!
 
             Направление: {direction}
-            EMA Сигналы: Все представленные пары имеют {direction} сигнал
+            EMA Сигналы: Все представленные пары имеют {direction} сигнал{tsi_info}
 
             Данные включают:
             - Свечи (последние 20)
             - EMA сигналы и выравнивание (7, 14, 28 периоды)
+            - TSI подтверждение (если включено): пересечение TSI линии с сигнальной линией
             - ATR для определения волатильности
             - Текущие значения EMA для анализа силы тренда
+
+            {'TSI Логика: для LONG - TSI пересекает сигнальную линию снизу вверх, для SHORT - сверху вниз' if self.use_tsi_filter else ''}
             """
 
             # Первичный анализ
@@ -294,7 +344,7 @@ class TradingAnalyzer:
             except FileNotFoundError:
                 main_prompt = """Ты опытный трейдер. Проанализируй данные и дай торговые рекомендации.
                                Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо.
-                               Используй технический анализ на основе EMA и ATR."""
+                               Используй технический анализ на основе EMA, TSI и ATR."""
 
             # Подготавливаем полные данные для финального анализа
             full_data = {
@@ -307,12 +357,17 @@ class TradingAnalyzer:
             }
 
             # Формируем финальный промпт
+            tsi_confirmation = ""
+            if self.use_tsi_filter and pair_data['ema_details'].get('tsi_confirmed'):
+                tsi_confirmation = f"\n✅ TSI ПОДТВЕРЖДЕНИЕ: Сигнал подтвержден пересечением TSI (периоды: {self.tsi_long}, {self.tsi_short}, {self.tsi_signal})"
+
             final_prompt = f"""
             {main_prompt}
 
             ТОРГОВОЕ ЗАДАНИЕ:
             Пара: {pair}
             Направление: {direction}
+            Фильтры: EMA выравнивание{'+ TSI подтверждение' if self.use_tsi_filter else ''}{tsi_confirmation}
 
             Требуется определить:
             1. Точку входа (Entry)
@@ -323,6 +378,7 @@ class TradingAnalyzer:
             Данные включают:
             - Полные свечи для технического анализа
             - EMA сигналы (7, 14, 28)
+            {'- TSI индикатор с подтверждением пересечения' if self.use_tsi_filter else ''}
             - ATR для определения волатильности и размера позиции
             - Текущую цену и EMA значения
 
@@ -344,7 +400,9 @@ class TradingAnalyzer:
                 'analysis': ai_response,
                 'current_price': pair_data['ema_details']['last_price'],
                 'atr': pair_data['atr'],
-                'ema_signal': pair_data['ema_details']['signal']
+                'ema_signal': pair_data['ema_details']['signal'],
+                'tsi_used': pair_data['ema_details'].get('tsi_used', self.use_tsi_filter),
+                'tsi_confirmed': pair_data['ema_details'].get('tsi_confirmed', False)
             }
 
         except Exception as e:
@@ -390,7 +448,7 @@ class TradingAnalyzer:
                 logger.warning("Недостаточно пар прошло фильтрацию по ATR")
                 return {'LONG': None, 'SHORT': None}
 
-            # Этап 2: Анализ EMA сигналов
+            # Этап 2: Анализ EMA сигналов с TSI подтверждением
             ema_signals = await self.analyze_ema_signals(atr_filtered_pairs)
 
             results = {}
@@ -400,7 +458,8 @@ class TradingAnalyzer:
                 direction_pairs = ema_signals.get(direction, [])
 
                 if len(direction_pairs) < self.min_pairs_per_direction:
-                    logger.warning(f"Недостаточно пар для {direction}: {len(direction_pairs)}")
+                    logger.warning(
+                        f"Недостаточно пар для {direction}: {len(direction_pairs)} (требуется минимум {self.min_pairs_per_direction})")
                     results[direction] = None
                     continue
 
@@ -457,6 +516,14 @@ def print_results(results: Dict[str, Optional[Dict]]):
             print(f"Текущая цена: {result['current_price']}")
             print(f"ATR: {result['atr']:.6f}")
             print(f"EMA сигнал: {result['ema_signal']}")
+
+            # Показываем информацию о TSI
+            if result.get('tsi_used', False):
+                tsi_status = "✅ ПОДТВЕРЖДЕН" if result.get('tsi_confirmed', False) else "❌ НЕ ПОДТВЕРЖДЕН"
+                print(f"TSI фильтр: {tsi_status}")
+            else:
+                print("TSI фильтр: ОТКЛЮЧЕН")
+
             print(f"\nАНАЛИЗ:")
             print("-" * 20)
             print(result['analysis'])
@@ -471,10 +538,14 @@ async def main():
     logger.info("🔥 ЗАПУСК ТОРГОВОГО БОТА")
 
     try:
-        # Создаем анализатор
+        # Создаем анализатор с TSI фильтром
         analyzer = TradingAnalyzer(
             atr_threshold=0.01,  # Минимальный ATR
-            min_pairs_per_direction=5  # Минимум пар для анализа
+            min_pairs_per_direction=5,  # Минимум пар для анализа
+            use_tsi_filter=True,  # Включаем TSI фильтр
+            tsi_long=25,  # Длинный период TSI
+            tsi_short=13,  # Короткий период TSI
+            tsi_signal=13  # Период сигнальной линии TSI
         )
 
         # Запускаем полный анализ
