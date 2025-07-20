@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
-from func_async import get_usdt_linear_symbols, get_klines_async, get_orderbook_async
+from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import (
     calculate_atr,
     analyze_last_candle,
@@ -137,29 +137,26 @@ class TradingAnalyzer:
         logger.info(f"EMA анализ завершен: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
         return {'LONG': long_pairs, 'SHORT': short_pairs}
 
-    async def add_orderbook_data(self, pairs: List[str]) -> Dict[str, Dict]:
+    async def prepare_pairs_data(self, pairs: List[str]) -> Dict[str, Dict]:
         """
-        Этап 3: Добавление данных стакана к парам
+        Этап 3: Подготовка данных пар для анализа
 
         Args:
-            pairs: Список пар для получения данных стакана
+            pairs: Список пар для получения данных
 
         Returns:
-            Словарь с данными пар и их стаканами
+            Словарь с данными пар
         """
-        logger.info(f"Этап 3: Получение данных стакана для {len(pairs)} пар")
+        logger.info(f"Этап 3: Подготовка данных для {len(pairs)} пар")
 
         pairs_with_data = {}
-        semaphore = asyncio.Semaphore(15)
+        semaphore = asyncio.Semaphore(25)
 
-        async def get_pair_full_data(pair: str) -> Optional[Tuple[str, Dict]]:
+        async def get_pair_data(pair: str) -> Optional[Tuple[str, Dict]]:
             async with semaphore:
                 try:
-                    # Получаем свечи и стакан параллельно
-                    candles_task = get_klines_async(symbol=pair, interval=15, limit=100)
-                    orderbook_task = get_orderbook_async(symbol=pair, limit=25)
-
-                    candles, orderbook = await asyncio.gather(candles_task, orderbook_task)
+                    # Получаем свечи
+                    candles = await get_klines_async(symbol=pair, interval=15, limit=100)
 
                     if not candles or len(candles) < 50:
                         return None
@@ -170,7 +167,6 @@ class TradingAnalyzer:
 
                     return pair, {
                         'candles': candles,
-                        'orderbook': orderbook,
                         'ema_details': ema_details,
                         'atr': atr
                     }
@@ -179,10 +175,10 @@ class TradingAnalyzer:
                     return None
 
         # Получаем данные батчами
-        batch_size = 20
+        batch_size = 30
         for i in range(0, len(pairs), batch_size):
             batch = pairs[i:i + batch_size]
-            tasks = [get_pair_full_data(pair) for pair in batch]
+            tasks = [get_pair_data(pair) for pair in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for result in results:
@@ -192,7 +188,7 @@ class TradingAnalyzer:
 
             await asyncio.sleep(0.1)
 
-        logger.info(f"Данные стакана получены для {len(pairs_with_data)} пар")
+        logger.info(f"Данные получены для {len(pairs_with_data)} пар")
         return pairs_with_data
 
     async def analyze_direction_with_ai(self, pairs_data: Dict[str, Dict], direction: str) -> Optional[str]:
@@ -220,7 +216,7 @@ class TradingAnalyzer:
             except FileNotFoundError:
                 prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
                            Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 5 лучших пар для торговли.
-                           Учитывай EMA сигналы, ATR и данные стакана."""
+                           Учитывай EMA сигналы и ATR для определения лучших возможностей."""
 
             # Подготавливаем данные для ИИ
             analysis_data = {}
@@ -230,9 +226,10 @@ class TradingAnalyzer:
                     'ema_signal': data['ema_details']['signal'],
                     'ema_alignment': data['ema_details']['ema_alignment'],
                     'atr': data['atr'],
-                    'orderbook_bids': data['orderbook']['b'][:5],  # Топ 5 бидов
-                    'orderbook_asks': data['orderbook']['a'][:5],  # Топ 5 асков
-                    'last_price': data['ema_details']['last_price']
+                    'last_price': data['ema_details']['last_price'],
+                    'ema_fast_value': data['ema_details']['ema_fast_value'],
+                    'ema_medium_value': data['ema_details']['ema_medium_value'],
+                    'ema_slow_value': data['ema_details']['ema_slow_value']
                 }
 
             # Формируем промпт с указанием направления
@@ -246,9 +243,9 @@ class TradingAnalyzer:
 
             Данные включают:
             - Свечи (последние 20)
-            - EMA сигналы и выравнивание
-            - ATR для волатильности
-            - Данные стакана (5 лучших бидов/асков)
+            - EMA сигналы и выравнивание (7, 14, 28 периоды)
+            - ATR для определения волатильности
+            - Текущие значения EMA для анализа силы тренда
             """
 
             # Первичный анализ
@@ -296,7 +293,8 @@ class TradingAnalyzer:
                     main_prompt = file.read()
             except FileNotFoundError:
                 main_prompt = """Ты опытный трейдер. Проанализируй данные и дай торговые рекомендации.
-                               Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо."""
+                               Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо.
+                               Используй технический анализ на основе EMA и ATR."""
 
             # Подготавливаем полные данные для финального анализа
             full_data = {
@@ -305,7 +303,6 @@ class TradingAnalyzer:
                 'full_candles': pair_data['candles'],
                 'ema_details': pair_data['ema_details'],
                 'atr': pair_data['atr'],
-                'orderbook': pair_data['orderbook'],
                 'current_price': pair_data['ema_details']['last_price']
             }
 
@@ -326,11 +323,11 @@ class TradingAnalyzer:
             Данные включают:
             - Полные свечи для технического анализа
             - EMA сигналы (7, 14, 28)
-            - ATR для определения волатильности
-            - Текущий стакан заявок
-            - Текущую цену
+            - ATR для определения волатильности и размера позиции
+            - Текущую цену и EMA значения
 
             ВАЖНО: Все рекомендации должны соответствовать направлению {direction}!
+            Используй ATR для определения оптимальных уровней стоп-лосса и тейк-профита.
             """
 
             # Финальный анализ
@@ -407,8 +404,8 @@ class TradingAnalyzer:
                     results[direction] = None
                     continue
 
-                # Этап 3: Добавляем данные стакана
-                pairs_with_data = await self.add_orderbook_data(direction_pairs)
+                # Этап 3: Подготавливаем данные пар
+                pairs_with_data = await self.prepare_pairs_data(direction_pairs)
 
                 if not pairs_with_data:
                     logger.warning(f"Нет данных для анализа {direction}")

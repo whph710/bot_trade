@@ -412,3 +412,40 @@
 2025-07-06 22:25:55,912 - WARNING - Недостаточно пар для SHORT: 2
 2025-07-06 22:25:55,912 - INFO - ✅ Полный анализ завершен за 58.88 секунд
 2025-07-06 22:25:55,914 - INFO - 👋 Завершение работы
+2025-07-20 21:08:55,258 - INFO - 🔥 ЗАПУСК ТОРГОВОГО БОТА
+2025-07-20 21:08:55,258 - INFO - 🚀 ЗАПУСК ПОЛНОГО ТОРГОВОГО АНАЛИЗА
+2025-07-20 21:08:55,258 - INFO - Этап 1: Сбор данных и фильтрация по ATR
+2025-07-20 21:08:55,820 - INFO - Найдено 411 активных USDT пар
+2025-07-20 21:08:55,820 - INFO - Найдено 411 торговых пар
+2025-07-20 21:08:57,415 - INFO - Обработано 50 пар, отфильтровано: 7
+2025-07-20 21:08:58,783 - INFO - Обработано 100 пар, отфильтровано: 18
+2025-07-20 21:09:00,194 - INFO - Обработано 150 пар, отфильтровано: 34
+2025-07-20 21:09:01,566 - INFO - Обработано 200 пар, отфильтровано: 43
+2025-07-20 21:09:03,083 - INFO - Обработано 250 пар, отфильтровано: 55
+2025-07-20 21:09:04,463 - INFO - Обработано 300 пар, отфильтровано: 65
+2025-07-20 21:09:05,876 - INFO - Обработано 350 пар, отфильтровано: 76
+2025-07-20 21:09:07,232 - INFO - Обработано 400 пар, отфильтровано: 80
+2025-07-20 21:09:07,791 - INFO - Обработано 411 пар, отфильтровано: 82
+2025-07-20 21:09:07,897 - INFO - Фильтрация по ATR завершена: 82 пар прошли фильтр
+2025-07-20 21:09:07,897 - INFO - Этап 2: Анализ EMA сигналов
+2025-07-20 21:09:10,652 - INFO - EMA анализ завершен: LONG=73, SHORT=4
+2025-07-20 21:09:10,652 - INFO - Этап 3: Подготовка данных для 73 пар
+2025-07-20 21:09:13,555 - INFO - Данные получены для 73 пар
+2025-07-20 21:09:13,555 - INFO - Этап 4: Анализ направления LONG с помощью ИИ (73 пар)
+2025-07-20 21:09:14,378 - INFO - DeepSeek запрос 1/3
+2025-07-20 21:09:16,904 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/2 400 Bad Request"
+2025-07-20 21:09:16,905 - WARNING - Попытка 1 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 70867 tokens (69367 in the messages, 1500 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+2025-07-20 21:09:16,905 - INFO - Ожидание 1.0с...
+2025-07-20 21:09:17,915 - INFO - DeepSeek запрос 2/3
+2025-07-20 21:09:18,629 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/2 400 Bad Request"
+2025-07-20 21:09:18,630 - WARNING - Попытка 2 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 70867 tokens (69367 in the messages, 1500 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+2025-07-20 21:09:18,630 - INFO - Ожидание 2.5с...
+2025-07-20 21:09:21,146 - INFO - DeepSeek запрос 3/3
+2025-07-20 21:09:21,866 - INFO - HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/2 400 Bad Request"
+2025-07-20 21:09:21,866 - WARNING - Попытка 3 неудачна: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 70867 tokens (69367 in the messages, 1500 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+2025-07-20 21:09:21,866 - ERROR - Все попытки исчерпаны: Error code: 400 - {'error': {'message': "This model's maximum context length is 65536 tokens. However, you requested 70867 tokens (69367 in the messages, 1500 in the completion). Please reduce the length of the messages or completion.", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+2025-07-20 21:09:21,867 - WARNING - ИИ не смог выбрать пары для LONG
+2025-07-20 21:09:21,867 - WARNING - ИИ не выбрал пару для LONG
+2025-07-20 21:09:21,867 - WARNING - Недостаточно пар для SHORT: 4
+2025-07-20 21:09:21,867 - INFO - ✅ Полный анализ завершен за 26.61 секунд
+2025-07-20 21:09:21,868 - INFO - 👋 Завершение работы
