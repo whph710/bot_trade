@@ -3,13 +3,15 @@ import time
 import json
 import logging
 import re
+import os
 from typing import Dict, List, Optional, Tuple
 
 from func_async import get_usdt_linear_symbols, get_klines_async
 from func_trade import (
     calculate_atr,
     analyze_last_candle,
-    get_detailed_signal_info
+    get_detailed_signal_info,
+    check_tsi_confirmation
 )
 from deepseek import deep_seek
 
@@ -28,7 +30,7 @@ logger = logging.getLogger(__name__)
 class TradingAnalyzer:
     def __init__(self,
                  atr_threshold: float = 0.01,
-                 min_pairs_per_direction: int = 5,
+                 min_pairs_per_direction: int = 3,  # Уменьшено с 5 до 3 для тестирования
                  use_tsi_filter: bool = True,
                  tsi_long: int = 25,
                  tsi_short: int = 13,
@@ -51,10 +53,41 @@ class TradingAnalyzer:
         self.tsi_short = tsi_short
         self.tsi_signal = tsi_signal
 
+        # Счетчики для диагностики
+        self.ema_signal_counts = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
+        self.tsi_confirmation_counts = {'LONG': 0, 'SHORT': 0, 'REJECTED': 0}
+
         if use_tsi_filter:
             logger.info(f"🔍 TSI фильтр ВКЛЮЧЕН (периоды: {tsi_long}, {tsi_short}, {tsi_signal})")
         else:
             logger.info("⚠️  TSI фильтр ОТКЛЮЧЕН")
+
+    def read_prompt_file(self, filename: str, default_content: str = "") -> str:
+        """
+        Чтение промпта из файла с обработкой ошибок
+
+        Args:
+            filename: Имя файла
+            default_content: Содержимое по умолчанию
+
+        Returns:
+            Содержимое файла или значение по умолчанию
+        """
+        try:
+            if os.path.exists(filename):
+                with open(filename, 'r', encoding='utf-8') as file:
+                    content = file.read().strip()
+                    if content:
+                        logger.info(f"✅ Промпт загружен из {filename}")
+                        return content
+                    else:
+                        logger.warning(f"⚠️  Файл {filename} пустой, используется промпт по умолчанию")
+            else:
+                logger.warning(f"⚠️  Файл {filename} не найден, используется промпт по умолчанию")
+        except Exception as e:
+            logger.error(f"❌ Ошибка чтения файла {filename}: {e}")
+
+        return default_content
 
     async def collect_and_filter_by_atr(self) -> List[str]:
         """
@@ -63,17 +96,19 @@ class TradingAnalyzer:
         Returns:
             Список пар, прошедших фильтрацию по ATR
         """
-        logger.info("Этап 1: Сбор данных и фильтрация по ATR")
+        logger.info("=" * 60)
+        logger.info("ЭТАП 1: Сбор данных и фильтрация по ATR")
+        logger.info("=" * 60)
 
         # Получаем все USDT пары
         all_pairs = await get_usdt_linear_symbols()
-        logger.info(f"Найдено {len(all_pairs)} торговых пар")
+        logger.info(f"📊 Найдено {len(all_pairs)} торговых пар")
 
         # Фильтруем по ATR
         filtered_pairs = []
         semaphore = asyncio.Semaphore(20)
 
-        async def check_atr_for_pair(pair: str) -> Optional[str]:
+        async def check_atr_for_pair(pair: str) -> Optional[Tuple[str, float]]:
             async with semaphore:
                 try:
                     candles = await get_klines_async(symbol=pair, interval=15, limit=50)
@@ -82,7 +117,7 @@ class TradingAnalyzer:
 
                     atr = calculate_atr(candles, period=14)
                     if atr >= self.atr_threshold:
-                        return pair
+                        return pair, atr
                     return None
                 except Exception as e:
                     logger.debug(f"Ошибка проверки ATR для {pair}: {e}")
@@ -90,19 +125,30 @@ class TradingAnalyzer:
 
         # Обрабатываем батчами
         batch_size = 50
+        atr_results = []
+
         for i in range(0, len(all_pairs), batch_size):
             batch = all_pairs[i:i + batch_size]
             tasks = [check_atr_for_pair(pair) for pair in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for result in results:
-                if isinstance(result, str):
-                    filtered_pairs.append(result)
+                if isinstance(result, tuple):
+                    pair, atr_value = result
+                    atr_results.append((pair, atr_value))
+                    filtered_pairs.append(pair)
 
             logger.info(f"Обработано {min(i + batch_size, len(all_pairs))} пар, отфильтровано: {len(filtered_pairs)}")
             await asyncio.sleep(0.1)
 
-        logger.info(f"Фильтрация по ATR завершена: {len(filtered_pairs)} пар прошли фильтр")
+        # Сортируем по ATR (по убыванию - более волатильные пары первыми)
+        atr_results.sort(key=lambda x: x[1], reverse=True)
+        filtered_pairs = [pair for pair, _ in atr_results]
+
+        logger.info(f"✅ Фильтрация по ATR завершена: {len(filtered_pairs)} пар прошли фильтр")
+        if atr_results:
+            logger.info(f"📈 ТОП-5 по ATR: {[(pair, f'{atr:.6f}') for pair, atr in atr_results[:5]]}")
+
         return filtered_pairs
 
     async def analyze_ema_signals(self, pairs: List[str]) -> Dict[str, List[str]]:
@@ -115,13 +161,19 @@ class TradingAnalyzer:
         Returns:
             Словарь с парами, разделенными по направлениям
         """
-        logger.info(f"Этап 2: Анализ EMA сигналов {'с TSI подтверждением' if self.use_tsi_filter else 'без TSI'}")
+        logger.info("=" * 60)
+        logger.info(f"ЭТАП 2: Анализ EMA сигналов {'с TSI подтверждением' if self.use_tsi_filter else 'без TSI'}")
+        logger.info("=" * 60)
 
         long_pairs = []
         short_pairs = []
         semaphore = asyncio.Semaphore(25)
 
-        async def analyze_pair_ema(pair: str) -> Optional[Tuple[str, str]]:
+        # Сбрасываем счетчики диагностики
+        self.ema_signal_counts = {'LONG': 0, 'SHORT': 0, 'NO_SIGNAL': 0}
+        self.tsi_confirmation_counts = {'LONG': 0, 'SHORT': 0, 'REJECTED': 0}
+
+        async def analyze_pair_ema(pair: str) -> Optional[Tuple[str, str, Dict]]:
             async with semaphore:
                 try:
                     # Нужно больше данных для TSI
@@ -131,7 +183,36 @@ class TradingAnalyzer:
                     if not candles or len(candles) < (100 if self.use_tsi_filter else 50):
                         return None
 
-                    signal = analyze_last_candle(
+                    # Сначала получаем EMA сигнал без TSI
+                    ema_signal = analyze_last_candle(
+                        candles,
+                        use_tsi_filter=False  # Получаем чистый EMA сигнал
+                    )
+
+                    # Увеличиваем счетчик EMA сигналов
+                    self.ema_signal_counts[ema_signal] += 1
+
+                    if ema_signal not in ['LONG', 'SHORT']:
+                        return None
+
+                    # Если TSI фильтр включен, проверяем подтверждение
+                    if self.use_tsi_filter:
+                        tsi_confirmed = check_tsi_confirmation(
+                            candles,
+                            ema_signal,
+                            self.tsi_long,
+                            self.tsi_short,
+                            self.tsi_signal
+                        )
+
+                        if tsi_confirmed:
+                            self.tsi_confirmation_counts[ema_signal] += 1
+                        else:
+                            self.tsi_confirmation_counts['REJECTED'] += 1
+                            return None
+
+                    # Получаем детальную информацию
+                    signal_details = get_detailed_signal_info(
                         candles,
                         use_tsi_filter=self.use_tsi_filter,
                         tsi_long=self.tsi_long,
@@ -139,9 +220,8 @@ class TradingAnalyzer:
                         tsi_signal=self.tsi_signal
                     )
 
-                    if signal in ['LONG', 'SHORT']:
-                        return pair, signal
-                    return None
+                    return pair, ema_signal, signal_details
+
                 except Exception as e:
                     logger.debug(f"Ошибка EMA анализа для {pair}: {e}")
                     return None
@@ -155,16 +235,26 @@ class TradingAnalyzer:
 
             for result in results:
                 if isinstance(result, tuple):
-                    pair, signal = result
+                    pair, signal, details = result
                     if signal == 'LONG':
                         long_pairs.append(pair)
                     elif signal == 'SHORT':
                         short_pairs.append(pair)
 
+            logger.info(f"Обработано {min(i + batch_size, len(pairs))} пар")
             await asyncio.sleep(0.1)
 
-        tsi_status = f" (с TSI: {len(long_pairs + short_pairs)} подтверждены)" if self.use_tsi_filter else ""
-        logger.info(f"EMA анализ завершен{tsi_status}: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
+        # Выводим диагностическую информацию
+        logger.info("📊 ДИАГНОСТИКА EMA СИГНАЛОВ:")
+        for signal_type, count in self.ema_signal_counts.items():
+            logger.info(f"   {signal_type}: {count}")
+
+        if self.use_tsi_filter:
+            logger.info("🔍 ДИАГНОСТИКА TSI ПОДТВЕРЖДЕНИЙ:")
+            for conf_type, count in self.tsi_confirmation_counts.items():
+                logger.info(f"   {conf_type}: {count}")
+
+        logger.info(f"✅ EMA анализ завершен: LONG={len(long_pairs)}, SHORT={len(short_pairs)}")
         return {'LONG': long_pairs, 'SHORT': short_pairs}
 
     async def prepare_pairs_data(self, pairs: List[str]) -> Dict[str, Dict]:
@@ -177,7 +267,9 @@ class TradingAnalyzer:
         Returns:
             Словарь с данными пар
         """
-        logger.info(f"Этап 3: Подготовка данных для {len(pairs)} пар")
+        logger.info("=" * 60)
+        logger.info(f"ЭТАП 3: Подготовка данных для {len(pairs)} пар")
+        logger.info("=" * 60)
 
         pairs_with_data = {}
         semaphore = asyncio.Semaphore(25)
@@ -223,9 +315,10 @@ class TradingAnalyzer:
                     pair, data = result
                     pairs_with_data[pair] = data
 
+            logger.info(f"Обработано {min(i + batch_size, len(pairs))} пар")
             await asyncio.sleep(0.1)
 
-        logger.info(f"Данные получены для {len(pairs_with_data)} пар")
+        logger.info(f"✅ Данные получены для {len(pairs_with_data)} пар")
         return pairs_with_data
 
     async def analyze_direction_with_ai(self, pairs_data: Dict[str, Dict], direction: str) -> Optional[str]:
@@ -243,17 +336,18 @@ class TradingAnalyzer:
             logger.warning(f"Нет данных для анализа направления {direction}")
             return None
 
-        logger.info(f"Этап 4: Анализ направления {direction} с помощью ИИ ({len(pairs_data)} пар)")
+        logger.info("=" * 60)
+        logger.info(f"ЭТАП 4: Анализ направления {direction} с помощью ИИ ({len(pairs_data)} пар)")
+        logger.info("=" * 60)
 
         try:
             # Читаем промпт для первичного анализа
-            try:
-                with open("prompt2.txt", 'r', encoding='utf-8') as file:
-                    prompt2 = file.read()
-            except FileNotFoundError:
-                prompt2 = """Проанализируй торговые данные и верни результат в виде Python словаря.
-                           Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 5 лучших пар для торговли.
-                           Учитывай EMA сигналы, TSI подтверждение и ATR для определения лучших возможностей."""
+            prompt2 = self.read_prompt_file(
+                "prompt2.txt",
+                """Проанализируй торговые данные и верни результат в виде Python словаря.
+                Формат: {'pairs': ['BTCUSDT', 'ETHUSDT']}. Выбери до 5 лучших пар для торговли.
+                Учитывай EMA сигналы, TSI подтверждение и ATR для определения лучших возможностей."""
+            )
 
             # Подготавливаем данные для ИИ
             analysis_data = {}
@@ -312,14 +406,14 @@ class TradingAnalyzer:
                 logger.warning(f"ИИ не смог выбрать пары для {direction}")
                 return None
 
-            logger.info(f"ИИ выбрал {len(selected_pairs)} пар для {direction}: {selected_pairs}")
+            logger.info(f"🤖 ИИ выбрал {len(selected_pairs)} пар для {direction}: {selected_pairs}")
 
             # Берем первую пару для финального анализа
             selected_pair = selected_pairs[0]
             return selected_pair
 
         except Exception as e:
-            logger.error(f"Ошибка при анализе направления {direction}: {e}")
+            logger.error(f"❌ Ошибка при анализе направления {direction}: {e}")
             return None
 
     async def final_analysis_with_ai(self, pair: str, pair_data: Dict, direction: str) -> Optional[Dict]:
@@ -334,17 +428,18 @@ class TradingAnalyzer:
         Returns:
             Словарь с торговыми рекомендациями
         """
-        logger.info(f"Этап 5: Финальный анализ для {pair} ({direction})")
+        logger.info("=" * 60)
+        logger.info(f"ЭТАП 5: Финальный анализ для {pair} ({direction})")
+        logger.info("=" * 60)
 
         try:
             # Читаем промпт для финального анализа
-            try:
-                with open("prompt.txt", 'r', encoding='utf-8') as file:
-                    main_prompt = file.read()
-            except FileNotFoundError:
-                main_prompt = """Ты опытный трейдер. Проанализируй данные и дай торговые рекомендации.
-                               Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо.
-                               Используй технический анализ на основе EMA, TSI и ATR."""
+            main_prompt = self.read_prompt_file(
+                "prompt.txt",
+                """Ты опытный трейдер. Проанализируй данные и дай торговые рекомендации.
+                Укажи точку входа, стоп-лосс, тейк-профит и рекомендуемое плечо.
+                Используй технический анализ на основе EMA, TSI и ATR."""
+            )
 
             # Подготавливаем полные данные для финального анализа
             full_data = {
@@ -406,7 +501,7 @@ class TradingAnalyzer:
             }
 
         except Exception as e:
-            logger.error(f"Ошибка при финальном анализе {pair}: {e}")
+            logger.error(f"❌ Ошибка при финальном анализе {pair}: {e}")
             return None
 
     def parse_ai_response(self, ai_response: str) -> List[str]:
@@ -445,7 +540,7 @@ class TradingAnalyzer:
             # Этап 1: Фильтрация по ATR
             atr_filtered_pairs = await self.collect_and_filter_by_atr()
             if len(atr_filtered_pairs) < 20:
-                logger.warning("Недостаточно пар прошло фильтрацию по ATR")
+                logger.warning("⚠️  Недостаточно пар прошло фильтрацию по ATR")
                 return {'LONG': None, 'SHORT': None}
 
             # Этап 2: Анализ EMA сигналов с TSI подтверждением
@@ -459,7 +554,7 @@ class TradingAnalyzer:
 
                 if len(direction_pairs) < self.min_pairs_per_direction:
                     logger.warning(
-                        f"Недостаточно пар для {direction}: {len(direction_pairs)} (требуется минимум {self.min_pairs_per_direction})")
+                        f"⚠️  Недостаточно пар для {direction}: {len(direction_pairs)} (требуется минимум {self.min_pairs_per_direction})")
                     results[direction] = None
                     continue
 
@@ -467,7 +562,7 @@ class TradingAnalyzer:
                 pairs_with_data = await self.prepare_pairs_data(direction_pairs)
 
                 if not pairs_with_data:
-                    logger.warning(f"Нет данных для анализа {direction}")
+                    logger.warning(f"⚠️  Нет данных для анализа {direction}")
                     results[direction] = None
                     continue
 
@@ -475,7 +570,7 @@ class TradingAnalyzer:
                 selected_pair = await self.analyze_direction_with_ai(pairs_with_data, direction)
 
                 if not selected_pair or selected_pair not in pairs_with_data:
-                    logger.warning(f"ИИ не выбрал пару для {direction}")
+                    logger.warning(f"⚠️  ИИ не выбрал пару для {direction}")
                     results[direction] = None
                     continue
 
@@ -494,7 +589,7 @@ class TradingAnalyzer:
             return results
 
         except Exception as e:
-            logger.error(f"Критическая ошибка в полном анализе: {e}")
+            logger.error(f"❌ Критическая ошибка в полном анализе: {e}")
             return {'LONG': None, 'SHORT': None}
 
 
@@ -541,7 +636,7 @@ async def main():
         # Создаем анализатор с TSI фильтром
         analyzer = TradingAnalyzer(
             atr_threshold=0.01,  # Минимальный ATR
-            min_pairs_per_direction=5,  # Минимум пар для анализа
+            min_pairs_per_direction=3,  # Уменьшено для тестирования
             use_tsi_filter=True,  # Включаем TSI фильтр
             tsi_long=25,  # Длинный период TSI
             tsi_short=13,  # Короткий период TSI
