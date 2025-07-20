@@ -127,8 +127,8 @@ def parse_bybit_candles(raw_candles: List[List[str]]) -> List[List[float]]:
     """
     parsed_candles = []
 
-    # Реверсируем порядок, так как Bybit возвращает новейшие первыми
-    for candle in reversed(raw_candles):
+    # Свечи уже в правильном порядке (от старых к новым) после обработки в get_klines_async
+    for candle in raw_candles:
         # Извлекаем данные OHLCV
         open_price = float(candle[1])
         high_price = float(candle[2])
