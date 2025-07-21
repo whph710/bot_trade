@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class TradingAnalyzer:
     def __init__(self,
                  atr_threshold: float = 0.01,
-                 min_pairs_per_direction: int = 3,  # Уменьшено с 5 до 3 для тестирования
+                 min_pairs_per_direction: int = 0,  # Уменьшено с 5 до 3 для тестирования
                  use_tsi_filter: bool = True,
                  tsi_long: int = 25,
                  tsi_short: int = 13,
