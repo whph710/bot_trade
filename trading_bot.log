@@ -604,3 +604,12 @@
 2025-07-20 22:56:46,770 - WARNING - ⚠️  Недостаточно пар для SHORT: 1 (требуется минимум 3)
 2025-07-20 22:56:46,770 - INFO - ✅ Полный анализ завершен за 14.05 секунд
 2025-07-20 22:56:46,771 - INFO - 👋 Завершение работы
+2025-07-21 16:52:40,793 - INFO - 🚀 ЗАПУСК EMA+TSI ТОРГОВОГО БОТА
+2025-07-21 16:52:40,794 - INFO - ======================================================================
+2025-07-21 16:52:40,794 - ERROR - ❌ Критическая ошибка в main(): get_signal_details() missing 1 required positional argument: 'candles'
+2025-07-21 16:52:40,794 - ERROR - Traceback (most recent call last):
+  File "C:\Users\maxim\Documents\PycharmProjects\bot_trade\main.py", line 28, in main
+    analyzer = get_signal_details(
+               ^^^^^^^^^^^^^^^^^^^
+TypeError: get_signal_details() missing 1 required positional argument: 'candles'
+
