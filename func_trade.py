@@ -1,6 +1,5 @@
-import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Any
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
@@ -149,17 +148,14 @@ def check_ema_tsi_signal(candles: List[List[str]],
     signal_values = tsi_data['signal']
 
     # Получаем значения на последней свече
-    last_idx = -1
-    prev_idx = -2
+    current_ema1 = ema1[-1]
+    current_ema2 = ema2[-1]
+    current_ema3 = ema3[-1]
 
-    current_ema1 = ema1[last_idx]
-    current_ema2 = ema2[last_idx]
-    current_ema3 = ema3[last_idx]
-
-    current_tsi = tsi_values[last_idx]
-    current_signal = signal_values[last_idx]
-    prev_tsi = tsi_values[prev_idx]
-    prev_signal = signal_values[prev_idx]
+    current_tsi = tsi_values[-1]
+    current_signal = signal_values[-1]
+    prev_tsi = tsi_values[-2]
+    prev_signal = signal_values[-2]
 
     # Проверяем EMA условия
     ema_uptrend = current_ema1 > current_ema2 > current_ema3  # EMA 7 > EMA 14 > EMA 28
@@ -184,7 +180,7 @@ def get_signal_details(candles: List[List[str]],
                        ema3_period: int = 28,
                        tsi_long: int = 25,
                        tsi_short: int = 13,
-                       tsi_signal: int = 13) -> Dict:
+                       tsi_signal: int = 13) -> Dict[str, Any]:
     """
     Получение детальной информации о сигнале
 
@@ -294,4 +290,49 @@ def get_signal_details(candles: List[List[str]],
         'ema_alignment': ema_alignment,
         'tsi_crossover': tsi_crossover,
         'tsi_crossover_direction': 'UP' if tsi_crossover_up else ('DOWN' if tsi_crossover_down else 'NONE')
+    }
+
+
+def calculate_indicators_for_candles(candles: List[List[str]],
+                                   ema1_period: int = 7,
+                                   ema2_period: int = 14,
+                                   ema3_period: int = 28,
+                                   tsi_long: int = 25,
+                                   tsi_short: int = 13,
+                                   tsi_signal: int = 13) -> Dict[str, Any]:
+    """
+    Рассчитывает все индикаторы для свечей и возвращает их значения
+
+    Args:
+        candles: Данные свечей
+        ema1_period: Период первой EMA
+        ema2_period: Период второй EMA
+        ema3_period: Период третьей EMA
+        tsi_long: Длинный период TSI
+        tsi_short: Короткий период TSI
+        tsi_signal: Период сигнальной линии TSI
+
+    Returns:
+        Словарь с массивами значений индикаторов
+    """
+    if not candles:
+        return {}
+
+    # Извлекаем цены закрытия
+    prices = np.array([float(candle[4]) for candle in candles])
+
+    # Рассчитываем EMA
+    ema1_values = calculate_ema(prices, ema1_period)
+    ema2_values = calculate_ema(prices, ema2_period)
+    ema3_values = calculate_ema(prices, ema3_period)
+
+    # Рассчитываем TSI
+    tsi_data = calculate_tsi(candles, tsi_long, tsi_short, tsi_signal)
+
+    return {
+        'ema1_values': ema1_values.tolist(),
+        'ema2_values': ema2_values.tolist(),
+        'ema3_values': ema3_values.tolist(),
+        'tsi_values': tsi_data['tsi'].tolist(),
+        'tsi_signal_values': tsi_data['signal'].tolist()
     }
