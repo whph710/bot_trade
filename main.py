@@ -4,7 +4,8 @@ import logging
 import time
 from typing import List, Dict, Any
 import aiohttp
-from func_trade import get_signal_details, check_ema_tsi_signal
+import numpy as np
+from func_trade import get_signal_details, check_ema_tsi_signal, calculate_ema, calculate_tsi
 from func_async import get_klines_async
 from deepseek import deep_seek
 
@@ -41,6 +42,11 @@ class TradingSignalAnalyzer:
         self.tsi_long = tsi_long
         self.tsi_short = tsi_short
         self.tsi_signal = tsi_signal
+
+        # Рассчитываем необходимое количество свечей для анализа
+        self.required_candles_for_analysis = max(self.ema3_period, self.tsi_long, 50) + 50
+        # Для отправки в нейросеть берем последние 100 свечей
+        self.candles_for_ai = 100
 
         self.base_url = "https://api.bybit.com"
         self.session = None
@@ -92,10 +98,13 @@ class TradingSignalAnalyzer:
             logger.error(f"❌ Ошибка при получении торговых пар: {e}")
             return []
 
-    async def get_klines(self, symbol: str, interval: str = "15", limit: int = 200) -> List[List[str]]:
+    async def get_klines(self, symbol: str, interval: str = "15", limit: int = None) -> List[List[str]]:
         """
         Получение данных свечей для торговой пары
         """
+        if limit is None:
+            limit = self.required_candles_for_analysis
+
         try:
             url = f"{self.base_url}/v5/market/kline"
             params = {
@@ -108,7 +117,14 @@ class TradingSignalAnalyzer:
             async with self.session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data['result']['list']
+                    klines = data['result']['list']
+
+                    # Проверяем порядок и при необходимости разворачиваем
+                    if klines and len(klines) > 1:
+                        if int(klines[0][0]) > int(klines[-1][0]):
+                            klines.reverse()
+
+                    return klines
                 else:
                     logger.warning(f"⚠️  Ошибка получения данных для {symbol}: {response.status}")
                     return []
@@ -117,20 +133,48 @@ class TradingSignalAnalyzer:
             logger.warning(f"⚠️  Ошибка при получении свечей {symbol}: {e}")
             return []
 
+    def calculate_indicators_for_candles(self, candles: List[List[str]]) -> Dict[str, Any]:
+        """
+        Рассчитывает все индикаторы для свечей и возвращает их значения
+        """
+        if not candles or len(candles) < self.required_candles_for_analysis:
+            return {}
+
+        # Извлекаем цены закрытия
+        prices = np.array([float(candle[4]) for candle in candles])
+
+        # Рассчитываем EMA
+        ema1_values = calculate_ema(prices, self.ema1_period)
+        ema2_values = calculate_ema(prices, self.ema2_period)
+        ema3_values = calculate_ema(prices, self.ema3_period)
+
+        # Рассчитываем TSI
+        tsi_data = calculate_tsi(candles, self.tsi_long, self.tsi_short, self.tsi_signal)
+
+        return {
+            'ema1_values': ema1_values.tolist(),
+            'ema2_values': ema2_values.tolist(),
+            'ema3_values': ema3_values.tolist(),
+            'tsi_values': tsi_data['tsi'].tolist(),
+            'tsi_signal_values': tsi_data['signal'].tolist()
+        }
+
     async def analyze_pair(self, symbol: str) -> Dict[str, Any]:
         """
         Анализ одной торговой пары на наличие EMA+TSI сигнала
         """
         try:
-            # Получаем данные свечей
-            candles = await self.get_klines(symbol)
+            # Получаем данные свечей для анализа (больше данных)
+            candles = await self.get_klines(symbol, limit=self.required_candles_for_analysis)
 
-            if not candles or len(candles) < 50:
+            if not candles or len(candles) < self.required_candles_for_analysis:
                 return {
                     'pair': symbol,
                     'signal': 'NO_SIGNAL',
                     'reason': 'INSUFFICIENT_DATA',
-                    'details': {}
+                    'details': {},
+                    'candles': [],
+                    'indicators': {}
                 }
 
             # Анализируем сигнал
@@ -155,11 +199,42 @@ class TradingSignalAnalyzer:
                 self.tsi_signal
             )
 
-            return {
-                'pair': symbol,
-                'signal': signal,
-                'details': details
-            }
+            # Если есть сигнал, рассчитываем индикаторы для последних 100 свечей
+            if signal in ['LONG', 'SHORT']:
+                # Берем последние 100 свечей для отправки в нейросеть
+                candles_for_ai = candles[-self.candles_for_ai:] if len(candles) >= self.candles_for_ai else candles
+
+                # Рассчитываем индикаторы для этих свечей
+                indicators = self.calculate_indicators_for_candles(candles)
+
+                # Обрезаем индикаторы до соответствующего размера
+                if indicators:
+                    start_idx = len(candles) - len(candles_for_ai)
+                    indicators_for_ai = {
+                        'ema1_values': indicators['ema1_values'][start_idx:],
+                        'ema2_values': indicators['ema2_values'][start_idx:],
+                        'ema3_values': indicators['ema3_values'][start_idx:],
+                        'tsi_values': indicators['tsi_values'][start_idx:],
+                        'tsi_signal_values': indicators['tsi_signal_values'][start_idx:]
+                    }
+                else:
+                    indicators_for_ai = {}
+
+                return {
+                    'pair': symbol,
+                    'signal': signal,
+                    'details': details,
+                    'candles': candles_for_ai,
+                    'indicators': indicators_for_ai
+                }
+            else:
+                return {
+                    'pair': symbol,
+                    'signal': signal,
+                    'details': details,
+                    'candles': [],
+                    'indicators': {}
+                }
 
         except Exception as e:
             logger.warning(f"⚠️  Ошибка анализа {symbol}: {e}")
@@ -167,7 +242,9 @@ class TradingSignalAnalyzer:
                 'pair': symbol,
                 'signal': 'ERROR',
                 'reason': str(e),
-                'details': {}
+                'details': {},
+                'candles': [],
+                'indicators': {}
             }
 
     async def analyze_all_pairs(self) -> Dict[str, Any]:
@@ -191,7 +268,7 @@ class TradingSignalAnalyzer:
         logger.info(f"🔍 Начинаем анализ {len(pairs)} торговых пар...")
 
         # Анализируем все пары параллельно (батчами для избежания rate limit)
-        batch_size = 100  # Анализируем по 10 пар одновременно
+        batch_size = 50  # Анализируем по 50 пар одновременно
         all_results = []
 
         for i in range(0, len(pairs), batch_size):
@@ -214,7 +291,7 @@ class TradingSignalAnalyzer:
             logger.info(f"📈 Проанализировано: {min(i + batch_size, len(pairs))}/{len(pairs)} пар")
 
             # Небольшая пауза между батчами
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
 
         # Фильтруем только пары с сигналами (LONG или SHORT)
         pairs_with_signals = [
@@ -258,52 +335,67 @@ def load_prompt_from_file(filename: str = 'prompt.txt') -> str:
         return ""
 
 
-def format_pair_data_for_ai(pair_info: Dict[str, Any], candles: List[List[str]]) -> Dict[str, Any]:
+def format_pair_data_for_ai(pair_info: Dict[str, Any]) -> Dict[str, Any]:
     """
     Форматирование данных пары для отправки в ИИ
     """
-    return {
+    # Формируем структурированные данные для нейросети
+    formatted_data = {
         'pair': pair_info['pair'],
         'signal': pair_info['signal'],
-        'last_price': pair_info['details']['last_price'],
-        'ema1': pair_info['details']['ema1'],
-        'ema2': pair_info['details']['ema2'],
-        'ema3': pair_info['details']['ema3'],
-        'tsi_value': pair_info['details']['tsi_value'],
-        'tsi_signal_value': pair_info['details']['tsi_signal_value'],
-        'ema_alignment': pair_info['details']['ema_alignment'],
-        'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
-        'reason': pair_info['details']['reason'],
-        'candles': candles  # Добавляем свечи
+        'signal_details': {
+            'last_price': pair_info['details']['last_price'],
+            'ema1': pair_info['details']['ema1'],
+            'ema2': pair_info['details']['ema2'],
+            'ema3': pair_info['details']['ema3'],
+            'tsi_value': pair_info['details']['tsi_value'],
+            'tsi_signal_value': pair_info['details']['tsi_signal_value'],
+            'ema_alignment': pair_info['details']['ema_alignment'],
+            'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
+            'reason': pair_info['details']['reason']
+        },
+        'candles_data': {
+            'count': len(pair_info['candles']),
+            'candles': pair_info['candles']  # Полные данные свечей
+        },
+        'indicators_data': pair_info['indicators']  # Полные данные индикаторов
     }
+
+    return formatted_data
 
 
 def create_full_prompt(base_prompt: str, pair_data: Dict[str, Any]) -> str:
     """
     Создание полного промпта для отправки в ИИ
     """
-    # Создаем JSON с данными пары
-    pair_json = {
+    # Создаем сокращенную версию для лога (без полных массивов)
+    pair_summary = {
         'pair': pair_data['pair'],
         'signal': pair_data['signal'],
-        'last_price': pair_data['last_price'],
-        'ema1': pair_data['ema1'],
-        'ema2': pair_data['ema2'],
-        'ema3': pair_data['ema3'],
-        'tsi_value': pair_data['tsi_value'],
-        'tsi_signal_value': pair_data['tsi_signal_value'],
-        'ema_alignment': pair_data['ema_alignment'],
-        'tsi_crossover_direction': pair_data['tsi_crossover_direction'],
-        'reason': pair_data['reason']
+        'signal_details': pair_data['signal_details'],
+        'candles_count': pair_data['candles_data']['count'],
+        'indicators_count': {
+            'ema1_values': len(pair_data['indicators_data'].get('ema1_values', [])),
+            'ema2_values': len(pair_data['indicators_data'].get('ema2_values', [])),
+            'ema3_values': len(pair_data['indicators_data'].get('ema3_values', [])),
+            'tsi_values': len(pair_data['indicators_data'].get('tsi_values', [])),
+            'tsi_signal_values': len(pair_data['indicators_data'].get('tsi_signal_values', []))
+        }
     }
 
-    # Формируем полный промпт
-    full_prompt = f"{base_prompt}\n\nДанные пары:\n{json.dumps(pair_json, ensure_ascii=False, indent=2)}"
+    # Формируем полный промпт (с полными данными)
+    full_prompt = f"""{base_prompt}
+
+ДАННЫЕ ТОРГОВОЙ ПАРЫ:
+{json.dumps(pair_data, ensure_ascii=False, indent=2)}"""
+
+    logger.info(
+        f"📊 Подготовлены данные для {pair_data['pair']}: {json.dumps(pair_summary, ensure_ascii=False, indent=2)}")
 
     return full_prompt
 
 
-async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]], analyzer: TradingSignalAnalyzer):
+async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]]):
     """
     Обработка каждой пары отдельно с помощью нейросети
     """
@@ -322,19 +414,17 @@ async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]], analyzer: Trad
             try:
                 logger.info(f"🔍 Анализ пары {i}/{len(pairs_data)}: {pair_info['pair']}")
 
-                # Получаем свечи для этой пары
-                candles = await get_klines_async(pair_info['pair'], interval=15, limit=100)
-
-                if not candles:
-                    logger.warning(f"⚠️ Не удалось получить свечи для {pair_info['pair']}")
+                # Проверяем наличие данных
+                if not pair_info.get('candles') or not pair_info.get('indicators'):
+                    logger.warning(f"⚠️ Недостаточно данных для {pair_info['pair']}")
                     continue
 
                 # Форматируем данные пары
-                formatted_data = format_pair_data_for_ai(pair_info, candles)
+                formatted_data = format_pair_data_for_ai(pair_info)
 
                 # Создаем полный промпт
                 full_prompt = create_full_prompt(base_prompt, formatted_data)
-                print(full_prompt)
+
                 # Отправляем в нейросеть
                 logger.info(f"📤 Отправка в ИИ: {pair_info['pair']}")
                 ai_response = await deep_seek(full_prompt)
@@ -342,8 +432,8 @@ async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]], analyzer: Trad
                 # Логируем результат
                 logger.info(f"📥 Ответ ИИ для {pair_info['pair']}: {ai_response}")
 
-                # Небольшая пауза между запросами
-                await asyncio.sleep(1)
+                # Пауза между запросами
+                await asyncio.sleep(2)
 
             except Exception as e:
                 logger.error(f"❌ Ошибка обработки пары {pair_info['pair']}: {e}")
@@ -372,6 +462,12 @@ async def main():
                 tsi_short=6,  # Короткий период TSI
                 tsi_signal=6  # Период сигнальной линии TSI
         ) as analyzer:
+
+            logger.info(f"📊 Настройки анализатора:")
+            logger.info(f"   - Свечей для анализа: {analyzer.required_candles_for_analysis}")
+            logger.info(f"   - Свечей для ИИ: {analyzer.candles_for_ai}")
+            logger.info(f"   - EMA периоды: {analyzer.ema1_period}, {analyzer.ema2_period}, {analyzer.ema3_period}")
+            logger.info(f"   - TSI параметры: {analyzer.tsi_long}, {analyzer.tsi_short}, {analyzer.tsi_signal}")
 
             # Запускаем полный анализ
             result = await analyzer.analyze_all_pairs()
@@ -403,14 +499,18 @@ async def main():
 
                     for pair_data in result['pairs_data']:
                         signal_emoji = "📈" if pair_data['signal'] == 'LONG' else "📉"
+                        candles_count = len(pair_data.get('candles', []))
+                        indicators_ready = bool(pair_data.get('indicators'))
+
                         logger.info(f"{signal_emoji} {pair_data['pair']}: {pair_data['signal']} "
-                                    f"(Цена: {pair_data['details']['last_price']:.6f})")
+                                    f"(Цена: {pair_data['details']['last_price']:.6f}, "
+                                    f"Свечей: {candles_count}, Индикаторы: {'✅' if indicators_ready else '❌'})")
 
                     # Отправляем каждую пару в нейросеть
                     logger.info("=" * 70)
                     logger.info("🤖 АНАЛИЗ НЕЙРОСЕТЬЮ")
                     logger.info("=" * 70)
-                    await process_pairs_with_ai(result['pairs_data'], analyzer)
+                    await process_pairs_with_ai(result['pairs_data'])
 
                 else:
                     logger.info("🔍 Сигналы не найдены на текущий момент")
