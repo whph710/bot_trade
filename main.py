@@ -393,6 +393,27 @@ TSI SIGNAL VALUES: {pair_info['indicators']['tsi_signal_values']}
     return full_message
 
 
+def write_ai_response_to_file(pair_info: Dict[str, Any], ai_response: str):
+    """
+    Запись ответа нейросети в файл с немедленным сохранением
+    """
+    try:
+        with open('ai_responses.log', 'a', encoding='utf-8') as f:
+            f.write(f"\n{'=' * 80}\n")
+            f.write(
+                f"ПАРА: {pair_info['pair']} | СИГНАЛ: {pair_info['signal']} | ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"{'=' * 80}\n")
+            f.write(f"{ai_response}\n")
+
+            # КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Принудительно сбрасываем буфер
+            f.flush()
+
+        logger.info(f"✅ ПОДЭТАП ЗАВЕРШЕН: {pair_info['pair']} - ответ записан в файл")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка записи в файл для {pair_info['pair']}: {str(e)}")
+
+
 async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]]):
     """
     Обработка каждой пары отдельно с помощью нейросети
@@ -425,15 +446,8 @@ async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]]):
                 # Отправляем в нейросеть
                 ai_response = await deep_seek(ai_message)
 
-                # Сохраняем ответ в файл
-                with open('ai_responses.log', 'a', encoding='utf-8') as f:
-                    f.write(f"\n{'=' * 80}\n")
-                    f.write(
-                        f"ПАРА: {pair_info['pair']} | СИГНАЛ: {pair_info['signal']} | ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"{'=' * 80}\n")
-                    f.write(f"{ai_response}\n")
-
-                logger.info(f"✅ ПОДЭТАП ЗАВЕРШЕН: {pair_info['pair']} - ответ сохранен")
+                # ИЗМЕНЕНО: Используем отдельную функцию для записи с flush
+                write_ai_response_to_file(pair_info, ai_response)
 
                 # Пауза между запросами
                 await asyncio.sleep(2)
