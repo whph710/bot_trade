@@ -5,6 +5,8 @@ import time
 from typing import List, Dict, Any
 import aiohttp
 from func_trade import get_signal_details, check_ema_tsi_signal
+from func_async import get_klines_async
+from deepseek import deep_seek
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,14 +34,6 @@ class TradingSignalAnalyzer:
                  tsi_signal: int = 6):
         """
         Инициализация анализатора
-
-        Args:
-            ema1_period: Период быстрой EMA
-            ema2_period: Период средней EMA
-            ema3_period: Период медленной EMA
-            tsi_long: Длинный период TSI
-            tsi_short: Короткий период TSI
-            tsi_signal: Период сигнальной линии TSI
         """
         self.ema1_period = ema1_period
         self.ema2_period = ema2_period
@@ -64,14 +58,11 @@ class TradingSignalAnalyzer:
     async def get_trading_pairs(self) -> List[str]:
         """
         Получение списка всех торговых пар USDT
-
-        Returns:
-            Список торговых пар
         """
         try:
             url = f"{self.base_url}/v5/market/instruments-info"
             params = {
-                'category': 'spot'
+                'category': 'linear'
             }
 
             async with self.session.get(url, params=params) as response:
@@ -104,19 +95,11 @@ class TradingSignalAnalyzer:
     async def get_klines(self, symbol: str, interval: str = "15", limit: int = 200) -> List[List[str]]:
         """
         Получение данных свечей для торговой пары
-
-        Args:
-            symbol: Торговая пара
-            interval: Интервал (по умолчанию 15 минут)
-            limit: Количество свечей
-
-        Returns:
-            Список свечей в формате Bybit
         """
         try:
             url = f"{self.base_url}/v5/market/kline"
             params = {
-                'category': 'spot',
+                'category': 'linear',
                 'symbol': symbol,
                 'interval': interval,
                 'limit': limit
@@ -137,12 +120,6 @@ class TradingSignalAnalyzer:
     async def analyze_pair(self, symbol: str) -> Dict[str, Any]:
         """
         Анализ одной торговой пары на наличие EMA+TSI сигнала
-
-        Args:
-            symbol: Торговая пара
-
-        Returns:
-            Результат анализа пары
         """
         try:
             # Получаем данные свечей
@@ -196,9 +173,6 @@ class TradingSignalAnalyzer:
     async def analyze_all_pairs(self) -> Dict[str, Any]:
         """
         Анализ всех торговых пар на наличие сигналов
-
-        Returns:
-            Результат полного анализа
         """
         start_time = time.time()
 
@@ -217,7 +191,7 @@ class TradingSignalAnalyzer:
         logger.info(f"🔍 Начинаем анализ {len(pairs)} торговых пар...")
 
         # Анализируем все пары параллельно (батчами для избежания rate limit)
-        batch_size = 10  # Анализируем по 10 пар одновременно
+        batch_size = 100  # Анализируем по 10 пар одновременно
         all_results = []
 
         for i in range(0, len(pairs), batch_size):
@@ -269,6 +243,118 @@ class TradingSignalAnalyzer:
         }
 
 
+def load_prompt_from_file(filename: str = 'prompt.txt') -> str:
+    """
+    Загрузка промпта из файла
+    """
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        logger.error(f"❌ Файл {filename} не найден")
+        return ""
+    except Exception as e:
+        logger.error(f"❌ Ошибка чтения файла {filename}: {e}")
+        return ""
+
+
+def format_pair_data_for_ai(pair_info: Dict[str, Any], candles: List[List[str]]) -> Dict[str, Any]:
+    """
+    Форматирование данных пары для отправки в ИИ
+    """
+    return {
+        'pair': pair_info['pair'],
+        'signal': pair_info['signal'],
+        'last_price': pair_info['details']['last_price'],
+        'ema1': pair_info['details']['ema1'],
+        'ema2': pair_info['details']['ema2'],
+        'ema3': pair_info['details']['ema3'],
+        'tsi_value': pair_info['details']['tsi_value'],
+        'tsi_signal_value': pair_info['details']['tsi_signal_value'],
+        'ema_alignment': pair_info['details']['ema_alignment'],
+        'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
+        'reason': pair_info['details']['reason'],
+        'candles': candles  # Добавляем свечи
+    }
+
+
+def create_full_prompt(base_prompt: str, pair_data: Dict[str, Any]) -> str:
+    """
+    Создание полного промпта для отправки в ИИ
+    """
+    # Создаем JSON с данными пары
+    pair_json = {
+        'pair': pair_data['pair'],
+        'signal': pair_data['signal'],
+        'last_price': pair_data['last_price'],
+        'ema1': pair_data['ema1'],
+        'ema2': pair_data['ema2'],
+        'ema3': pair_data['ema3'],
+        'tsi_value': pair_data['tsi_value'],
+        'tsi_signal_value': pair_data['tsi_signal_value'],
+        'ema_alignment': pair_data['ema_alignment'],
+        'tsi_crossover_direction': pair_data['tsi_crossover_direction'],
+        'reason': pair_data['reason']
+    }
+
+    # Формируем полный промпт
+    full_prompt = f"{base_prompt}\n\nДанные пары:\n{json.dumps(pair_json, ensure_ascii=False, indent=2)}"
+
+    return full_prompt
+
+
+async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]], analyzer: TradingSignalAnalyzer):
+    """
+    Обработка каждой пары отдельно с помощью нейросети
+    """
+    try:
+        # Загружаем промпт из файла
+        base_prompt = load_prompt_from_file('prompt.txt')
+
+        if not base_prompt:
+            logger.error("❌ Не удалось загрузить промпт из файла prompt.txt")
+            return
+
+        logger.info(f"🤖 Начинаем обработку {len(pairs_data)} пар с помощью ИИ...")
+
+        # Обрабатываем каждую пару отдельно
+        for i, pair_info in enumerate(pairs_data, 1):
+            try:
+                logger.info(f"🔍 Анализ пары {i}/{len(pairs_data)}: {pair_info['pair']}")
+
+                # Получаем свечи для этой пары
+                candles = await get_klines_async(pair_info['pair'], interval=15, limit=100)
+
+                if not candles:
+                    logger.warning(f"⚠️ Не удалось получить свечи для {pair_info['pair']}")
+                    continue
+
+                # Форматируем данные пары
+                formatted_data = format_pair_data_for_ai(pair_info, candles)
+
+                # Создаем полный промпт
+                full_prompt = create_full_prompt(base_prompt, formatted_data)
+                print(full_prompt)
+                # Отправляем в нейросеть
+                logger.info(f"📤 Отправка в ИИ: {pair_info['pair']}")
+                ai_response = await deep_seek(full_prompt)
+
+                # Логируем результат
+                logger.info(f"📥 Ответ ИИ для {pair_info['pair']}: {ai_response}")
+
+                # Небольшая пауза между запросами
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки пары {pair_info['pair']}: {e}")
+                continue
+
+        logger.info("✅ Обработка пар завершена!")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка в process_pairs_with_ai: {e}")
+
+
 async def main():
     """
     Главная функция - запуск EMA+TSI анализа торговых пар
@@ -309,7 +395,7 @@ async def main():
                 total_signals = signal_counts['LONG'] + signal_counts['SHORT']
                 logger.info(f"🎯 Всего сигналов найдено: {total_signals}")
 
-                # Выводим найденные сигналы
+                # Обрабатываем найденные сигналы
                 if result['pairs_data']:
                     logger.info("=" * 70)
                     logger.info("🎯 НАЙДЕННЫЕ СИГНАЛЫ:")
@@ -320,10 +406,10 @@ async def main():
                         logger.info(f"{signal_emoji} {pair_data['pair']}: {pair_data['signal']} "
                                     f"(Цена: {pair_data['details']['last_price']:.6f})")
 
-                    # Сохраняем результаты
-                    save_results_to_file(result)
-
-                    # Отправляем каждую пару отдельно в нейросеть
+                    # Отправляем каждую пару в нейросеть
+                    logger.info("=" * 70)
+                    logger.info("🤖 АНАЛИЗ НЕЙРОСЕТЬЮ")
+                    logger.info("=" * 70)
                     await process_pairs_with_ai(result['pairs_data'], analyzer)
 
                 else:
@@ -339,293 +425,6 @@ async def main():
         logger.error(f"❌ Критическая ошибка в main(): {e}")
         import traceback
         logger.error(traceback.format_exc())
-
-
-def save_results_to_file(result: Dict[str, Any]):
-    """
-    Сохранение результатов анализа в файл
-
-    Args:
-        result: Результат анализа
-    """
-    try:
-        # Подготавливаем данные для сохранения
-        save_data = {
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'execution_time': result['execution_time'],
-            'total_pairs_checked': result['total_pairs_checked'],
-            'signal_counts': result['signal_counts'],
-            'signals_found': []
-        }
-
-        # Добавляем информацию о найденных сигналах
-        for pair_info in result['pairs_data']:
-            save_data['signals_found'].append({
-                'pair': pair_info['pair'],
-                'signal': pair_info['signal'],
-                'last_price': pair_info['details']['last_price'],
-                'ema1': pair_info['details']['ema1'],
-                'ema2': pair_info['details']['ema2'],
-                'ema3': pair_info['details']['ema3'],
-                'tsi_value': pair_info['details']['tsi_value'],
-                'tsi_signal_value': pair_info['details']['tsi_signal_value'],
-                'ema_alignment': pair_info['details']['ema_alignment'],
-                'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
-                'reason': pair_info['details']['reason']
-            })
-
-        # Сохраняем в JSON файл
-        with open('trading_analysis_result.json', 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, indent=2, ensure_ascii=False, default=str)
-
-        logger.info("💾 Результаты сохранены в файл 'trading_analysis_result.json'")
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения результатов: {e}")
-
-
-def load_prompt_from_file(filename: str) -> str:
-    """
-    Загрузка промпта из файла
-
-    Args:
-        filename: Имя файла с промптом
-
-    Returns:
-        Текст промпта или пустая строка при ошибке
-    """
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        logger.warning(f"⚠️  Файл {filename} не найден")
-        return ""
-    except Exception as e:
-        logger.error(f"❌ Ошибка чтения файла {filename}: {e}")
-        return ""
-
-
-def format_pair_data(pair_info: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Красивое форматирование данных пары для нейросети
-
-    Args:
-        pair_info: Информация о торговой паре
-
-    Returns:
-        Отформатированные данные
-    """
-    return {
-        'pair': pair_info['pair'],
-        'signal': pair_info['signal'],
-        'last_price': pair_info['details']['last_price'],
-        'ema1': pair_info['details']['ema1'],
-        'ema2': pair_info['details']['ema2'],
-        'ema3': pair_info['details']['ema3'],
-        'tsi_value': pair_info['details']['tsi_value'],
-        'tsi_signal_value': pair_info['details']['tsi_signal_value'],
-        'ema_alignment': pair_info['details']['ema_alignment'],
-        'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
-        'reason': pair_info['details']['reason']
-    }
-
-
-async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]], analyzer: TradingSignalAnalyzer):
-    """
-    Обработка каждой пары отдельно с помощью нейросети
-
-    Args:
-        pairs_data: Список пар с сигналами
-        analyzer: Экземпляр анализатора для получения свечей
-    """
-    try:
-        # Загружаем промпты из файлов
-        main_prompt = load_prompt_from_file('prompt_main.txt')
-        analysis_prompt = load_prompt_from_file('prompt_analysis.txt')
-
-        if not main_prompt or not analysis_prompt:
-            logger.warning("⚠️  Не удалось загрузить промпты из файлов, используем стандартные")
-            main_prompt = "Проанализируй торговый сигнал для криптовалютной пары:"
-            analysis_prompt = "Дай рекомендации по входу в позицию и риск-менеджменту."
-
-        logger.info(f"🤖 Начинаем обработку {len(pairs_data)} пар с помощью ИИ...")
-
-        # Создаем папку для результатов если её нет
-        import os
-        os.makedirs('ai_results', exist_ok=True)
-
-        # Обрабатываем каждую пару отдельно
-        for i, pair_info in enumerate(pairs_data, 1):
-            try:
-                logger.info(f"🔍 Анализ пары {i}/{len(pairs_data)}: {pair_info['pair']}")
-
-                # Получаем свечи для этой пары
-                candles = await analyzer.get_klines(pair_info['pair'], interval="15", limit=100)
-
-                # Форматируем данные пары
-                formatted_data = format_pair_data(pair_info)
-
-                # Создаем полный промпт для этой пары
-                full_prompt = create_single_pair_prompt(
-                    main_prompt,
-                    analysis_prompt,
-                    formatted_data,
-                    candles
-                )
-
-                # Сохраняем промпт для каждой пары
-                prompt_filename = f'ai_results/prompt_{pair_info["pair"]}_{pair_info["signal"]}.txt'
-                with open(prompt_filename, 'w', encoding='utf-8') as f:
-                    f.write(full_prompt)
-
-                logger.info(f"💾 Промпт для {pair_info['pair']} сохранен: {prompt_filename}")
-
-                # Здесь можно добавить отправку в API нейросети
-                # await send_to_openai_api(full_prompt, pair_info['pair'])
-
-                # Небольшая пауза между запросами
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                logger.error(f"❌ Ошибка обработки пары {pair_info['pair']}: {e}")
-                continue
-
-        logger.info("✅ Обработка пар завершена!")
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка в process_pairs_with_ai: {e}")
-
-
-def create_single_pair_prompt(main_prompt: str, analysis_prompt: str, pair_data: Dict[str, Any],
-                              candles: List[List[str]]) -> str:
-    """
-    Создание полного промпта для одной торговой пары
-
-    Args:
-        main_prompt: Основной промпт из файла
-        analysis_prompt: Промпт для анализа из файла
-        pair_data: Отформатированные данные пары
-        candles: Данные свечей
-
-    Returns:
-        Полный промпт для отправки в ИИ
-    """
-    # Основной промпт
-    prompt = f"{main_prompt}\n\n"
-
-    # Данные по паре
-    prompt += "ДАННЫЕ ТОРГОВОЙ ПАРЫ:\n"
-    prompt += "=" * 50 + "\n"
-    prompt += f"Пара: {pair_data['pair']}\n"
-    prompt += f"Сигнал: {pair_data['signal']}\n"
-    prompt += f"Текущая цена: {pair_data['last_price']:.6f}\n"
-    prompt += f"EMA7: {pair_data['ema1']:.6f}\n"
-    prompt += f"EMA14: {pair_data['ema2']:.6f}\n"
-    prompt += f"EMA28: {pair_data['ema3']:.6f}\n"
-    prompt += f"TSI: {pair_data['tsi_value']:.2f}\n"
-    prompt += f"TSI Signal: {pair_data['tsi_signal_value']:.2f}\n"
-    prompt += f"Направление EMA: {pair_data['ema_alignment']}\n"
-    prompt += f"Направление пересечения TSI: {pair_data['tsi_crossover_direction']}\n"
-    prompt += f"Причина сигнала: {pair_data['reason']}\n\n"
-
-    # Последние свечи (берем последние 20 для анализа)
-    if candles:
-        prompt += "ПОСЛЕДНИЕ СВЕЧИ (OHLCV):\n"
-        prompt += "=" * 50 + "\n"
-        prompt += "Timestamp | Open | High | Low | Close | Volume\n"
-        prompt += "-" * 50 + "\n"
-
-        # Берем последние 20 свечей и форматируем
-        recent_candles = candles[:20]  # Bybit возвращает в обратном порядке
-        for candle in recent_candles:
-            timestamp = candle[0]
-            open_price = float(candle[1])
-            high_price = float(candle[2])
-            low_price = float(candle[3])
-            close_price = float(candle[4])
-            volume = float(candle[5])
-
-            prompt += f"{timestamp} | {open_price:.6f} | {high_price:.6f} | {low_price:.6f} | {close_price:.6f} | {volume:.2f}\n"
-
-        prompt += "\n"
-
-    # Промпт для анализа
-    prompt += f"{analysis_prompt}\n"
-
-    return prompt
-
-
-async def send_to_ai_analysis(pairs_data: List[Dict[str, Any]]):
-    """
-    Отправка данных пар с сигналами для анализа нейросетью
-
-    Args:
-        pairs_data: Список пар с сигналами
-    """
-    try:
-        # Формируем текст для анализа ИИ
-        ai_prompt = create_ai_prompt(pairs_data)
-
-        logger.info("🤖 Подготовлен промпт для анализа ИИ:")
-        logger.info("=" * 50)
-        logger.info(ai_prompt)
-        logger.info("=" * 50)
-
-        # Здесь можно добавить отправку в OpenAI API, Claude API и т.д.
-        # Пока что просто сохраняем промпт в файл
-        with open('ai_analysis_prompt.txt', 'w', encoding='utf-8') as f:
-            f.write(ai_prompt)
-
-        logger.info("💾 Промпт для ИИ сохранен в файл 'ai_analysis_prompt.txt'")
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка подготовки анализа ИИ: {e}")
-
-
-def create_ai_prompt(pairs_data: List[Dict[str, Any]]) -> str:
-    """
-    Создание промпта для анализа нейросетью
-
-    Args:
-        pairs_data: Данные пар с сигналами
-
-    Returns:
-        Текст промпта
-    """
-    prompt = """Проанализируй торговые сигналы по криптовалютным парам на основе индикатора EMA+TSI:
-
-НАЙДЕННЫЕ СИГНАЛЫ:
-
-"""
-
-    for pair_data in pairs_data:
-        details = pair_data['details']
-        prompt += f"""
-Пара: {pair_data['pair']}
-Сигнал: {pair_data['signal']}
-Текущая цена: {details['last_price']:.6f}
-EMA7: {details['ema1']:.6f}
-EMA14: {details['ema2']:.6f}  
-EMA28: {details['ema3']:.6f}
-TSI: {details['tsi_value']:.2f}
-TSI Signal: {details['tsi_signal_value']:.2f}
-Направление EMA: {details['ema_alignment']}
-Направление пересечения TSI: {details['tsi_crossover_direction']}
-Причина сигнала: {details['reason']}
----"""
-
-    prompt += """
-
-ЗАДАЧА:
-1. Проанализируй качество найденных сигналов
-2. Определи наиболее перспективные пары для торговли
-3. Оцени общее состояние рынка на основе соотношения LONG/SHORT сигналов
-4. Дай рекомендации по риск-менеджменту
-5. Укажи на что обратить внимание при входе в позицию
-
-Ответ дай структурированно с конкретными рекомендациями."""
-
-    return prompt
 
 
 if __name__ == "__main__":
