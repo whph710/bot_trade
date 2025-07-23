@@ -66,6 +66,7 @@ class TradingSignalAnalyzer:
         Получение списка всех торговых пар USDT
         """
         try:
+            logger.info("🔍 ЭТАП: Получение списка торговых пар")
             url = f"{self.base_url}/v5/market/instruments-info"
             params = {
                 'category': 'linear'
@@ -87,15 +88,15 @@ class TradingSignalAnalyzer:
                                 not symbol.startswith('USDT')):  # Исключаем обратные пары
                             pairs.append(symbol)
 
-                    logger.info(f"📊 Найдено {len(pairs)} торговых пар USDT")
+                    logger.info(f"✅ ЭТАП ЗАВЕРШЕН: Найдено {len(pairs)} активных USDT пар")
                     return pairs
 
                 else:
-                    logger.error(f"❌ Ошибка получения торговых пар: {response.status}")
+                    logger.error(f"❌ ЭТАП ПРОВАЛЕН: Ошибка API получения пар - статус {response.status}")
                     return []
 
         except Exception as e:
-            logger.error(f"❌ Ошибка при получении торговых пар: {e}")
+            logger.error(f"❌ ЭТАП ПРОВАЛЕН: Критическая ошибка получения пар - {str(e)}")
             return []
 
     async def get_klines(self, symbol: str, interval: str = "15", limit: int = None) -> List[List[str]]:
@@ -126,11 +127,9 @@ class TradingSignalAnalyzer:
 
                     return klines
                 else:
-                    logger.warning(f"⚠️  Ошибка получения данных для {symbol}: {response.status}")
                     return []
 
         except Exception as e:
-            logger.warning(f"⚠️  Ошибка при получении свечей {symbol}: {e}")
             return []
 
     def calculate_indicators_for_candles(self, candles: List[List[str]]) -> Dict[str, Any]:
@@ -237,7 +236,6 @@ class TradingSignalAnalyzer:
                 }
 
         except Exception as e:
-            logger.warning(f"⚠️  Ошибка анализа {symbol}: {e}")
             return {
                 'pair': symbol,
                 'signal': 'ERROR',
@@ -252,11 +250,13 @@ class TradingSignalAnalyzer:
         Анализ всех торговых пар на наличие сигналов
         """
         start_time = time.time()
+        logger.info("🔍 ЭТАП: Массовый анализ торговых пар")
 
         # Получаем список торговых пар
         pairs = await self.get_trading_pairs()
 
         if not pairs:
+            logger.error("❌ ЭТАП ПРОВАЛЕН: Не удалось получить торговые пары")
             return {
                 'success': False,
                 'message': 'Не удалось получить список торговых пар',
@@ -265,7 +265,7 @@ class TradingSignalAnalyzer:
                 'execution_time': 0
             }
 
-        logger.info(f"🔍 Начинаем анализ {len(pairs)} торговых пар...")
+        logger.info(f"📊 ЭТАП: Анализ {len(pairs)} пар на сигналы")
 
         # Анализируем все пары параллельно (батчами для избежания rate limit)
         batch_size = 50  # Анализируем по 50 пар одновременно
@@ -283,12 +283,13 @@ class TradingSignalAnalyzer:
             # Добавляем результаты
             for result in batch_results:
                 if isinstance(result, Exception):
-                    logger.error(f"❌ Исключение при анализе: {result}")
+                    logger.error(f"❌ Исключение при анализе пары: {result}")
                 else:
                     all_results.append(result)
 
             # Прогресс
-            logger.info(f"📈 Проанализировано: {min(i + batch_size, len(pairs))}/{len(pairs)} пар")
+            progress = min(i + batch_size, len(pairs))
+            logger.info(f"⏳ ПРОГРЕСС: {progress}/{len(pairs)} пар проанализировано")
 
             # Небольшая пауза между батчами
             await asyncio.sleep(0.2)
@@ -310,6 +311,8 @@ class TradingSignalAnalyzer:
 
         execution_time = time.time() - start_time
 
+        logger.info(f"✅ ЭТАП ЗАВЕРШЕН: Найдено {len(pairs_with_signals)} сигналов за {execution_time:.1f}сек")
+
         return {
             'success': True,
             'pairs_data': pairs_with_signals,  # Только пары с сигналами
@@ -325,74 +328,69 @@ def load_prompt_from_file(filename: str = 'prompt.txt') -> str:
     Загрузка промпта из файла
     """
     try:
+        logger.info(f"📄 ЭТАП: Загрузка промпта из {filename}")
         with open(filename, 'r', encoding='utf-8') as f:
-            return f.read().strip()
+            content = f.read().strip()
+        logger.info("✅ ЭТАП ЗАВЕРШЕН: Промпт успешно загружен")
+        return content
     except FileNotFoundError:
-        logger.error(f"❌ Файл {filename} не найден")
+        logger.error(f"❌ ЭТАП ПРОВАЛЕН: Файл {filename} не найден")
         return ""
     except Exception as e:
-        logger.error(f"❌ Ошибка чтения файла {filename}: {e}")
+        logger.error(f"❌ ЭТАП ПРОВАЛЕН: Ошибка чтения {filename} - {str(e)}")
         return ""
 
 
-def format_pair_data_for_ai(pair_info: Dict[str, Any]) -> Dict[str, Any]:
+def create_ai_message(base_prompt: str, pair_info: Dict[str, Any]) -> str:
     """
-    Форматирование данных пары для отправки в ИИ
+    Создание правильно структурированного сообщения для ИИ
     """
-    # Формируем структурированные данные для нейросети
-    formatted_data = {
-        'pair': pair_info['pair'],
-        'signal': pair_info['signal'],
-        'signal_details': {
-            'last_price': pair_info['details']['last_price'],
-            'ema1': pair_info['details']['ema1'],
-            'ema2': pair_info['details']['ema2'],
-            'ema3': pair_info['details']['ema3'],
-            'tsi_value': pair_info['details']['tsi_value'],
-            'tsi_signal_value': pair_info['details']['tsi_signal_value'],
-            'ema_alignment': pair_info['details']['ema_alignment'],
-            'tsi_crossover_direction': pair_info['details']['tsi_crossover_direction'],
-            'reason': pair_info['details']['reason']
-        },
-        'candles_data': {
-            'count': len(pair_info['candles']),
-            'candles': pair_info['candles']  # Полные данные свечей
-        },
-        'indicators_data': pair_info['indicators']  # Полные данные индикаторов
-    }
+    # Извлекаем детали сигнала
+    details = pair_info['details']
 
-    return formatted_data
+    # Формируем заголовок с ключевой информацией для анализа
+    analysis_header = f"""=== ДАННЫЕ ДЛЯ АНАЛИЗА ===
+ТОРГОВАЯ ПАРА: {pair_info['pair']}
+ТИП СИГНАЛА: {pair_info['signal']} ({details['reason']})
+ТЕКУЩАЯ ЦЕНА: {details['last_price']:.6f}
+ТАЙМФРЕЙМ: 15 минут
+КОЛИЧЕСТВО СВЕЧЕЙ: {len(pair_info['candles'])}
+РАСПОЛОЖЕНИЕ EMA: {details['ema_alignment']}
+НАПРАВЛЕНИЕ TSI: {details['tsi_crossover_direction']}
+"""
 
+    # Формируем данные индикаторов
+    indicators_section = f"""=== ЗНАЧЕНИЯ ИНДИКАТОРОВ ===
+EMA7 (текущее): {details['ema1']:.6f}
+EMA14 (текущее): {details['ema2']:.6f} 
+EMA28 (текущее): {details['ema3']:.6f}
+TSI (текущее): {details['tsi_value']:.2f}
+TSI Signal (текущее): {details['tsi_signal_value']:.2f}
 
-def create_full_prompt(base_prompt: str, pair_data: Dict[str, Any]) -> str:
-    """
-    Создание полного промпта для отправки в ИИ
-    """
-    # Создаем сокращенную версию для лога (без полных массивов)
-    pair_summary = {
-        'pair': pair_data['pair'],
-        'signal': pair_data['signal'],
-        'signal_details': pair_data['signal_details'],
-        'candles_count': pair_data['candles_data']['count'],
-        'indicators_count': {
-            'ema1_values': len(pair_data['indicators_data'].get('ema1_values', [])),
-            'ema2_values': len(pair_data['indicators_data'].get('ema2_values', [])),
-            'ema3_values': len(pair_data['indicators_data'].get('ema3_values', [])),
-            'tsi_values': len(pair_data['indicators_data'].get('tsi_values', [])),
-            'tsi_signal_values': len(pair_data['indicators_data'].get('tsi_signal_values', []))
-        }
-    }
+EMA7 VALUES: {pair_info['indicators']['ema1_values']}
+EMA14 VALUES: {pair_info['indicators']['ema2_values']}
+EMA28 VALUES: {pair_info['indicators']['ema3_values']}
+TSI VALUES: {pair_info['indicators']['tsi_values']}
+TSI SIGNAL VALUES: {pair_info['indicators']['tsi_signal_values']}
+"""
 
-    # Формируем полный промпт (с полными данными)
-    full_prompt = f"""{base_prompt}
+    # Формируем свечные данные
+    candles_section = f"""=== СВЕЧНОЙ ГРАФИК (последние {len(pair_info['candles'])} свечей) ===
+Формат: [timestamp, open, high, low, close, volume, turnover]
+{json.dumps(pair_info['candles'], indent=2)}
+"""
 
-ДАННЫЕ ТОРГОВОЙ ПАРЫ:
-{json.dumps(pair_data, ensure_ascii=False, indent=2)}"""
+    # Собираем полное сообщение
+    full_message = f"""{base_prompt}
 
-    logger.info(
-        f"📊 Подготовлены данные для {pair_data['pair']}: {json.dumps(pair_summary, ensure_ascii=False, indent=2)}")
+{analysis_header}
 
-    return full_prompt
+{indicators_section}
+
+{candles_section}
+"""
+
+    return full_message
 
 
 async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]]):
@@ -400,49 +398,54 @@ async def process_pairs_with_ai(pairs_data: List[Dict[str, Any]]):
     Обработка каждой пары отдельно с помощью нейросети
     """
     try:
+        logger.info("🤖 ЭТАП: Подготовка к анализу нейросетью")
+
         # Загружаем промпт из файла
         base_prompt = load_prompt_from_file('prompt.txt')
 
         if not base_prompt:
-            logger.error("❌ Не удалось загрузить промпт из файла prompt.txt")
+            logger.error("❌ ЭТАП ПРОВАЛЕН: Промпт не загружен, прерываем анализ ИИ")
             return
 
-        logger.info(f"🤖 Начинаем обработку {len(pairs_data)} пар с помощью ИИ...")
+        logger.info(f"🔄 ЭТАП: Обработка {len(pairs_data)} пар нейросетью")
 
         # Обрабатываем каждую пару отдельно
         for i, pair_info in enumerate(pairs_data, 1):
             try:
-                logger.info(f"🔍 Анализ пары {i}/{len(pairs_data)}: {pair_info['pair']}")
+                logger.info(f"📤 ПОДЭТАП: Отправка {i}/{len(pairs_data)} - {pair_info['pair']} ({pair_info['signal']})")
 
                 # Проверяем наличие данных
                 if not pair_info.get('candles') or not pair_info.get('indicators'):
-                    logger.warning(f"⚠️ Недостаточно данных для {pair_info['pair']}")
+                    logger.warning(f"⚠️ ПОДЭТАП ПРОПУЩЕН: Недостаточно данных для {pair_info['pair']}")
                     continue
 
-                # Форматируем данные пары
-                formatted_data = format_pair_data_for_ai(pair_info)
-
-                # Создаем полный промпт
-                full_prompt = create_full_prompt(base_prompt, formatted_data)
+                # Создаем правильно структурированное сообщение
+                ai_message = create_ai_message(base_prompt, pair_info)
 
                 # Отправляем в нейросеть
-                logger.info(f"📤 Отправка в ИИ: {pair_info['pair']}")
-                ai_response = await deep_seek(full_prompt)
+                ai_response = await deep_seek(ai_message)
 
-                # Логируем результат
-                logger.info(f"📥 Ответ ИИ для {pair_info['pair']}: {ai_response}")
+                # Сохраняем ответ в файл
+                with open('ai_responses.log', 'a', encoding='utf-8') as f:
+                    f.write(f"\n{'=' * 80}\n")
+                    f.write(
+                        f"ПАРА: {pair_info['pair']} | СИГНАЛ: {pair_info['signal']} | ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"{'=' * 80}\n")
+                    f.write(f"{ai_response}\n")
+
+                logger.info(f"✅ ПОДЭТАП ЗАВЕРШЕН: {pair_info['pair']} - ответ сохранен")
 
                 # Пауза между запросами
                 await asyncio.sleep(2)
 
             except Exception as e:
-                logger.error(f"❌ Ошибка обработки пары {pair_info['pair']}: {e}")
+                logger.error(f"❌ ПОДЭТАП ПРОВАЛЕН: Ошибка обработки {pair_info['pair']} - {str(e)}")
                 continue
 
-        logger.info("✅ Обработка пар завершена!")
+        logger.info("✅ ЭТАП ЗАВЕРШЕН: Все пары обработаны нейросетью")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка в process_pairs_with_ai: {e}")
+        logger.error(f"❌ ЭТАП ПРОВАЛЕН: Критическая ошибка анализа ИИ - {str(e)}")
 
 
 async def main():
@@ -450,8 +453,7 @@ async def main():
     Главная функция - запуск EMA+TSI анализа торговых пар
     """
     try:
-        logger.info("🚀 ЗАПУСК EMA+TSI ТОРГОВОГО БОТА")
-        logger.info("=" * 70)
+        logger.info("🚀 СТАРТ: Запуск EMA+TSI торгового бота")
 
         # Создаем анализатор с настройками индикаторов
         async with TradingSignalAnalyzer(
@@ -463,66 +465,44 @@ async def main():
                 tsi_signal=6  # Период сигнальной линии TSI
         ) as analyzer:
 
-            logger.info(f"📊 Настройки анализатора:")
-            logger.info(f"   - Свечей для анализа: {analyzer.required_candles_for_analysis}")
-            logger.info(f"   - Свечей для ИИ: {analyzer.candles_for_ai}")
-            logger.info(f"   - EMA периоды: {analyzer.ema1_period}, {analyzer.ema2_period}, {analyzer.ema3_period}")
-            logger.info(f"   - TSI параметры: {analyzer.tsi_long}, {analyzer.tsi_short}, {analyzer.tsi_signal}")
+            logger.info(
+                f"⚙️ НАСТРОЙКИ: EMA({analyzer.ema1_period},{analyzer.ema2_period},{analyzer.ema3_period}) | TSI({analyzer.tsi_long},{analyzer.tsi_short},{analyzer.tsi_signal})")
 
             # Запускаем полный анализ
             result = await analyzer.analyze_all_pairs()
 
             # Обрабатываем результат
             if result['success']:
-                logger.info("=" * 70)
-                logger.info("✅ АНАЛИЗ УСПЕШНО ЗАВЕРШЕН")
-                logger.info("=" * 70)
+                logger.info("🎯 РЕЗУЛЬТАТ: Анализ завершен успешно")
 
-                # Выводим основную статистику
-                logger.info(f"⏱️  Время выполнения: {result['execution_time']:.2f} секунд")
-                logger.info(f"📊 Проверено пар: {result['total_pairs_checked']}")
-
-                # Детальная статистика сигналов
+                # Основная статистика
                 signal_counts = result['signal_counts']
-                logger.info(f"📈 LONG сигналы: {signal_counts['LONG']}")
-                logger.info(f"📉 SHORT сигналы: {signal_counts['SHORT']}")
-                logger.info(f"⚪ Без сигналов: {signal_counts['NO_SIGNAL']}")
-
                 total_signals = signal_counts['LONG'] + signal_counts['SHORT']
-                logger.info(f"🎯 Всего сигналов найдено: {total_signals}")
+
+                logger.info(
+                    f"📊 СТАТИСТИКА: {total_signals} сигналов из {result['total_pairs_checked']} пар за {result['execution_time']:.1f}сек")
+                logger.info(f"📈 LONG: {signal_counts['LONG']} | 📉 SHORT: {signal_counts['SHORT']}")
 
                 # Обрабатываем найденные сигналы
                 if result['pairs_data']:
-                    logger.info("=" * 70)
                     logger.info("🎯 НАЙДЕННЫЕ СИГНАЛЫ:")
-                    logger.info("=" * 70)
-
                     for pair_data in result['pairs_data']:
                         signal_emoji = "📈" if pair_data['signal'] == 'LONG' else "📉"
-                        candles_count = len(pair_data.get('candles', []))
-                        indicators_ready = bool(pair_data.get('indicators'))
-
-                        logger.info(f"{signal_emoji} {pair_data['pair']}: {pair_data['signal']} "
-                                    f"(Цена: {pair_data['details']['last_price']:.6f}, "
-                                    f"Свечей: {candles_count}, Индикаторы: {'✅' if indicators_ready else '❌'})")
+                        logger.info(f"{signal_emoji} {pair_data['pair']}: {pair_data['details']['last_price']:.6f}")
 
                     # Отправляем каждую пару в нейросеть
-                    logger.info("=" * 70)
-                    logger.info("🤖 АНАЛИЗ НЕЙРОСЕТЬЮ")
-                    logger.info("=" * 70)
                     await process_pairs_with_ai(result['pairs_data'])
 
                 else:
-                    logger.info("🔍 Сигналы не найдены на текущий момент")
+                    logger.info("🔍 РЕЗУЛЬТАТ: Сигналы не найдены")
 
             else:
-                logger.error("❌ АНАЛИЗ ЗАВЕРШИЛСЯ С ОШИБКОЙ")
-                logger.error(f"Причина: {result.get('message', 'Unknown error')}")
+                logger.error(f"❌ ФИНАЛ: Анализ завершился с ошибкой - {result.get('message', 'Unknown error')}")
 
     except KeyboardInterrupt:
-        logger.info("🛑 Анализ прерван пользователем")
+        logger.info("🛑 ПРЕРЫВАНИЕ: Остановлено пользователем")
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка в main(): {e}")
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
 
