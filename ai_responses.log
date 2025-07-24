@@ -96,3 +96,26 @@
 ```json
 {"coin": "LTCUSDT", "direction": "short", "entry_price": 112.50, "stop_loss": 113.50, "take_profit": 110.50, "leverage": "3x"}
 ```
+
+================================================================================
+ПАРА: ALEOUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 14:25:06
+МЕТРИКИ: EMA_SPREAD=3.75% | TSI_MOMENTUM=0.91 | VOLUME_SPIKE=0.99x | TREND=STRONG_UP
+================================================================================
+```json
+{"coin": "ALEOUSDT", "direction": "long", "entry_price": 0.3084, "stop_loss": 0.2984, "take_profit": 0.3184, "leverage": "5x"}
+```
+
+================================================================================
+ПАРА: JUPUSDT | СИГНАЛ: SHORT | ВРЕМЯ: 2025-07-24 14:25:18
+МЕТРИКИ: EMA_SPREAD=2.41% | TSI_MOMENTUM=9.19 | VOLUME_SPIKE=1.54x | TREND=STRONG_DOWN
+================================================================================
+```json
+{"coin": "JUPUSDT", "direction": "short", "entry_price": 0.5321, "stop_loss": 0.5422, "take_profit": 0.5220, "leverage": "5x"}
+```
+================================================================================
+ПАРА: MUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 15:39:35
+МЕТРИКИ: EMA_SPREAD=1.36% | TSI_MOMENTUM=4.26 | VOLUME_SPIKE=0.25x | TREND=STRONG_UP
+================================================================================
+```json
+{"coin": "MUSDT", "direction": "long", "entry_price": 0.4559, "stop_loss": 0.4492, "take_profit": 0.4650, "leverage": "5x"}
+```
