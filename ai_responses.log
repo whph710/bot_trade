@@ -1,118 +1,80 @@
 ================================================================================
-ПАРА: ALEOUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 14:25:06
-МЕТРИКИ: EMA_SPREAD=3.75% | TSI_MOMENTUM=0.91 | VOLUME_SPIKE=0.99x | TREND=STRONG_UP
-================================================================================
+ПАРА: DUCKUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-28 16:40:01
+ЦЕНА: 0.005066
+НАПРАВЛЕНИЕ ТРЕНДА: STRONG_UP
+
+РАСШИРЕННЫЕ МЕТРИКИ СИЛЫ:
+- EMA Spread: 1.19%
+- TSI Momentum: 0.0
+- Volume Spike: 1.61x
+- Price Move: 3.43%
+- RSI Strength: 16.09
+- Level Proximity: 0
+- MTF Confluence: True
+
+ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ:
+- 1H Trend: BULLISH
+- 4H Trend: BULLISH
+- Current ATR: 0.000047
+- RSI Divergences: 0
+- Volume Spikes: 10
+
+ОТВЕТ ИИ:
 ```json
-{"coin": "ALEOUSDT", "direction": "long", "entry_price": 0.3084, "stop_loss": 0.2984, "take_profit": 0.3184, "leverage": "5x"}
+{"coin": "DUCKUSDT", "direction": "long", "entry_price": 0.005066, "stop_loss": 0.004995, "take_profit": 0.005117, "leverage": "5x"}
 ```
+================================================================================
 
 ================================================================================
-ПАРА: JUPUSDT | СИГНАЛ: SHORT | ВРЕМЯ: 2025-07-24 14:25:18
-МЕТРИКИ: EMA_SPREAD=2.41% | TSI_MOMENTUM=9.19 | VOLUME_SPIKE=1.54x | TREND=STRONG_DOWN
-================================================================================
+ПАРА: SOLVUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-28 16:40:14
+ЦЕНА: 0.043920
+НАПРАВЛЕНИЕ ТРЕНДА: STRONG_UP
+
+РАСШИРЕННЫЕ МЕТРИКИ СИЛЫ:
+- EMA Spread: 1.09%
+- TSI Momentum: 0.0
+- Volume Spike: 2.1x
+- Price Move: 5.88%
+- RSI Strength: 18.51
+- Level Proximity: 0
+- MTF Confluence: True
+
+ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ:
+- 1H Trend: BULLISH
+- 4H Trend: BULLISH
+- Current ATR: 0.000270
+- RSI Divergences: 0
+- Volume Spikes: 8
+
+ОТВЕТ ИИ:
 ```json
-{"coin": "JUPUSDT", "direction": "short", "entry_price": 0.5321, "stop_loss": 0.5422, "take_profit": 0.5220, "leverage": "5x"}
+{"coin": "SOLVUSDT", "direction": "long", "entry_price": 0.04392, "stop_loss": 0.04333, "take_profit": 0.04436, "leverage": "5x"}
 ```
 ================================================================================
-ПАРА: MUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 15:39:35
-МЕТРИКИ: EMA_SPREAD=1.36% | TSI_MOMENTUM=4.26 | VOLUME_SPIKE=0.25x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "MUSDT", "direction": "long", "entry_price": 0.4559, "stop_loss": 0.4492, "take_profit": 0.4650, "leverage": "5x"}
-```
 
 ================================================================================
-ПАРА: REXUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 19:27:49
-МЕТРИКИ: EMA_SPREAD=11.74% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.94x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "REXUSDT", "direction": "long", "entry_price": 0.02324, "stop_loss": 0.02214, "take_profit": 0.025, "leverage": "5x"}
-```
+ПАРА: HFTUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-28 16:40:26
+ЦЕНА: 0.095550
+НАПРАВЛЕНИЕ ТРЕНДА: WEAK_UP
 
-================================================================================
-ПАРА: FHEUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 21:09:06
-МЕТРИКИ: EMA_SPREAD=0.84% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=3.68x | TREND=WEAK_UP
-================================================================================
-```json
-{"coin": "FHEUSDT", "direction": "long", "entry_price": 0.05882, "stop_loss": 0.05783, "take_profit": 0.05982, "leverage": "5x"}
-```
+РАСШИРЕННЫЕ МЕТРИКИ СИЛЫ:
+- EMA Spread: 0.52%
+- TSI Momentum: 0.0
+- Volume Spike: 1.84x
+- Price Move: 17.4%
+- RSI Strength: 7.34
+- Level Proximity: 0
+- MTF Confluence: True
 
-================================================================================
-ПАРА: GIGAUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 21:09:21
-МЕТРИКИ: EMA_SPREAD=0.83% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=4.15x | TREND=WEAK_UP
-================================================================================
-```json
-{"coin": "GIGAUSDT", "direction": "long", "entry_price": 0.02089, "stop_loss": 0.02051, "take_profit": 0.02127, "leverage": "3x"}
-```
+ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ:
+- 1H Trend: BULLISH
+- 4H Trend: BULLISH
+- Current ATR: 0.001659
+- RSI Divergences: 0
+- Volume Spikes: 10
 
-================================================================================
-ПАРА: MAJORUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-24 21:09:34
-МЕТРИКИ: EMA_SPREAD=1.65% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=8.42x | TREND=STRONG_UP
-================================================================================
+ОТВЕТ ИИ:
 ```json
-{"coin": "MAJORUSDT", "direction": "long", "entry_price": 0.1796, "stop_loss": 0.1728, "take_profit": 0.1864, "leverage": "5x"}
+{"coin": "HFTUSDT", "direction": "long", "entry_price": 0.09555, "stop_loss": 0.09223, "take_profit": 0.09651, "leverage": "5x"}
 ```
-
 ================================================================================
-ПАРА: BBUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-26 23:09:39
-МЕТРИКИ: EMA_SPREAD=0.24% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=6.7x | TREND=WEAK_UP
-================================================================================
-```json
-{"coin": "BBUSDT", "direction": "long", "entry_price": 0.1124, "stop_loss": 0.1106, "take_profit": 0.1142, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: COOKUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-26 23:09:51
-МЕТРИКИ: EMA_SPREAD=0.66% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.24x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "COOKUSDT", "direction": "long", "entry_price": 0.010097, "stop_loss": 0.010014, "take_profit": 0.01018, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: FRAGUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-26 23:10:01
-МЕТРИКИ: EMA_SPREAD=0.5% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.1x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": null}
-```
-
-================================================================================
-ПАРА: AGTUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-27 11:25:10
-МЕТРИКИ: EMA_SPREAD=2.02% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=2.07x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "AGTUSDT", "direction": "long", "entry_price": 0.006097, "stop_loss": 0.005968, "take_profit": 0.006254, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: ALUUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-27 11:25:21
-МЕТРИКИ: EMA_SPREAD=1.33% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=1.17x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "ALUUSDT", "direction": "long", "entry_price": 0.00634, "stop_loss": 0.00618, "take_profit": 0.00650, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: COTIUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-27 23:01:03
-МЕТРИКИ: EMA_SPREAD=0.69% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.02x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "COTIUSDT", "direction": "long", "entry_price": 0.06156, "stop_loss": 0.06119, "take_profit": 0.06218, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: EIGENUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-27 23:01:18
-МЕТРИКИ: EMA_SPREAD=1.07% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.27x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "EIGENUSDT", "direction": "long", "entry_price": 1.4173, "stop_loss": 1.4094, "take_profit": 1.4315, "leverage": "5x"}
-```
-
-================================================================================
-ПАРА: GTCUSDT | СИГНАЛ: LONG | ВРЕМЯ: 2025-07-27 23:01:32 +
-МЕТРИКИ: EMA_SPREAD=0.82% | TSI_MOMENTUM=0.0 | VOLUME_SPIKE=0.31x | TREND=STRONG_UP
-================================================================================
-```json
-{"coin": "GTCUSDT", "direction": "long", "entry_price": 0.3074, "stop_loss": 0.3058, "take_profit": 0.3105, "leverage": "5x"}
-```
