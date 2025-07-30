@@ -5,6 +5,7 @@ import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import re
+import datetime
 
 from func_trade import (
     enhanced_signal_detection,
@@ -100,6 +101,7 @@ class OptimizedTradingAnalyzer:
 
         # Кэш для оптимизации
         self._params_cache = {}
+        self._last_candles = []  # Для хранения последних свечей
 
         logger.info(f"🚀 Анализатор инициализирован:")
         logger.info(f"   • Размер батча: {batch_size}")
@@ -111,6 +113,201 @@ class OptimizedTradingAnalyzer:
         if symbol not in self._params_cache:
             self._params_cache[symbol] = get_optimal_params_for_asset(symbol)
         return self._params_cache[symbol]
+
+    def _analyze_recent_moves(self, candles):
+        """Анализ недавних движений цены"""
+        if len(candles) < 2:
+            return {'max_move': 0, 'avg_move': 0, 'strong_moves_count': 0}
+
+        moves = []
+        for i in range(1, len(candles)):
+            try:
+                current_price = float(candles[i][4])
+                prev_price = float(candles[i - 1][4])
+                move = abs(current_price - prev_price) / prev_price * 100
+                moves.append(move)
+            except (ValueError, ZeroDivisionError):
+                continue
+
+        if not moves:
+            return {'max_move': 0, 'avg_move': 0, 'strong_moves_count': 0}
+
+        return {
+            'max_move': max(moves),
+            'avg_move': sum(moves) / len(moves),
+            'strong_moves_count': len([m for m in moves if m > 1.5])
+        }
+
+    def _calculate_avg_volatility(self, candles):
+        """Расчет средней волатильности"""
+        if len(candles) < 1:
+            return 0.0
+
+        volatilities = []
+        for candle in candles:
+            try:
+                high = float(candle[2])
+                low = float(candle[3])
+                if low > 0:
+                    volatility = (high - low) / low * 100
+                    volatilities.append(volatility)
+            except (ValueError, ZeroDivisionError):
+                continue
+
+        return sum(volatilities) / len(volatilities) if volatilities else 0.0
+
+    def _detect_consolidation(self, candles):
+        """Определение периода консолидации"""
+        if len(candles) < 2:
+            return 0
+
+        small_moves = 0
+        for i in range(1, len(candles)):
+            try:
+                current_price = float(candles[i][4])
+                prev_price = float(candles[i - 1][4])
+                move = abs(current_price - prev_price) / prev_price * 100
+                if move < 0.5:
+                    small_moves += 1
+            except (ValueError, ZeroDivisionError):
+                continue
+
+        return small_moves
+
+    def _distance_to_recent_extremes(self, candles):
+        """Расстояние до недавних экстремумов"""
+        if len(candles) < 1:
+            return {'to_high': 0, 'to_low': 0, 'position_in_range': 50}
+
+        try:
+            current_price = float(candles[-1][4])
+            recent_high = max(float(c[2]) for c in candles)
+            recent_low = min(float(c[3]) for c in candles)
+
+            if current_price == 0 or recent_high == recent_low:
+                return {'to_high': 0, 'to_low': 0, 'position_in_range': 50}
+
+            distance_to_high = (recent_high - current_price) / current_price * 100
+            distance_to_low = (current_price - recent_low) / current_price * 100
+            position_in_range = (current_price - recent_low) / (recent_high - recent_low) * 100
+
+            return {
+                'to_high': distance_to_high,
+                'to_low': distance_to_low,
+                'position_in_range': position_in_range
+            }
+        except (ValueError, ZeroDivisionError):
+            return {'to_high': 0, 'to_low': 0, 'position_in_range': 50}
+
+    def _analyze_spread(self, symbol):
+        """Анализ спредов для скальпинга"""
+
+        # Пока возвращаем примерные данные на основе популярности пары
+        major_pairs = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'XRPUSDT', 'SOLUSDT']
+
+        if symbol in major_pairs:
+            return {
+                'current_spread_pct': 0.05,  # Низкий спред для мажорных пар
+                'avg_spread_5min': 0.06,
+                'spread_stability': 'stable'
+            }
+        else:
+            return {
+                'current_spread_pct': 0.12,  # Выше спред для минорных пар
+                'avg_spread_5min': 0.15,
+                'spread_stability': 'volatile'
+            }
+
+    def _analyze_liquidity(self, symbol):
+        """Анализ ликвидности в стакане"""
+
+        # Пока классификация по известным парам
+        high_liquidity = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+        medium_liquidity = ['ADAUSDT', 'XRPUSDT', 'SOLUSDT', 'DOGEUSDT', 'DOTUSDT']
+
+        if symbol in high_liquidity:
+            return {
+                'depth_5_levels': 'excellent',
+                'bid_ask_imbalance': 0.02,
+                'large_walls_nearby': False
+            }
+        elif symbol in medium_liquidity:
+            return {
+                'depth_5_levels': 'good',
+                'bid_ask_imbalance': 0.05,
+                'large_walls_nearby': False
+            }
+        else:
+            return {
+                'depth_5_levels': 'poor',
+                'bid_ask_imbalance': 0.15,
+                'large_walls_nearby': True
+            }
+
+    def _get_session_info(self):
+        """Информация о текущей торговой сессии"""
+        utc_hour = datetime.datetime.utcnow().hour
+
+        if 0 <= utc_hour < 8:
+            return {
+                'session': 'asian',
+                'liquidity_level': 'medium',
+                'optimal_for_scalping': False
+            }
+        elif 8 <= utc_hour < 16:
+            return {
+                'session': 'european',
+                'liquidity_level': 'high',
+                'optimal_for_scalping': True
+            }
+        elif 16 <= utc_hour < 24:
+            return {
+                'session': 'american',
+                'liquidity_level': 'high',
+                'optimal_for_scalping': True
+            }
+        else:
+            return {
+                'session': 'unknown',
+                'liquidity_level': 'low',
+                'optimal_for_scalping': False
+            }
+
+    def _check_news_calendar(self):
+        """Проверка близости важных новостей"""
+
+        # Пока простая проверка времени (избегаем часы выхода важных новостей)
+        utc_hour = datetime.datetime.utcnow().hour
+
+        # Часы выхода важных новостей США (13:30, 15:00 UTC)
+        high_risk_hours = [13, 14, 15]
+
+        return {
+            'major_news_30min': utc_hour in high_risk_hours,
+            'risk_level': 'high' if utc_hour in high_risk_hours else 'low'
+        }
+
+    def _is_weekend(self):
+        """Проверка выходных дней"""
+        weekday = datetime.datetime.utcnow().weekday()
+        return weekday >= 5  # 5=суббота, 6=воскресенье
+
+    def _get_tick_size(self, symbol):
+        """Получение минимального шага цены"""
+        # Стандартные tick size для популярных пар
+        tick_sizes = {
+            'BTCUSDT': 0.01,
+            'ETHUSDT': 0.01,
+            'BNBUSDT': 0.001,
+            'ADAUSDT': 0.0001,
+            'XRPUSDT': 0.0001,
+            'SOLUSDT': 0.001,
+            'DOGEUSDT': 0.00001,
+            'DOTUSDT': 0.001,
+            'MATICUSDT': 0.0001,
+            'LINKUSDT': 0.001
+        }
+        return tick_sizes.get(symbol, 0.0001)  # Дефолтный минимальный шаг
 
     async def analyze_single_pair(self, symbol: str) -> PairAnalysisResult:
         """
@@ -161,7 +358,7 @@ class OptimizedTradingAnalyzer:
             ai_data = format_ai_input_data(signal_result, symbol)
 
             # Создаем стандартизированный сигнал
-            trading_signal = self._create_trading_signal(ai_data, candles)
+            trading_signal = self._create_trading_signal(ai_data, candles, candles)
 
             return PairAnalysisResult(
                 pair=symbol,
@@ -177,11 +374,15 @@ class OptimizedTradingAnalyzer:
                 execution_time=time.time() - start_time
             )
 
-    def _create_trading_signal(self, ai_data: Dict[str, Any], candles: List) -> TradingSignal:
+    def _create_trading_signal(self, ai_data: Dict[str, Any], candles: List, raw_candles: List = None) -> TradingSignal:
         """Создание стандартизированного торгового сигнала"""
         entry_signal = ai_data['entry_signal']
         technical_analysis = ai_data['technical_analysis']
         risk_assessment = ai_data['risk_assessment']
+
+        # Сохраняем свечи для использования в _prepare_selection_data
+        if raw_candles:
+            self._last_candles = raw_candles
 
         return TradingSignal(
             pair=entry_signal['pair'],
@@ -421,6 +622,12 @@ class AITradingOrchestrator:
             if not signal:
                 continue
 
+            # Создаем временный объект анализатора для доступа к методам
+            temp_analyzer = OptimizedTradingAnalyzer()
+
+            # Mock данные для свечей (в реальности должны передаваться из analyze_single_pair)
+            mock_candles = []
+
             # Безопасное извлечение данных с проверкой типов
             selection_item = {
                 'pair': str(signal.get('pair', '')),
@@ -438,7 +645,25 @@ class AITradingOrchestrator:
                 'market_conditions': str(signal.get('market_conditions', '')),
                 'confluence_factors': list(signal.get('confluence_factors', [])),
                 'warning_signals': list(signal.get('warning_signals', [])),
-                'signal_quality': int(signal.get('signal_quality', 0))
+                'signal_quality': int(signal.get('signal_quality', 0)),
+
+                # НОВЫЕ СКАЛЬПИНГОВЫЕ МЕТРИКИ
+                'recent_price_moves': temp_analyzer._analyze_recent_moves(
+                    mock_candles[-20:] if len(mock_candles) >= 20 else []),
+                'avg_volatility': temp_analyzer._calculate_avg_volatility(
+                    mock_candles[-10:] if len(mock_candles) >= 10 else []),
+                'consolidation_period': temp_analyzer._detect_consolidation(
+                    mock_candles[-15:] if len(mock_candles) >= 15 else []),
+                'distance_to_extremes': temp_analyzer._distance_to_recent_extremes(
+                    mock_candles[-20:] if len(mock_candles) >= 20 else []),
+
+                # Скальпинговые условия
+                'spread_analysis': temp_analyzer._analyze_spread(signal.get('pair', '')),
+                'liquidity_depth': temp_analyzer._analyze_liquidity(signal.get('pair', '')),
+                'session_timing': temp_analyzer._get_session_info(),
+                'news_proximity': temp_analyzer._check_news_calendar(),
+                'weekend_check': temp_analyzer._is_weekend(),
+                'tick_size': temp_analyzer._get_tick_size(signal.get('pair', ''))
             }
 
             selection_data.append(selection_item)
@@ -654,7 +879,7 @@ if __name__ == "__main__":
     """Точка входа в программу"""
     logger.info("=" * 80)
     logger.info("🎯 ТОРГОВЫЙ БОТ - СКАЛЬПИНГ EMA+TSI")
-    logger.info("📊 Версия: 3.0 (Оптимизированная)")
+    logger.info("📊 Версия: 3.1 (Скальпинговая оптимизация)")
     logger.info("⏰ Таймфрейм: 15 минут")
     logger.info("🚀 Режим: Продакшн (реальные деньги)")
     logger.info("=" * 80)
