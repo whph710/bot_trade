@@ -218,32 +218,6 @@ class OptimizedTradingAnalyzer:
                 'spread_stability': 'volatile'
             }
 
-    def _analyze_liquidity(self, symbol):
-        """Анализ ликвидности в стакане"""
-
-        # Пока классификация по известным парам
-        high_liquidity = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
-        medium_liquidity = ['ADAUSDT', 'XRPUSDT', 'SOLUSDT', 'DOGEUSDT', 'DOTUSDT']
-
-        if symbol in high_liquidity:
-            return {
-                'depth_5_levels': 'excellent',
-                'bid_ask_imbalance': 0.02,
-                'large_walls_nearby': False
-            }
-        elif symbol in medium_liquidity:
-            return {
-                'depth_5_levels': 'good',
-                'bid_ask_imbalance': 0.05,
-                'large_walls_nearby': False
-            }
-        else:
-            return {
-                'depth_5_levels': 'poor',
-                'bid_ask_imbalance': 0.15,
-                'large_walls_nearby': True
-            }
-
     def _get_session_info(self):
         """Информация о текущей торговой сессии"""
         utc_hour = datetime.datetime.utcnow().hour
@@ -272,20 +246,6 @@ class OptimizedTradingAnalyzer:
                 'liquidity_level': 'low',
                 'optimal_for_scalping': False
             }
-
-    def _check_news_calendar(self):
-        """Проверка близости важных новостей"""
-
-        # Пока простая проверка времени (избегаем часы выхода важных новостей)
-        utc_hour = datetime.datetime.utcnow().hour
-
-        # Часы выхода важных новостей США (13:30, 15:00 UTC)
-        high_risk_hours = [13, 14, 15]
-
-        return {
-            'major_news_30min': utc_hour in high_risk_hours,
-            'risk_level': 'high' if utc_hour in high_risk_hours else 'low'
-        }
 
     def _is_weekend(self):
         """Проверка выходных дней"""
@@ -647,7 +607,7 @@ class AITradingOrchestrator:
                 'warning_signals': list(signal.get('warning_signals', [])),
                 'signal_quality': int(signal.get('signal_quality', 0)),
 
-                # НОВЫЕ СКАЛЬПИНГОВЫЕ МЕТРИКИ
+                # СКАЛЬПИНГОВЫЕ МЕТРИКИ
                 'recent_price_moves': temp_analyzer._analyze_recent_moves(
                     mock_candles[-20:] if len(mock_candles) >= 20 else []),
                 'avg_volatility': temp_analyzer._calculate_avg_volatility(
@@ -657,11 +617,9 @@ class AITradingOrchestrator:
                 'distance_to_extremes': temp_analyzer._distance_to_recent_extremes(
                     mock_candles[-20:] if len(mock_candles) >= 20 else []),
 
-                # Скальпинговые условия
+                # Условия для скальпинга
                 'spread_analysis': temp_analyzer._analyze_spread(signal.get('pair', '')),
-                'liquidity_depth': temp_analyzer._analyze_liquidity(signal.get('pair', '')),
                 'session_timing': temp_analyzer._get_session_info(),
-                'news_proximity': temp_analyzer._check_news_calendar(),
                 'weekend_check': temp_analyzer._is_weekend(),
                 'tick_size': temp_analyzer._get_tick_size(signal.get('pair', ''))
             }
