@@ -44,7 +44,7 @@ async def get_klines_async(symbol: str, interval: str = "15", limit: int = 200) 
                         klines.reverse()
 
                 logger.debug(f"Получено {len(klines)} свечей для {symbol}")
-                return klines[:-12]
+                return klines[:-1]
 
     except aiohttp.ClientError as e:
         logger.error(f"Сетевая ошибка для {symbol}: {e}")

@@ -1,5 +1,6 @@
 import numpy as np
 from typing import List, Dict, Any, Tuple
+import time
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
@@ -52,7 +53,7 @@ def calculate_tsi_with_momentum(candles: List[List[str]],
                                 short_length: int = 4,
                                 signal_length: int = 3) -> Dict[str, np.ndarray]:
     """
-    ИСПРАВЛЕННЫЙ расчет True Strength Index (TSI) с momentum для скальпинга 15M
+    Расчет True Strength Index (TSI) с momentum для скальпинга 15M
 
     Args:
         candles: Данные свечей в формате Bybit [timestamp, open, high, low, close, volume, turnover]
@@ -64,7 +65,7 @@ def calculate_tsi_with_momentum(candles: List[List[str]],
         Словарь с массивами:
         - 'tsi': значения TSI
         - 'signal': сигнальная линия (EMA от TSI)
-        - 'momentum': momentum изменения TSI (КРИТИЧНО - было отсутствует)
+        - 'momentum': momentum изменения TSI
         - 'momentum_strength': сила momentum
     """
     if len(candles) < max(long_length, short_length, signal_length) + 10:
@@ -97,16 +98,16 @@ def calculate_tsi_with_momentum(candles: List[List[str]],
     # Сигнальная линия - EMA от TSI
     signal_line = calculate_ema(tsi_values, signal_length)
 
-    # ДОБАВЛЯЕМ: momentum = np.diff(tsi_values, prepend=tsi_values[0])
+    # Momentum = np.diff(tsi_values, prepend=tsi_values[0])
     momentum = np.diff(tsi_values, prepend=tsi_values[0])
 
-    # ДОБАВЛЯЕМ: momentum_strength = abs(momentum[-1])
+    # Momentum strength = abs(momentum[-1])
     momentum_strength = abs(momentum[-1]) if len(momentum) > 0 else 0.0
 
     return {
         'tsi': tsi_values,
         'signal': signal_line,
-        'momentum': momentum,  # ← ЭТО БЫЛО ОТСУТСТВУЕТ
+        'momentum': momentum,
         'momentum_strength': momentum_strength
     }
 
@@ -211,14 +212,14 @@ def calculate_rsi_with_divergence(candles: List[List[str]], period: int = 9) -> 
 
 
 def get_volume_anomalies(candles: List[List[str]],
-                         threshold: float = 1.8,
+                         threshold: float = 2.0,
                          lookback: int = 10) -> Dict[str, Any]:
     """
     Поиск объемных аномалий (повышенные требования для скальпинга)
 
     Args:
         candles: Данные свечей
-        threshold: Порог для определения объемного всплеска (повышен до 1.8)
+        threshold: Порог для определения объемного всплеска (повышен до 2.0)
         lookback: Период анализа объемов
 
     Returns:
@@ -339,13 +340,13 @@ def simulate_higher_timeframes(candles: List[List[str]]) -> Dict[str, str]:
     }
 
 
-def calculate_atr_stops(candles: List[List[str]], period: int = 14) -> Dict[str, Any]:
+def calculate_atr_stops(candles: List[List[str]], period: int = 10) -> Dict[str, Any]:
     """
-    Расчет ATR и динамических стоп-лоссов
+    Расчет ATR и динамических стоп-лоссов (ускоренный для скальпинга)
 
     Args:
         candles: Данные свечей
-        period: Период ATR
+        period: Период ATR (ускорен до 10 для скальпинга)
 
     Returns:
         Словарь с ATR и уровнями стопов
@@ -373,16 +374,16 @@ def calculate_atr_stops(candles: List[List[str]], period: int = 14) -> Dict[str,
     for i in range(period + 1, len(candles)):
         atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
 
-    # Динамические стоп-лоссы
+    # Динамические стоп-лоссы (скальпинговые множители)
     stop_levels = {}
     if len(atr) > 0:
         current_price = closes[-1]
         current_atr = atr[-1]
 
         stop_levels = {
-            'long_stop': current_price - (current_atr * 2),  # Стоп для лонга
-            'short_stop': current_price + (current_atr * 2),  # Стоп для шорта
-            'trailing_multiplier': 2.0,
+            'long_stop': current_price - (current_atr * 1.2),  # Скальпинговый множитель 1.2
+            'short_stop': current_price + (current_atr * 1.2),  # Скальпинговый множитель 1.2
+            'trailing_multiplier': 1.2,
             'current_volatility': current_atr / current_price * 100 if current_price > 0 else 0
         }
 
@@ -392,44 +393,49 @@ def calculate_atr_stops(candles: List[List[str]], period: int = 14) -> Dict[str,
     }
 
 
-# СКАЛЬПИНГОВЫЕ ПАРАМЕТРЫ ДЛЯ 15M
+# СКАЛЬПИНГОВЫЕ ПАРАМЕТРЫ ДЛЯ 15M (ОБНОВЛЕННЫЕ)
 SCALPING_15M_PARAMS = {
-    'ema_fast': 7,  # Было 7 - слишком медленно
-    'ema_medium': 14,  # Было 14 - слишком медленно
-    'ema_slow': 28,  # Было 28 - слишком медленно
-    'tsi_long': 12,  # Было 25 - слишком медленно
-    'tsi_short': 6,  # Было 13 - слишком медленно
-    'tsi_signal': 6,  # Было 13 - слишком медленно
-    'rsi_period': 9,  # Было 14
-    'volume_lookback': 10  # Для анализа объемных всплесков
+    'ema_fast': 5,  # Ускорено с 7 для скальпинга
+    'ema_medium': 8,  # Ускорено с 14 для скальпинга
+    'ema_slow': 13,  # Ускорено с 28 для скальпинга
+    'tsi_long': 8,  # Ускорено с 12 для скальпинга
+    'tsi_short': 4,  # Ускорено с 6 для скальпинга
+    'tsi_signal': 3,  # Ускорено с 6 для скальпинга
+    'rsi_period': 9,  # Оставляем как есть
+    'volume_lookback': 10,  # Для анализа объемных всплесков
+    'atr_period': 10,  # Ускорено с 14 для скальпинга
+    'atr_multiplier': 1.2,  # Снижено с 2.0 для скальпинга
+    'min_tsi_momentum': 7.0,  # Повышено с 3.0 для качества
+    'volume_threshold': 2.0,  # Повышено с 1.8 для качества
+    'min_quality_score': 75  # Повышено с 50 для качества
 }
 
 # АДАПТИВНЫЕ ПАРАМЕТРЫ ПО ТИПАМ АКТИВОВ
 ASSET_SPECIFIC_PARAMS = {
     'BTC_majors': {  # BTC, ETH - стабильные
-        'ema_periods': [6, 10, 15],
-        'tsi_params': [10, 5, 3],
-        'min_momentum': 3.0,
-        'volume_threshold': 1.5
+        'ema_periods': [5, 8, 13],
+        'tsi_params': [8, 4, 3],
+        'min_momentum': 7.0,  # Повышено
+        'volume_threshold': 2.0  # Повышено
     },
     'volatile_alts': {  # DOGE, SHIB, мем-коины
         'ema_periods': [4, 6, 10],
         'tsi_params': [6, 3, 2],
-        'min_momentum': 6.0,
+        'min_momentum': 10.0,  # Повышено значительно
         'volume_threshold': 2.5
     },
     'stable_alts': {  # Крупные альты
         'ema_periods': [5, 8, 13],
         'tsi_params': [8, 4, 3],
-        'min_momentum': 4.0,
-        'volume_threshold': 1.8
+        'min_momentum': 8.0,  # Повышено
+        'volume_threshold': 2.0  # Повышено
     }
 }
 
 
 def get_optimal_params_for_asset(symbol: str) -> Dict[str, Any]:
     """
-    СОЗДАТЬ get_optimal_params_for_asset() в func_trade.py
+    Получение оптимальных параметров для данного актива
 
     Args:
         symbol: Символ торговой пары
@@ -440,7 +446,7 @@ def get_optimal_params_for_asset(symbol: str) -> Dict[str, Any]:
     # Определяем тип актива
     if symbol.startswith(('BTC', 'ETH')):
         return ASSET_SPECIFIC_PARAMS['BTC_majors']
-    elif symbol.startswith(('DOGE', 'SHIB', 'PEPE', 'FLOKI')):
+    elif symbol.startswith(('DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF')):
         return ASSET_SPECIFIC_PARAMS['volatile_alts']
     else:
         return ASSET_SPECIFIC_PARAMS['stable_alts']
@@ -525,8 +531,7 @@ def check_higher_tf_conflict(indicators: Dict[str, Any]) -> bool:
 
 def apply_ai_optimized_filters(candles: List[List[str]], indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
-    СОЗДАТЬ apply_ai_optimized_filters() в func_trade.py
-    Система качественных фильтров для ИИ
+    Система качественных фильтров для ИИ (ОБНОВЛЕННАЯ)
 
     Args:
         candles: Данные свечей
@@ -538,9 +543,9 @@ def apply_ai_optimized_filters(candles: List[List[str]], indicators: Dict[str, A
     filters_passed = []
     filters_failed = []
 
-    # 1. TSI Momentum фильтр (КРИТИЧНЫЙ)
+    # 1. TSI Momentum фильтр (КРИТИЧНЫЙ) - повышен порог
     momentum_strength = indicators.get('momentum_strength', 0)
-    if momentum_strength > 3.0:  # Было 2.0 - слишком слабо
+    if momentum_strength > 7.0:  # Было 3.0 - повышено в 2.3 раза
         filters_passed.append('STRONG_TSI_MOMENTUM')
     else:
         filters_failed.append('WEAK_TSI_MOMENTUM')
@@ -552,9 +557,9 @@ def apply_ai_optimized_filters(candles: List[List[str]], indicators: Dict[str, A
     else:
         filters_failed.append('EMA_INCONSISTENT')
 
-    # 3. Объемное подтверждение
+    # 3. Объемное подтверждение (повышенные требования)
     volume_spike = indicators.get('volume_ratio', 1.0)
-    if volume_spike > 1.8:  # Повышенные требования
+    if volume_spike > 2.0:  # Было 1.8 - повышено для скальпинга
         filters_passed.append('VOLUME_CONFIRMED')
     else:
         filters_failed.append('INSUFFICIENT_VOLUME')
@@ -566,17 +571,44 @@ def apply_ai_optimized_filters(candles: List[List[str]], indicators: Dict[str, A
     else:
         filters_failed.append('MTF_CONFLICT')
 
+    # 5. НОВЫЙ ФИЛЬТР: Проверка недавних движений
+    if len(candles) >= 8:
+        recent_moves = []
+        for i in range(-8, 0):
+            try:
+                current_price = float(candles[i][4])
+                prev_price = float(candles[i - 1][4])
+                move = abs(current_price - prev_price) / prev_price * 100
+                recent_moves.append(move)
+            except (ValueError, ZeroDivisionError, IndexError):
+                continue
+
+        max_recent_move = max(recent_moves) if recent_moves else 0
+        if max_recent_move <= 1.5:  # Нет сильных движений >1.5% за 8 свечей
+            filters_passed.append('NO_STRONG_RECENT_MOVES')
+        else:
+            filters_failed.append('STRONG_RECENT_MOVES')
+
+    # 6. НОВЫЙ ФИЛЬТР: Минимальный спред EMA
+    ema1_vals = indicators.get('ema1_values', [0])
+    ema3_vals = indicators.get('ema3_values', [0])
+    if len(ema1_vals) > 0 and len(ema3_vals) > 0 and ema3_vals[-1] > 0:
+        ema_spread = abs(ema1_vals[-1] - ema3_vals[-1]) / ema3_vals[-1] * 100
+        if ema_spread >= 0.4:  # Минимальный спред 0.4%
+            filters_passed.append('ADEQUATE_EMA_SPREAD')
+        else:
+            filters_failed.append('INSUFFICIENT_EMA_SPREAD')
+
     return {
         'filters_passed': filters_passed,
         'filters_failed': filters_failed,
-        'quality_score': len(filters_passed) * 25  # Макс 100
+        'quality_score': len(filters_passed) * 16.67  # Макс 100 (6 фильтров)
     }
 
 
 def analyze_recent_price_action(candles: List[List[str]], lookback: int = 10) -> Dict[str, Any]:
     """
-    СОЗДАТЬ analyze_recent_price_action() в func_trade.py
-    Анализ последних 5-10 свечей (детальный)
+    Анализ последних свечей (детальный)
 
     Args:
         candles: Данные свечей
@@ -586,7 +618,13 @@ def analyze_recent_price_action(candles: List[List[str]], lookback: int = 10) ->
         Результат анализа микроструктуры
     """
     if len(candles) < lookback:
-        return {}
+        return {
+            'micro_trend_strength': 0,
+            'momentum_building': False,
+            'volume_pattern': 'UNKNOWN',
+            'price_structure': 'UNKNOWN',
+            'breakout_potential': False
+        }
 
     recent = candles[-lookback:]
     closes = np.array([float(candle[4]) for candle in recent])
@@ -595,10 +633,10 @@ def analyze_recent_price_action(candles: List[List[str]], lookback: int = 10) ->
     volumes = np.array([float(candle[5]) for candle in recent])
 
     # Сила микротренда
-    trend_strength = abs(closes[-1] - closes[0]) / closes[0] * 100
+    trend_strength = abs(closes[-1] - closes[0]) / closes[0] * 100 if closes[0] > 0 else 0
 
     # Нарастание импульса
-    momentum_building = np.mean(closes[-3:]) > np.mean(closes[:3])
+    momentum_building = np.mean(closes[-3:]) > np.mean(closes[:3]) if len(closes) >= 6 else False
 
     # Паттерн объемов
     avg_volume = np.mean(volumes)
@@ -626,7 +664,6 @@ def analyze_recent_price_action(candles: List[List[str]], lookback: int = 10) ->
 
 def calculate_predictive_signals(candles: List[List[str]], indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
-    СОЗДАТЬ calculate_predictive_signals() в func_trade.py
     Предиктивные индикаторы
 
     Args:
@@ -637,7 +674,12 @@ def calculate_predictive_signals(candles: List[List[str]], indicators: Dict[str,
         Предиктивные сигналы
     """
     if len(candles) < 10:
-        return {}
+        return {
+            'momentum_acceleration': 0,
+            'volume_leading': False,
+            'ema_compression': False,
+            'price_velocity_change': False
+        }
 
     # Ускорение TSI momentum
     momentum_vals = indicators.get('momentum', [])
@@ -681,7 +723,6 @@ def calculate_signal_strength_for_ai(candles: List[List[str]],
                                      indicators: Dict[str, Any],
                                      signal_type: str) -> Dict[str, Any]:
     """
-    СОЗДАТЬ calculate_signal_strength_for_ai() в func_trade.py
     Расчет силы сигнала специально для ИИ
 
     Args:
@@ -693,7 +734,17 @@ def calculate_signal_strength_for_ai(candles: List[List[str]],
         Метрики силы для ИИ
     """
     if not candles or not indicators:
-        return {}
+        return {
+            'momentum_acceleration': 0,
+            'trend_consistency': 0,
+            'volume_confirmation': False,
+            'price_velocity': 0,
+            'market_microstructure': 'UNKNOWN',
+            'confluence_score': 0,
+            'signal_freshness': 1,
+            'volatility_regime': 'UNKNOWN',
+            'confluence_factors': []
+        }
 
     # Скорость изменения TSI momentum
     momentum_vals = indicators.get('momentum', [])
@@ -716,13 +767,13 @@ def calculate_signal_strength_for_ai(candles: List[List[str]],
                                     if ema1_vals[i] < ema2_vals[i] < ema3_vals[i]) / 5
 
     # Подтверждение объемом
-    volume_confirmation = indicators.get('volume_ratio', 1.0) > 1.8
+    volume_confirmation = indicators.get('volume_ratio', 1.0) > 2.0  # Повышено с 1.8
 
     # Скорость движения цены
     if len(candles) >= 5:
         price_start = float(candles[-5][4])
         price_end = float(candles[-1][4])
-        price_velocity = abs(price_end - price_start) / price_start * 100
+        price_velocity = abs(price_end - price_start) / price_start * 100 if price_start > 0 else 0
     else:
         price_velocity = 0
 
@@ -732,7 +783,7 @@ def calculate_signal_strength_for_ai(candles: List[List[str]],
 
     # Общий скор совпадения индикаторов
     confluence_factors = []
-    if indicators.get('momentum_strength', 0) > 3.0:
+    if indicators.get('momentum_strength', 0) > 7.0:  # Повышено с 3.0
         confluence_factors.append('STRONG_TSI')
     if volume_confirmation:
         confluence_factors.append('VOLUME_SPIKE')
@@ -773,8 +824,7 @@ def calculate_signal_strength_for_ai(candles: List[List[str]],
 
 def enhanced_signal_detection(candles: List[List[str]]) -> Dict[str, Any]:
     """
-    СОЗДАТЬ enhanced_signal_detection() в func_trade.py
-    Улучшенная логика определения сигналов
+    Улучшенная логика определения сигналов (ГЛАВНАЯ ФУНКЦИЯ для main.py)
 
     Args:
         candles: Данные свечей
@@ -839,7 +889,7 @@ def enhanced_signal_detection(candles: List[List[str]]) -> Dict[str, Any]:
     current_ema3 = ema3_vals[-1]
 
     ema_bullish = current_ema1 > current_ema2 > current_ema3
-    ema_bearish = current_ema1 < current_ema2 < current_ema3  # ИСПРАВЛЕНО
+    ema_bearish = current_ema1 < current_ema2 < current_ema3
 
     # Определяем сигнал
     signal = 'NO_SIGNAL'
@@ -858,13 +908,17 @@ def enhanced_signal_detection(candles: List[List[str]]) -> Dict[str, Any]:
     if signal != 'NO_SIGNAL':
         # Проверяем силу TSI momentum
         momentum_strength = indicators.get('momentum_strength', 0)
-        if momentum_strength > 5.0:
+        if momentum_strength > 10.0:  # Очень сильный momentum
+            confidence += 15
+        elif momentum_strength > 7.0:  # Сильный momentum
             confidence += 10
 
         # Проверяем объемное подтверждение
         volume_ratio = indicators.get('volume_ratio', 1.0)
-        if volume_ratio > 2.0:
+        if volume_ratio > 2.5:  # Очень сильный объемный всплеск
             confidence += 15
+        elif volume_ratio > 2.0:  # Сильный объемный всплеск
+            confidence += 10
 
         # Проверяем MTF confluence
         if indicators.get('mtf_confluence', False):
@@ -874,7 +928,7 @@ def enhanced_signal_detection(candles: List[List[str]]) -> Dict[str, Any]:
     confidence = min(100, max(0, confidence))
 
     # Если confidence слишком низкий, отменяем сигнал
-    if confidence < 50:
+    if confidence < SCALPING_15M_PARAMS['min_quality_score']:  # 75
         signal = 'NO_SIGNAL'
 
     # Рассчитываем метрики силы для ИИ
@@ -907,7 +961,6 @@ def prepare_ai_context_data(candles: List[List[str]],
                             indicators: Dict[str, Any],
                             signal_type: str) -> Dict[str, Any]:
     """
-    СОЗДАТЬ prepare_ai_context_data() в func_trade.py
     Обогащение данных для ИИ
 
     Args:
@@ -919,7 +972,15 @@ def prepare_ai_context_data(candles: List[List[str]],
         Контекстные данные для ИИ
     """
     if not candles or not indicators:
-        return {}
+        return {
+            'market_regime': 'UNKNOWN',
+            'volatility_percentile': 50,
+            'volume_profile_analysis': {'high_volume_levels': 0, 'price_at_high_volume': False},
+            'signal_context': {'time_since_last_signal': 1, 'recent_signal_success_rate': 0.75,
+                               'confluence_factors': [], 'risk_factors': []},
+            'technical_context': {'trend_alignment': False, 'momentum_phase': 'NEUTRAL',
+                                  'mean_reversion_risk': 'UNKNOWN', 'breakout_continuation': False}
+        }
 
     current_price = float(candles[-1][4])
 
@@ -928,7 +989,7 @@ def prepare_ai_context_data(candles: List[List[str]],
     rsi_current = indicators.get('rsi_current', 50)
     volume_ratio = indicators.get('volume_ratio', 1.0)
 
-    if volume_ratio > 2.0 and atr_current / current_price > 0.02:
+    if volume_ratio > 2.5 and atr_current / current_price > 0.02:  # Повышены пороги
         market_regime = 'HIGH_VOLATILITY_BREAKOUT'
     elif rsi_current > 70 or rsi_current < 30:
         market_regime = 'OVERBOUGHT_OVERSOLD'
@@ -951,7 +1012,7 @@ def prepare_ai_context_data(candles: List[List[str]],
         'price_at_high_volume': len(volume_profile) > 0
     }
 
-    # Контекст сигнала (упрощенный для начальной версии)
+    # Контекст сигнала
     signal_context = {
         'time_since_last_signal': 1,  # Всегда свежий сигнал
         'recent_signal_success_rate': 0.75,  # Условное значение
@@ -964,20 +1025,19 @@ def prepare_ai_context_data(candles: List[List[str]],
         signal_context['risk_factors'].append('MTF_DIVERGENCE')
     if rsi_current > 80 or rsi_current < 20:
         signal_context['risk_factors'].append('EXTREME_RSI')
-    if volume_ratio < 0.5:
+    if volume_ratio < 0.6:  # Повышен порог
         signal_context['risk_factors'].append('LOW_VOLUME')
 
     # Техническая картина
     h1_trend = indicators.get('h1_trend', 'UNKNOWN')
     h4_trend = indicators.get('h4_trend', 'UNKNOWN')
-    mtf_confluence = indicators.get('mtf_confluence', False)
 
     if signal_type == 'LONG':
         trend_alignment = h1_trend == 'BULLISH' and h4_trend == 'BULLISH'
-        momentum_phase = 'BUILDING' if indicators.get('momentum_strength', 0) > 3 else 'WEAK'
+        momentum_phase = 'BUILDING' if indicators.get('momentum_strength', 0) > 7 else 'WEAK'
     elif signal_type == 'SHORT':
         trend_alignment = h1_trend == 'BEARISH' and h4_trend == 'BEARISH'
-        momentum_phase = 'BUILDING' if indicators.get('momentum_strength', 0) > 3 else 'WEAK'
+        momentum_phase = 'BUILDING' if indicators.get('momentum_strength', 0) > 7 else 'WEAK'
     else:
         trend_alignment = False
         momentum_phase = 'NEUTRAL'
@@ -1018,8 +1078,7 @@ def prepare_ai_context_data(candles: List[List[str]],
 
 def signal_quality_validator(signal_data: Dict[str, Any], market_context: Dict[str, Any]) -> bool:
     """
-    СОЗДАТЬ signal_quality_validator()
-    Система подтверждения качества
+    Система подтверждения качества (ИСПОЛЬЗУЕТСЯ в main.py)
 
     Args:
         signal_data: Данные сигнала
@@ -1032,7 +1091,7 @@ def signal_quality_validator(signal_data: Dict[str, Any], market_context: Dict[s
 
     # momentum_sufficient: momentum >= пороговых значений
     momentum_strength = signal_data.get('strength_metrics', {}).get('momentum_acceleration', 0)
-    quality_checks['momentum_sufficient'] = momentum_strength >= 3.0
+    quality_checks['momentum_sufficient'] = momentum_strength >= 7.0  # Повышено с 3.0
 
     # volume_adequate: объем выше среднего
     volume_confirmation = signal_data.get('strength_metrics', {}).get('volume_confirmation', False)
@@ -1042,7 +1101,7 @@ def signal_quality_validator(signal_data: Dict[str, Any], market_context: Dict[s
     technical_context = signal_data.get('ai_input_data', {}).get('technical_context', {})
     quality_checks['trend_aligned'] = technical_context.get('trend_alignment', False)
 
-    # timing_optimal: время входа оптимально (упрощенная проверка)
+    # timing_optimal: время входа оптимально
     signal_freshness = signal_data.get('strength_metrics', {}).get('signal_freshness', 0)
     quality_checks['timing_optimal'] = signal_freshness <= 2
 
@@ -1053,13 +1112,12 @@ def signal_quality_validator(signal_data: Dict[str, Any], market_context: Dict[s
     # Подсчитываем качество
     quality_score = sum(quality_checks.values()) / len(quality_checks) * 100
 
-    return quality_score >= 75  # Порог качества
+    return quality_score >= 80  # Повышен порог с 75 до 80
 
 
 def format_ai_input_data(signal_result: Dict[str, Any], symbol: str) -> Dict[str, Any]:
     """
-    СОЗДАТЬ format_ai_input_data() в func_trade.py
-    Стандартизация выходных данных
+    Стандартизация выходных данных (ИСПОЛЬЗУЕТСЯ в main.py)
 
     Args:
         signal_result: Результат анализа сигнала
@@ -1068,8 +1126,6 @@ def format_ai_input_data(signal_result: Dict[str, Any], symbol: str) -> Dict[str
     Returns:
         Стандартизированные данные для ИИ
     """
-    import time
-
     strength_metrics = signal_result.get('strength_metrics', {})
     market_context = signal_result.get('market_context', {})
     ai_data = signal_result.get('ai_input_data', {})
@@ -1125,54 +1181,6 @@ def format_ai_input_data(signal_result: Dict[str, Any], symbol: str) -> Dict[str
     }
 
 
-def noise_reduction_filters(candles: List[List[str]], indicators: Dict[str, Any]) -> Dict[str, bool]:
-    """
-    Система анти-шумовых фильтров
-
-    Args:
-        candles: Данные свечей
-        indicators: Рассчитанные индикаторы
-
-    Returns:
-        Словарь условий, которых следует избегать
-    """
-    avoid_conditions = {}
-
-    if not candles or len(candles) < 10:
-        return {'insufficient_data': True}
-
-    current_price = float(candles[-1][4])
-    atr_current = indicators.get('current_atr', 0)
-    volume_ratio = indicators.get('volume_ratio', 1.0)
-
-    # low_volatility_period: ATR < 0.4% от цены
-    volatility_percent = (atr_current / current_price * 100) if current_price > 0 else 0
-    avoid_conditions['low_volatility_period'] = volatility_percent < 0.4
-
-    # weekend_low_volume: Объем < 60% среднего
-    avoid_conditions['weekend_low_volume'] = volume_ratio < 0.6
-
-    # ranging_consolidation: Диапазон 15 свечей < 1.2%
-    if len(candles) >= 15:
-        recent_highs = [float(c[2]) for c in candles[-15:]]
-        recent_lows = [float(c[3]) for c in candles[-15:]]
-        price_range = (max(recent_highs) - min(recent_lows)) / current_price * 100
-        avoid_conditions['ranging_consolidation'] = price_range < 1.2
-    else:
-        avoid_conditions['ranging_consolidation'] = False
-
-    # conflicting_signals: Противоречивые сигналы разных индикаторов
-    h1_trend = indicators.get('h1_trend', 'UNKNOWN')
-    h4_trend = indicators.get('h4_trend', 'UNKNOWN')
-    avoid_conditions['conflicting_signals'] = (
-            h1_trend != 'UNKNOWN' and h4_trend != 'UNKNOWN' and
-            ((h1_trend == 'BULLISH' and h4_trend == 'BEARISH') or
-             (h1_trend == 'BEARISH' and h4_trend == 'BULLISH'))
-    )
-
-    return avoid_conditions
-
-
 def calculate_all_indicators_extended(candles: List[List[str]],
                                       ema1: int = 5,
                                       ema2: int = 8,
@@ -1181,7 +1189,7 @@ def calculate_all_indicators_extended(candles: List[List[str]],
                                       tsi_short: int = 4,
                                       tsi_signal: int = 3) -> Dict[str, Any]:
     """
-    Главная функция расчета всех индикаторов (ИСПРАВЛЕННАЯ версия без дублирования)
+    Главная функция расчета всех индикаторов (ИСПОЛЬЗУЕТСЯ в main.py)
 
     Args:
         candles: Данные свечей
@@ -1199,12 +1207,12 @@ def calculate_all_indicators_extended(candles: List[List[str]],
         candles, ema1, ema2, ema3, tsi_long, tsi_short, tsi_signal
     )
 
-    # Новые индикаторы (НЕ ДУБЛИРОВАННЫЕ)
+    # Дополнительные индикаторы
     levels = find_support_resistance_levels(candles)
     rsi_data = calculate_rsi_with_divergence(candles)
     volume_data = get_volume_anomalies(candles)
     mtf_data = simulate_higher_timeframes(candles)
-    atr_data = calculate_atr_stops(candles)
+    atr_data = calculate_atr_stops(candles, period=SCALPING_15M_PARAMS['atr_period'])
 
     # Извлекаем цены для дополнительного анализа
     prices = [float(candle[4]) for candle in candles]
@@ -1230,7 +1238,7 @@ def calculate_all_indicators_extended(candles: List[List[str]],
                     nearby_resistance.append({'level': level, 'distance_percent': distance})
 
     # Объединяем все данные
-    return {
+    extended_indicators = {
         # Базовые индикаторы (EMA + TSI)
         **base_indicators,
 
@@ -1261,200 +1269,10 @@ def calculate_all_indicators_extended(candles: List[List[str]],
         'current_atr': atr_data['atr'][-1] if atr_data['atr'] else 0,
 
         # Дополнительные поля для фильтров
-        'momentum_strength': 0  # Будет заполнено из TSI данных
+        'momentum_strength': base_indicators.get('momentum_strength', 0)
     }
 
-
-def check_ema_tsi_signal(candles: List[List[str]],
-                         ema1_period: int = 5,
-                         ema2_period: int = 8,
-                         ema3_period: int = 13,
-                         tsi_long: int = 8,
-                         tsi_short: int = 4,
-                         tsi_signal: int = 3) -> str:
-    """
-    ИСПРАВЛЕННАЯ проверка EMA + TSI сигнала с поддержкой SHORT сигналов
-
-    Логика:
-    - LONG: EMA5 > EMA8 > EMA13 И TSI пересекает сигнальную линию снизу вверх на ПОСЛЕДНЕЙ свече
-    - SHORT: EMA5 < EMA8 < EMA13 И TSI пересекает сигнальную линию сверху вниз на ПОСЛЕДНЕЙ свече
-
-    Args:
-        candles: Данные свечей от Bybit
-        ema1_period: Период первой EMA (ускорен до 5)
-        ema2_period: Период второй EMA (ускорен до 8)
-        ema3_period: Период третьей EMA (ускорен до 13)
-        tsi_long: Длинный период TSI (ускорен до 8)
-        tsi_short: Короткий период TSI (ускорен до 4)
-        tsi_signal: Период сигнальной линии TSI (ускорен до 3)
-
-    Returns:
-        'LONG', 'SHORT', или 'NO_SIGNAL'
-    """
-    # Проверяем достаточность данных
-    required_data = max(ema3_period, tsi_long, 50) + 20
-    if len(candles) < required_data:
-        return 'NO_SIGNAL'
-
-    # Извлекаем цены закрытия
-    prices = np.array([float(candle[4]) for candle in candles])
-
-    # Рассчитываем EMA
-    ema1 = calculate_ema(prices, ema1_period)
-    ema2 = calculate_ema(prices, ema2_period)
-    ema3 = calculate_ema(prices, ema3_period)
-
-    # Рассчитываем TSI с momentum
-    tsi_data = calculate_tsi_with_momentum(candles, tsi_long, tsi_short, tsi_signal)
-
-    if len(tsi_data['tsi']) < 2:  # Нужно минимум 2 точки для проверки пересечения
-        return 'NO_SIGNAL'
-
-    tsi_values = tsi_data['tsi']
-    signal_values = tsi_data['signal']
-
-    # Получаем значения на последней свече
-    current_ema1 = ema1[-1]
-    current_ema2 = ema2[-1]
-    current_ema3 = ema3[-1]
-
-    current_tsi = tsi_values[-1]
-    current_signal = signal_values[-1]
-    prev_tsi = tsi_values[-2]
-    prev_signal = signal_values[-2]
-
-    # Проверяем EMA условия (ИСПРАВЛЕНО для SHORT)
-    ema_uptrend = current_ema1 > current_ema2 > current_ema3  # EMA 5 > EMA 8 > EMA 13
-    ema_downtrend = current_ema1 < current_ema2 < current_ema3  # EMA 5 < EMA 8 < EMA 13 (ИСПРАВЛЕНО)
-
-    # Проверяем TSI пересечения на ТЕКУЩЕЙ свече с улучшенной логикой
-    cross_up, cross_down = improved_crossover_detection(tsi_values, signal_values, tolerance=0.3)
-
-    # Проверяем финальные сигналы (с поддержкой SHORT)
-    if ema_uptrend and cross_up:
-        return 'LONG'
-    elif ema_downtrend and cross_down:
-        return 'SHORT'  # ИСПРАВЛЕНО: добавлена полная поддержка SHORT
-
-    return 'NO_SIGNAL'
-
-
-def get_signal_details(candles: List[List[str]],
-                       ema1_period: int = 5,
-                       ema2_period: int = 8,
-                       ema3_period: int = 13,
-                       tsi_long: int = 8,
-                       tsi_short: int = 4,
-                       tsi_signal: int = 3) -> Dict[str, Any]:
-    """
-    ОБНОВЛЕННАЯ функция получения детальной информации о сигнале
-
-    Args:
-        candles: Данные свечей от Bybit
-        ema1_period: Период первой EMA (ускорен)
-        ema2_period: Период второй EMA (ускорен)
-        ema3_period: Период третьей EMA (ускорен)
-        tsi_long: Длинный период TSI (ускорен)
-        tsi_short: Короткий период TSI (ускорен)
-        tsi_signal: Период сигнальной линии TSI (ускорен)
-
-    Returns:
-        Словарь с детальной информацией
-    """
-    required_data = max(ema3_period, tsi_long, 50) + 20
-
-    if len(candles) < required_data:
-        return {
-            'signal': 'NO_SIGNAL',
-            'reason': 'INSUFFICIENT_DATA',
-            'last_price': float(candles[-1][4]) if candles else 0,
-            'ema1': 0,
-            'ema2': 0,
-            'ema3': 0,
-            'tsi_value': 0,
-            'tsi_signal_value': 0,
-            'ema_alignment': 'UNKNOWN',
-            'tsi_crossover': False
-        }
-
-    # Извлекаем цены закрытия
-    prices = np.array([float(candle[4]) for candle in candles])
-
-    # Рассчитываем EMA
-    ema1 = calculate_ema(prices, ema1_period)
-    ema2 = calculate_ema(prices, ema2_period)
-    ema3 = calculate_ema(prices, ema3_period)
-
-    # Рассчитываем TSI с momentum
-    tsi_data = calculate_tsi_with_momentum(candles, tsi_long, tsi_short, tsi_signal)
-
-    if len(tsi_data['tsi']) < 2:
-        return {
-            'signal': 'NO_SIGNAL',
-            'reason': 'INSUFFICIENT_TSI_DATA',
-            'last_price': prices[-1],
-            'ema1': ema1[-1],
-            'ema2': ema2[-1],
-            'ema3': ema3[-1],
-            'tsi_value': 0,
-            'tsi_signal_value': 0,
-            'ema_alignment': 'UNKNOWN',
-            'tsi_crossover': False
-        }
-
-    tsi_values = tsi_data['tsi']
-    signal_values = tsi_data['signal']
-    momentum_strength = tsi_data['momentum_strength']  # НОВОЕ: добавляем momentum
-
-    # Получаем текущие значения
-    current_ema1 = ema1[-1]
-    current_ema2 = ema2[-1]
-    current_ema3 = ema3[-1]
-    current_tsi = tsi_values[-1]
-    current_signal = signal_values[-1]
-
-    # Определяем выравнивание EMA (ИСПРАВЛЕНО для SHORT)
-    if current_ema1 > current_ema2 > current_ema3:
-        ema_alignment = 'BULLISH'
-    elif current_ema1 < current_ema2 < current_ema3:
-        ema_alignment = 'BEARISH'  # ИСПРАВЛЕНО
-    else:
-        ema_alignment = 'NEUTRAL'
-
-    # Проверяем пересечения TSI с улучшенной логикой
-    cross_up, cross_down = improved_crossover_detection(tsi_values, signal_values, tolerance=0.3)
-    tsi_crossover = cross_up or cross_down
-
-    # Получаем финальный сигнал
-    signal = check_ema_tsi_signal(candles, ema1_period, ema2_period, ema3_period,
-                                  tsi_long, tsi_short, tsi_signal)
-
-    # Определяем причину (ОБНОВЛЕНО для SHORT)
-    if signal == 'LONG':
-        reason = 'EMA_BULLISH_TSI_CROSSOVER_UP'
-    elif signal == 'SHORT':
-        reason = 'EMA_BEARISH_TSI_CROSSOVER_DOWN'  # ДОБАВЛЕНО
-    elif ema_alignment == 'NEUTRAL':
-        reason = 'EMA_NOT_ALIGNED'
-    elif not tsi_crossover:
-        reason = 'NO_TSI_CROSSOVER'
-    else:
-        reason = 'NO_SIGNAL_CONDITION_MET'
-
-    return {
-        'signal': signal,
-        'reason': reason,
-        'last_price': prices[-1],
-        'ema1': current_ema1,
-        'ema2': current_ema2,
-        'ema3': current_ema3,
-        'tsi_value': current_tsi,
-        'tsi_signal_value': current_signal,
-        'ema_alignment': ema_alignment,
-        'tsi_crossover': tsi_crossover,
-        'tsi_crossover_direction': 'UP' if cross_up else ('DOWN' if cross_down else 'NONE'),
-        'momentum_strength': momentum_strength  # НОВОЕ: добавляем momentum strength
-    }
+    return extended_indicators
 
 
 def calculate_indicators_for_candles(candles: List[List[str]],
@@ -1465,7 +1283,7 @@ def calculate_indicators_for_candles(candles: List[List[str]],
                                      tsi_short: int = 4,
                                      tsi_signal: int = 3) -> Dict[str, Any]:
     """
-    ОБНОВЛЕННАЯ функция расчета всех индикаторов для свечей
+    Функция расчета базовых индикаторов для свечей
 
     Args:
         candles: Данные свечей
@@ -1490,7 +1308,7 @@ def calculate_indicators_for_candles(candles: List[List[str]],
     ema2_values = calculate_ema(prices, ema2_period)
     ema3_values = calculate_ema(prices, ema3_period)
 
-    # Рассчитываем TSI с momentum (ИСПРАВЛЕНО)
+    # Рассчитываем TSI с momentum
     tsi_data = calculate_tsi_with_momentum(candles, tsi_long, tsi_short, tsi_signal)
 
     return {
@@ -1499,6 +1317,6 @@ def calculate_indicators_for_candles(candles: List[List[str]],
         'ema3_values': ema3_values.tolist(),
         'tsi_values': tsi_data['tsi'].tolist(),
         'tsi_signal_values': tsi_data['signal'].tolist(),
-        'momentum': tsi_data['momentum'].tolist(),  # ДОБАВЛЕНО: momentum данные
-        'momentum_strength': tsi_data['momentum_strength']  # ДОБАВЛЕНО: сила momentum
+        'momentum': tsi_data['momentum'].tolist(),
+        'momentum_strength': tsi_data['momentum_strength']
     }
