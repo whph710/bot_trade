@@ -147,7 +147,7 @@ async def deep_seek(data: str,
             # Предупреждение о медленной работе для скальпинга
             if execution_time > (timeout * 0.8):
                 logger.warning(f"⚠️ Медленный ответ ИИ: {execution_time:.2f}сек (лимит {timeout}сек)")
-
+            print(result)
             return result
 
         except asyncio.TimeoutError:

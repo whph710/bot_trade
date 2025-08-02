@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import time
+import math
+import numpy as np
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import re
@@ -35,6 +37,32 @@ SCALPING_CONFIG = {
     'max_pairs_to_ai': 10,  # Максимум пар для ИИ анализа
     'forbidden_hours': [22, 23, 0, 1, 2, 3, 4, 5],  # Низкая ликвидность UTC
 }
+
+
+def clean_value(value):
+    """Очистка значений от NaN, Infinity и приведение к JSON-сериализуемым типам"""
+    if isinstance(value, (np.integer, np.floating)):
+        value = float(value)
+    elif isinstance(value, np.bool_):
+        return bool(value)
+    elif isinstance(value, np.ndarray):
+        return [clean_value(x) for x in value.tolist()]
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return 0.0
+        return value
+    elif isinstance(value, dict):
+        return {k: clean_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [clean_value(item) for item in value]
+    else:
+        return value
+
+
+def safe_json_serialize(obj: Any) -> Any:
+    """Безопасная сериализация для JSON с обработкой NaN"""
+    return clean_value(obj)
 
 
 @dataclass
@@ -88,19 +116,33 @@ class FastScalpingAnalyzer:
             if signal_result['signal'] == 'NO_SIGNAL':
                 return None
 
-            # Создаем сигнал
+            # Создаем сигнал с проверкой значений
+            try:
+                entry_price = float(candles[-1][4])
+                confidence = int(signal_result['confidence'])
+                quality_score = int(signal_result.get('quality_score', 0))
+
+                # Проверяем на валидность
+                if math.isnan(entry_price) or math.isnan(confidence):
+                    logger.warning(f"❌ NaN значения в {symbol}")
+                    return None
+
+            except (ValueError, TypeError) as e:
+                logger.warning(f"❌ Ошибка конвертации значений {symbol}: {e}")
+                return None
+
             return ScalpingSignal(
                 pair=symbol,
                 signal_type=signal_result['signal'],
-                confidence=signal_result['confidence'],
-                entry_price=float(candles[-1][4]),
+                confidence=confidence,
+                entry_price=entry_price,
                 timestamp=int(time.time()),
-                quality_score=signal_result.get('quality_score', 0),
+                quality_score=quality_score,
                 volatility_regime=signal_result.get('volatility_regime', 'MEDIUM'),
-                volume_confirmed=signal_result.get('indicators', {}).get('volume_spike', False),
+                volume_confirmed=bool(signal_result.get('indicators', {}).get('volume_spike', False)),
                 entry_reasons=signal_result.get('entry_reasons', []),
                 candles_data=candles[-SCALPING_CONFIG['candles_for_analysis']:],
-                indicators_data=signal_result.get('indicators', {})
+                indicators_data=clean_value(signal_result.get('indicators', {}))  # Очищаем данные
             )
 
         except Exception as e:
@@ -190,17 +232,17 @@ class AIScalpingSelector:
             signal_data = {
                 'pair': signal.pair,
                 'signal_type': signal.signal_type,
-                'confidence': signal.confidence,
-                'entry_price': signal.entry_price,
-                'quality_score': signal.quality_score,
-                'volatility_regime': signal.volatility_regime,
-                'volume_confirmed': signal.volume_confirmed,
-                'entry_reasons': signal.entry_reasons,
+                'confidence': int(signal.confidence),
+                'entry_price': float(signal.entry_price),
+                'quality_score': int(signal.quality_score),
+                'volatility_regime': str(signal.volatility_regime),
+                'volume_confirmed': bool(signal.volume_confirmed),
+                'entry_reasons': [str(reason) for reason in signal.entry_reasons],
 
                 # 16 последних свечей
                 'recent_candles': [
                     {
-                        'timestamp': c[0],
+                        'timestamp': int(c[0]),
                         'open': float(c[1]),
                         'high': float(c[2]),
                         'low': float(c[3]),
@@ -210,7 +252,7 @@ class AIScalpingSelector:
                 ],
 
                 # Ключевые индикаторы (последние 16 значений)
-                'indicators': {
+                'indicators': safe_json_serialize({
                     'tema3': signal.indicators_data.get('tema3_values', [])[-16:],
                     'tema5': signal.indicators_data.get('tema5_values', [])[-16:],
                     'tema8': signal.indicators_data.get('tema8_values', [])[-16:],
@@ -222,10 +264,10 @@ class AIScalpingSelector:
                     'atr': signal.indicators_data.get('atr_values', [])[-16:],
 
                     # Текущие значения
-                    'current_rsi': signal.indicators_data.get('rsi_current', 50),
-                    'current_atr': signal.indicators_data.get('atr_current', 0),
+                    'current_rsi': signal.indicators_data.get('rsi_current', 50.0),
+                    'current_atr': signal.indicators_data.get('atr_current', 0.0),
                     'tema_alignment': signal.indicators_data.get('tema_alignment', False),
-                    'tema_slope': signal.indicators_data.get('tema_slope', 0),
+                    'tema_slope': signal.indicators_data.get('tema_slope', 0.0),
                     'macd_crossover': signal.indicators_data.get('macd_crossover', 'NONE'),
                     'stoch_signal': signal.indicators_data.get('stoch_signal', 'NEUTRAL'),
 
@@ -238,10 +280,10 @@ class AIScalpingSelector:
                     'near_resistance': signal.indicators_data.get('near_resistance', False),
 
                     # Микроструктура
-                    'price_velocity': signal.indicators_data.get('price_velocity', 0),
-                    'momentum_acceleration': signal.indicators_data.get('momentum_acceleration', 0),
+                    'price_velocity': signal.indicators_data.get('price_velocity', 0.0),
+                    'momentum_acceleration': signal.indicators_data.get('momentum_acceleration', 0.0),
                     'trend_strength': signal.indicators_data.get('trend_strength', 0)
-                }
+                })
             }
 
             prepared_data.append(signal_data)
@@ -296,6 +338,8 @@ class AIScalpingSelector:
 
         except Exception as e:
             logger.error(f"❌ Ошибка ИИ отбора: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
     def _parse_ai_response(self, response: str) -> List[str]:
@@ -347,7 +391,7 @@ class AIScalpingSelector:
                 ],
 
                 # Полные индикаторы
-                'technical_analysis': {
+                'technical_analysis': safe_json_serialize({
                     'tema_trend': {
                         'current_alignment': full_indicators.get('tema_alignment', False),
                         'slope': full_indicators.get('tema_slope', 0),
@@ -375,7 +419,7 @@ class AIScalpingSelector:
                         'near_support': full_indicators.get('near_support', False),
                         'near_resistance': full_indicators.get('near_resistance', False)
                     }
-                },
+                }),
 
                 'signal_quality': full_indicators.get('signal_quality', 0)
             }
