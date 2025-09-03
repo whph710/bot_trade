@@ -6,6 +6,7 @@ import httpx
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import time
+import json
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -15,12 +16,12 @@ _cached_prompts = {}
 
 # СКАЛЬПИНГОВЫЕ НАСТРОЙКИ (критично для скорости)
 SCALPING_CONFIG = {
-    'default_timeout': 25,  # Быстрый таймаут для скальпинга
-    'selection_timeout': 20,  # Еще быстрее для первичного отбора
-    'analysis_timeout': 35,  # Чуть больше для детального анализа
-    'max_retries': 2,  # Меньше попыток для скорости
-    'max_tokens_selection': 1000,  # Меньше токенов для отбора
-    'max_tokens_analysis': 3000,  # Больше для анализа
+    'default_timeout': 35,  # Увеличен для размышлений
+    'selection_timeout': 30,  # Увеличен для размышлений
+    'analysis_timeout': 45,  # Увеличен для размышлений
+    'max_retries': 2,
+    'max_tokens_selection': 1500,  # Увеличен для размышлений
+    'max_tokens_analysis': 4000,  # Увеличен для размышлений
 }
 
 
@@ -41,11 +42,33 @@ def get_cached_prompt(filename: str = 'prompt.txt') -> str:
     return _cached_prompts[filename]
 
 
+def create_thinking_prompt(original_prompt: str, request_type: str) -> str:
+    """Создает промпт с инструкцией для размышлений."""
+
+    thinking_instruction = """
+ВАЖНО: Перед тем как дать окончательный ответ, сначала обдумай задачу в секции <thinking>.
+
+Структура ответа:
+<thinking>
+Здесь проанализируй:
+1. Что именно нужно сделать
+2. Какие данные у меня есть
+3. Какие паттерны или сигналы вижу
+4. Возможные риски или возможности
+5. Логику принятия решения
+</thinking>
+
+После размышлений дай четкий, конкретный ответ.
+"""
+
+    return thinking_instruction + "\n\n" + original_prompt
+
+
 # Глобальный HTTP клиент для переиспользования соединений (экономия времени)
 _global_http_client = None
 
 
-async def get_http_client(timeout: int = 25) -> httpx.AsyncClient:
+async def get_http_client(timeout: int = 35) -> httpx.AsyncClient:
     """Переиспользуемый HTTP клиент для скорости."""
     global _global_http_client
 
@@ -53,12 +76,11 @@ async def get_http_client(timeout: int = 25) -> httpx.AsyncClient:
         _global_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
             limits=httpx.Limits(
-                max_connections=10,  # Больше соединений для батчей
+                max_connections=10,
                 max_keepalive_connections=5
             ),
             verify=True,
             http2=True,
-            # Настройки для скорости
             headers={
                 'Connection': 'keep-alive',
                 'Keep-Alive': 'timeout=30, max=100'
@@ -68,14 +90,30 @@ async def get_http_client(timeout: int = 25) -> httpx.AsyncClient:
     return _global_http_client
 
 
+def extract_final_answer(response_text: str) -> str:
+    """Извлекает окончательный ответ, убирая секцию размышлений."""
+    if '<thinking>' in response_text and '</thinking>' in response_text:
+        # Находим конец секции размышлений
+        thinking_end = response_text.find('</thinking>')
+        if thinking_end != -1:
+            # Берем все после </thinking>
+            final_answer = response_text[thinking_end + len('</thinking>'):].strip()
+            if final_answer:
+                return final_answer
+
+    # Если нет секции размышлений, возвращаем как есть
+    return response_text
+
+
 async def deep_seek(data: str,
                     prompt: str = None,
-                    request_type: str = 'analysis',  # 'selection' или 'analysis'
+                    request_type: str = 'analysis',
                     timeout: int = None,
                     max_tokens: int = None,
-                    max_retries: int = None) -> str:
+                    max_retries: int = None,
+                    enable_thinking: bool = True) -> str:
     """
-    Оптимизированная функция для скальпинга с адаптивными настройками.
+    Оптимизированная функция для скальпинга с размышлениями и адаптивными настройками.
 
     Args:
         data: Данные для анализа
@@ -84,6 +122,7 @@ async def deep_seek(data: str,
         timeout: Таймаут (если None - берется из конфига по типу запроса)
         max_tokens: Максимум токенов (если None - берется из конфига)
         max_retries: Максимум попыток (если None - берется из конфига)
+        enable_thinking: Включить размышления (по умолчанию True)
     """
     start_time = time.time()
 
@@ -98,16 +137,20 @@ async def deep_seek(data: str,
         timeout = timeout or SCALPING_CONFIG['selection_timeout']
         max_tokens = max_tokens or SCALPING_CONFIG['max_tokens_selection']
         max_retries = max_retries or SCALPING_CONFIG['max_retries']
-        prompt_file = 'prompt2.txt'  # Промпт для отбора
+        prompt_file = 'prompt2.txt'
     else:  # analysis
         timeout = timeout or SCALPING_CONFIG['analysis_timeout']
         max_tokens = max_tokens or SCALPING_CONFIG['max_tokens_analysis']
         max_retries = max_retries or SCALPING_CONFIG['max_retries']
-        prompt_file = 'prompt.txt'  # Промпт для анализа
+        prompt_file = 'prompt.txt'
 
     # Загружаем промпт
     if prompt is None:
         prompt = get_cached_prompt(prompt_file)
+
+    # Добавляем инструкции для размышлений
+    if enable_thinking:
+        prompt = create_thinking_prompt(prompt, request_type)
 
     # Получаем переиспользуемый HTTP клиент
     http_client = await get_http_client(timeout)
@@ -120,7 +163,8 @@ async def deep_seek(data: str,
 
     for attempt in range(max_retries):
         try:
-            logger.info(f"DeepSeek {request_type} запрос {attempt + 1}/{max_retries}")
+            logger.info(
+                f"DeepSeek {request_type} запрос {attempt + 1}/{max_retries} {'с размышлениями' if enable_thinking else ''}")
 
             # Оптимизированные параметры для скальпинга
             response = await client.chat.completions.create(
@@ -131,15 +175,28 @@ async def deep_seek(data: str,
                 ],
                 stream=False,
                 max_tokens=max_tokens,
-
-                # Настройки для скорости и качества скальпинга
-                temperature=0.3 if request_type == 'selection' else 0.7,  # Меньше креативности для отбора
+                temperature=0.3 if request_type == 'selection' else 0.7,
                 top_p=0.8 if request_type == 'selection' else 0.9,
                 frequency_penalty=0.1,
                 presence_penalty=0.1 if request_type == 'selection' else 0.05
             )
 
-            result = response.choices[0].message.content
+            raw_result = response.choices[0].message.content
+
+            # Извлекаем финальный ответ, убирая размышления
+            if enable_thinking:
+                result = extract_final_answer(raw_result)
+
+                # Логируем размышления отдельно для отладки
+                if '<thinking>' in raw_result:
+                    thinking_start = raw_result.find('<thinking>') + len('<thinking>')
+                    thinking_end = raw_result.find('</thinking>')
+                    if thinking_end > thinking_start:
+                        thinking_content = raw_result[thinking_start:thinking_end].strip()
+                        logger.debug(f"🧠 Размышления ИИ: {thinking_content[:200]}...")
+            else:
+                result = raw_result
+
             execution_time = time.time() - start_time
 
             logger.info(f"✅ DeepSeek {request_type} ответ получен: {len(result)} символов за {execution_time:.2f}сек")
@@ -147,21 +204,21 @@ async def deep_seek(data: str,
             # Предупреждение о медленной работе для скальпинга
             if execution_time > (timeout * 0.8):
                 logger.warning(f"⚠️ Медленный ответ ИИ: {execution_time:.2f}сек (лимит {timeout}сек)")
+
             print(result)
             return result
 
         except asyncio.TimeoutError:
             logger.error(f"❌ Таймаут ИИ на попытке {attempt + 1}: {timeout}сек")
             if attempt < max_retries - 1:
-                await asyncio.sleep(1)  # Короткая пауза для скальпинга
+                await asyncio.sleep(1)
 
         except Exception as e:
             error_msg = str(e)
             logger.warning(f"❌ Попытка {attempt + 1} неудачна: {error_msg}")
 
             if attempt < max_retries - 1:
-                # Короткая задержка для скальпинга (не экспоненциальная)
-                wait_time = 1 + (attempt * 0.5)  # Максимум 2 секунды ожидания
+                wait_time = 1 + (attempt * 0.5)
                 logger.info(f"⏳ Ожидание {wait_time:.1f}с...")
                 await asyncio.sleep(wait_time)
             else:
@@ -174,20 +231,32 @@ async def deep_seek(data: str,
 
 
 async def deep_seek_selection(data: str, prompt: str = None) -> str:
-    """Быстрая функция для первичного отбора пар (оптимизирована для скорости)."""
+    """Быстрая функция для первичного отбора пар с размышлениями."""
     return await deep_seek(
         data=data,
         prompt=prompt,
-        request_type='selection'
+        request_type='selection',
+        enable_thinking=True
     )
 
 
 async def deep_seek_analysis(data: str, prompt: str = None) -> str:
-    """Функция для детального анализа (баланс скорости и качества)."""
+    """Функция для детального анализа с размышлениями."""
     return await deep_seek(
         data=data,
         prompt=prompt,
-        request_type='analysis'
+        request_type='analysis',
+        enable_thinking=True
+    )
+
+
+async def deep_seek_fast(data: str, prompt: str = None, request_type: str = 'analysis') -> str:
+    """Быстрая версия без размышлений (для экстренных случаев)."""
+    return await deep_seek(
+        data=data,
+        prompt=prompt,
+        request_type=request_type,
+        enable_thinking=False
     )
 
 
@@ -199,7 +268,7 @@ async def test_deepseek_connection() -> bool:
         return False
 
     try:
-        http_client = await get_http_client(15)  # Быстрая проверка
+        http_client = await get_http_client(15)
         api_client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://api.deepseek.com",
@@ -222,24 +291,20 @@ async def test_deepseek_connection() -> bool:
 
 
 async def batch_deep_seek(requests: list, request_type: str = 'selection') -> list:
-    """
-    Батчевая обработка запросов к ИИ для ускорения.
-    НЕ ИСПОЛЬЗУЕТСЯ в текущей версии, но готова для будущих оптимизаций.
-    """
+    """Батчевая обработка запросов к ИИ для ускорения."""
     results = []
 
-    # Создаем задачи для параллельного выполнения
     tasks = []
     for req_data in requests:
         task = deep_seek(
             data=req_data.get('data', ''),
             prompt=req_data.get('prompt'),
-            request_type=request_type
+            request_type=request_type,
+            enable_thinking=req_data.get('enable_thinking', True)
         )
         tasks.append(task)
 
-    # Выполняем параллельно с ограничением
-    semaphore = asyncio.Semaphore(3)  # Максимум 3 одновременных запроса
+    semaphore = asyncio.Semaphore(3)
 
     async def bounded_request(task):
         async with semaphore:
@@ -268,13 +333,13 @@ async def check_api_health() -> dict:
         response_time = round(end_time - start_time, 2)
         health_info["response_time"] = response_time
 
-        # Проверяем подходит ли для скальпинга (быстрые ответы)
-        health_info["suitable_for_scalping"] = response_time < 10.0
+        # С размышлениями нужно больше времени
+        health_info["suitable_for_scalping"] = response_time < 15.0
 
-        if response_time > 15.0:
-            logger.warning(f"⚠️ Медленное API ({response_time}сек) - не подходит для скальпинга")
+        if response_time > 20.0:
+            logger.warning(f"⚠️ Медленное API ({response_time}сек) - может не подходить для скальпинга с размышлениями")
         else:
-            logger.info(f"✅ API быстрое ({response_time}сек) - подходит для скальпинга")
+            logger.info(f"✅ API подходящее ({response_time}сек) для скальпинга с размышлениями")
 
     except Exception as e:
         logger.error(f"❌ Ошибка проверки API: {e}")
@@ -301,5 +366,6 @@ async def deep_seek_legacy(data: str, prompt: str = None, timeout: int = 60,
         request_type='analysis',
         timeout=timeout,
         max_tokens=max_tokens,
-        max_retries=max_retries
+        max_retries=max_retries,
+        enable_thinking=True
     )

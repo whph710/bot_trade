@@ -363,7 +363,7 @@ class AIScalpingSelector:
 
         try:
             # Получаем полные данные
-            full_candles = await get_klines_async(pair, "15", limit=SCALPING_CONFIG['candles_for_detailed'])
+            full_candles = await get_klines_async(pair, "30", limit=SCALPING_CONFIG['candles_for_detailed'])
 
             if not full_candles or len(full_candles) < 100:
                 logger.error(f"❌ Недостаточно данных для {pair}")
