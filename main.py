@@ -92,10 +92,10 @@ class FastScalpingAnalyzer:
         self.session_start = time.time()
         logger.info("🚀 Быстрый скальпинговый анализатор запущен")
 
-    def is_trading_hours(self) -> bool:
-        """Проверка торговых часов"""
-        current_hour = datetime.datetime.utcnow().hour
-        return current_hour not in SCALPING_CONFIG['forbidden_hours']
+    # def is_trading_hours(self) -> bool:
+    #     """Проверка торговых часов"""
+    #     current_hour = datetime.datetime.utcnow().hour
+    #     return current_hour not in SCALPING_CONFIG['forbidden_hours']
 
     async def quick_scan_pair(self, symbol: str) -> Optional[ScalpingSignal]:
         """Быстрое сканирование одной пары"""
