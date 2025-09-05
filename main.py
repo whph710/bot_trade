@@ -41,12 +41,12 @@ SCALPING_CONFIG = {
 
     # Параметры обработки
     'batch_size': 40,
-    'min_confidence': 70,
+    'min_confidence': 60,
     'max_pairs_to_ai': 8,
 
     # Фильтры по инструкции
-    'min_liquidity_volume': 50_000_000,  # Минимум $50M объем
-    'max_spread_percent': 0.15,  # Максимум 0.15% спред
+    'min_liquidity_volume': 10_000_000,  # Минимум $50M объем
+    'max_spread_percent': 0.5,  # Максимум 0.15% спред
 }
 
 
