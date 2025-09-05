@@ -9,12 +9,12 @@ from dataclasses import dataclass, asdict
 import re
 import datetime
 
-# ИМПОРТЫ КОТОРЫЕ НЕЛЬЗЯ МЕНЯТЬ
+# ИМПОРТЫ
 from func_async import get_klines_async, get_usdt_trading_pairs
 from deepseek import deep_seek_selection, deep_seek_analysis, cleanup_http_client
 
-# НОВЫЕ ИМПОРТЫ (заменяют старые из func_trade)
-from func_trade import detect_scalping_signal, calculate_scalping_indicators
+# НОВЫЙ ИМПОРТ с индикаторами по инструкции
+from func_trade import detect_instruction_based_signals, calculate_indicators_by_instruction
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,20 +27,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# КОНФИГУРАЦИЯ СКАЛЬПИНГА
+# КОНФИГУРАЦИЯ ПО ИНСТРУКЦИИ
 SCALPING_CONFIG = {
-    'candles_for_scan': 50,  # Уменьшено с 200 для скорости
-    'candles_for_analysis': 16,  # Для первичного отбора ИИ
-    'candles_for_detailed': 200,  # Для детального анализа
-    'batch_size': 50,  # Размер батча
-    'min_confidence': 70,  # Минимальная уверенность
-    'max_pairs_to_ai': 10,  # Максимум пар для ИИ анализа
-    'forbidden_hours': [22, 23, 0, 1, 2, 3, 4, 5],  # Низкая ликвидность UTC
+    # Таймфреймы согласно иерархии
+    'context_tf': '15',  # 15m для контекста/фильтра
+    'entry_tf': '5',  # 5m для точного входа
+
+    # Количество свечей
+    'candles_15m': 100,  # Для контекста
+    'candles_5m': 200,  # Для анализа входа
+    'candles_for_ai_selection': 30,  # Для первичного отбора ИИ
+    'candles_for_ai_analysis': 100,  # Для детального анализа
+
+    # Параметры обработки
+    'batch_size': 40,
+    'min_confidence': 70,
+    'max_pairs_to_ai': 8,
+
+    # Фильтры по инструкции
+    'min_liquidity_volume': 50_000_000,  # Минимум $50M объем
+    'max_spread_percent': 0.15,  # Максимум 0.15% спред
 }
 
 
 def clean_value(value):
-    """Очистка значений от NaN, Infinity и приведение к JSON-сериализуемым типам"""
+    """Очистка значений от NaN и Infinity"""
     if isinstance(value, (np.integer, np.floating)):
         value = float(value)
     elif isinstance(value, np.bool_):
@@ -61,134 +72,149 @@ def clean_value(value):
 
 
 def safe_json_serialize(obj: Any) -> Any:
-    """Безопасная сериализация для JSON с обработкой NaN"""
+    """Безопасная JSON сериализация"""
     return clean_value(obj)
 
 
 @dataclass
-class ScalpingSignal:
-    """Упрощенный торговый сигнал для скальпинга"""
+class InstructionBasedSignal:
+    """Сигнал согласно инструкции с мультитаймфреймным анализом"""
     pair: str
     signal_type: str  # 'LONG', 'SHORT', 'NO_SIGNAL'
     confidence: int
     entry_price: float
     timestamp: int
 
-    # Ключевые метрики
-    quality_score: int
-    volatility_regime: str
-    volume_confirmed: bool
-    entry_reasons: List[str]
+    # Данные по инструкции
+    pattern_type: str  # 'MOMENTUM_BREAKOUT', 'PULLBACK_ENTRY', etc.
+    higher_tf_trend: str  # Тренд 15m
+    validation_score: str  # "3/4" чек-пунктов
+    atr_current: float  # Текущий ATR для волатильности
+    volume_ratio: float  # Соотношение объемов
 
-    # Для ИИ анализа
-    candles_data: List = None
+    # Для ИИ
+    candles_5m: List = None  # 5m свечи для входа
+    candles_15m: List = None  # 15m свечи для контекста
     indicators_data: Dict = None
 
 
-class FastScalpingAnalyzer:
-    """Быстрый анализатор для скальпинга 15M"""
+class InstructionBasedAnalyzer:
+    """Анализатор согласно инструкции: 15m контекст + 5m вход"""
 
     def __init__(self):
         self.session_start = time.time()
-        logger.info("🚀 Быстрый скальпинговый анализатор запущен")
+        logger.info("🎯 Анализатор по инструкции запущен (15m+5m)")
 
-    def is_trading_hours(self) -> bool:
-        """Проверка торговых часов"""
-        current_hour = datetime.datetime.utcnow().hour
-        return current_hour not in SCALPING_CONFIG['forbidden_hours']
+    def passes_liquidity_filter(self, symbol: str, candles: List) -> bool:
+        """Фильтр ликвидности согласно инструкции"""
+        if not candles:
+            return False
 
-    async def quick_scan_pair(self, symbol: str) -> Optional[ScalpingSignal]:
-        """Быстрое сканирование одной пары"""
+        # Примерная оценка объема (последние 24 свечи 5m ≈ 2 часа)
+        recent_volumes = [float(c[5]) * float(c[4]) for c in candles[-24:]]  # Объем в USD
+        avg_hourly_volume = sum(recent_volumes) * 12  # Приблизительно за 24ч
+
+        return avg_hourly_volume > SCALPING_CONFIG['min_liquidity_volume']
+
+    def check_spread_quality(self, candles: List) -> bool:
+        """Проверка стабильности спреда (упрощенно через ATR)"""
+        if len(candles) < 5:
+            return False
+
+        # Используем ATR как прокси для спреда
+        highs = [float(c[2]) for c in candles[-5:]]
+        lows = [float(c[3]) for c in candles[-5:]]
+        closes = [float(c[4]) for c in candles[-5:]]
+
+        avg_price = sum(closes) / len(closes)
+        avg_range = sum(h - l for h, l in zip(highs, lows)) / len(highs)
+
+        spread_estimate = (avg_range / avg_price) * 100
+        return spread_estimate < SCALPING_CONFIG['max_spread_percent']
+
+    async def quick_scan_pair(self, symbol: str) -> Optional[InstructionBasedSignal]:
+        """Быстрое сканирование пары согласно инструкции"""
         try:
-            # Получаем свечи для быстрого анализа
-            candles = await get_klines_async(
-                symbol,
-                interval="15",
-                limit=SCALPING_CONFIG['candles_for_scan']
-            )
+            # Получаем данные для мультитаймфреймного анализа
+            candles_5m = await get_klines_async(symbol, SCALPING_CONFIG['entry_tf'],
+                                                limit=SCALPING_CONFIG['candles_5m'])
+            candles_15m = await get_klines_async(symbol, SCALPING_CONFIG['context_tf'],
+                                                 limit=SCALPING_CONFIG['candles_15m'])
 
-            if not candles or len(candles) < 30:
+            if not candles_5m or not candles_15m:
                 return None
 
-            # Определяем сигнал с помощью новой быстрой функции
-            signal_result = detect_scalping_signal(candles)
+            # Фильтры согласно инструкции
+            if not self.passes_liquidity_filter(symbol, candles_5m):
+                return None
+
+            if not self.check_spread_quality(candles_5m):
+                return None
+
+            # Определяем сигнал согласно инструкции (мультитаймфрейм)
+            signal_result = detect_instruction_based_signals(candles_5m, candles_15m)
 
             if signal_result['signal'] == 'NO_SIGNAL':
                 return None
 
-            # Создаем сигнал с проверкой значений
-            try:
-                entry_price = float(candles[-1][4])
-                confidence = int(signal_result['confidence'])
-                quality_score = int(signal_result.get('quality_score', 0))
+            # Создаем сигнал
+            entry_price = float(candles_5m[-1][4])
+            confidence = int(signal_result['confidence'])
 
-                # Проверяем на валидность
-                if math.isnan(entry_price) or math.isnan(confidence):
-                    logger.warning(f"❌ NaN значения в {symbol}")
-                    return None
-
-            except (ValueError, TypeError) as e:
-                logger.warning(f"❌ Ошибка конвертации значений {symbol}: {e}")
+            if math.isnan(entry_price) or confidence < SCALPING_CONFIG['min_confidence']:
                 return None
 
-            return ScalpingSignal(
+            return InstructionBasedSignal(
                 pair=symbol,
                 signal_type=signal_result['signal'],
                 confidence=confidence,
                 entry_price=entry_price,
                 timestamp=int(time.time()),
-                quality_score=quality_score,
-                volatility_regime=signal_result.get('volatility_regime', 'MEDIUM'),
-                volume_confirmed=bool(signal_result.get('indicators', {}).get('volume_spike', False)),
-                entry_reasons=signal_result.get('entry_reasons', []),
-                candles_data=candles[-SCALPING_CONFIG['candles_for_analysis']:],
-                indicators_data=clean_value(signal_result.get('indicators', {}))  # Очищаем данные
+
+                # Данные согласно инструкции
+                pattern_type=signal_result.get('pattern_type', 'UNKNOWN'),
+                higher_tf_trend=signal_result.get('higher_tf_trend', 'UNKNOWN'),
+                validation_score=signal_result.get('validation_score', '0/4'),
+                atr_current=signal_result.get('atr_current', 0.0),
+                volume_ratio=signal_result.get('volume_ratio', 1.0),
+
+                # Данные для ИИ
+                candles_5m=candles_5m[-SCALPING_CONFIG['candles_for_ai_selection']:],
+                candles_15m=candles_15m[-20:],  # Последние 20 свечей 15m для контекста
+                indicators_data=clean_value(signal_result.get('indicators', {}))
             )
 
         except Exception as e:
             logger.error(f"❌ Ошибка сканирования {symbol}: {e}")
             return None
 
-    async def mass_scan_markets(self) -> List[ScalpingSignal]:
-        """Массовое сканирование рынков"""
-        if not self.is_trading_hours():
-            logger.warning("⏰ Неторговые часы - пропускаем сканирование")
-            return []
-
+    async def mass_scan_markets(self) -> List[InstructionBasedSignal]:
+        """Массовое сканирование с фильтрацией согласно инструкции"""
         start_time = time.time()
-        logger.info("🔍 ЭТАП 1: Быстрое сканирование всех пар")
+        logger.info("🔍 ЭТАП 1: Сканирование с фильтрами по инструкции")
 
         try:
-            # Получаем список пар
             pairs = await get_usdt_trading_pairs()
             if not pairs:
-                logger.error("❌ Не удалось получить список пар")
                 return []
 
-            logger.info(f"📊 Сканируем {len(pairs)} пар")
+            logger.info(f"📊 Сканируем {len(pairs)} пар (15m контекст + 5m вход)")
 
-            # Обрабатываем батчами
             promising_signals = []
 
+            # Обрабатываем батчами
             for i in range(0, len(pairs), SCALPING_CONFIG['batch_size']):
                 batch = pairs[i:i + SCALPING_CONFIG['batch_size']]
-
-                # Создаем задачи для батча
                 tasks = [self.quick_scan_pair(pair) for pair in batch]
-
-                # Выполняем параллельно
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Собираем результаты
                 for result in results:
-                    if isinstance(result, ScalpingSignal):
+                    if isinstance(result, InstructionBasedSignal):
                         promising_signals.append(result)
 
-                # Логируем прогресс
                 processed = min(i + SCALPING_CONFIG['batch_size'], len(pairs))
                 logger.info(f"⏳ Обработано: {processed}/{len(pairs)}")
 
-                # Небольшая пауза между батчами
                 if i + SCALPING_CONFIG['batch_size'] < len(pairs):
                     await asyncio.sleep(0.1)
 
@@ -196,17 +222,17 @@ class FastScalpingAnalyzer:
             promising_signals.sort(key=lambda x: x.confidence, reverse=True)
 
             execution_time = time.time() - start_time
-            logger.info(f"✅ ЭТАП 1 завершен: {len(promising_signals)} сигналов за {execution_time:.2f}сек")
+            logger.info(f"✅ ЭТАП 1: {len(promising_signals)} сигналов за {execution_time:.2f}сек")
 
             return promising_signals
 
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка сканирования: {e}")
+            logger.error(f"❌ Ошибка сканирования: {e}")
             return []
 
 
-class AIScalpingSelector:
-    """ИИ селектор для скальпинга"""
+class InstructionBasedAISelector:
+    """ИИ селектор согласно инструкции"""
 
     def __init__(self):
         self.selection_prompt = self._load_prompt('prompt2.txt')
@@ -221,131 +247,138 @@ class AIScalpingSelector:
             logger.error(f"❌ Файл {filename} не найден")
             return ""
 
-    def _prepare_signals_for_ai(self, signals: List[ScalpingSignal]) -> Dict[str, Any]:
-        """Подготовка данных для ИИ анализа (16 свечей + индикаторы)"""
+    def _prepare_signals_for_ai(self, signals: List[InstructionBasedSignal]) -> Dict[str, Any]:
+        """Подготовка данных для ИИ согласно инструкции"""
         prepared_data = []
 
         for signal in signals:
-            # Берем только последние 16 свечей
-            recent_candles = signal.candles_data[-16:] if signal.candles_data else []
+            # Свечи 5m для анализа входа
+            recent_5m = signal.candles_5m[-30:] if signal.candles_5m else []
+            # Свечи 15m для контекста
+            recent_15m = signal.candles_15m[-20:] if signal.candles_15m else []
 
             signal_data = {
                 'pair': signal.pair,
                 'signal_type': signal.signal_type,
-                'confidence': int(signal.confidence),
-                'entry_price': float(signal.entry_price),
-                'quality_score': int(signal.quality_score),
-                'volatility_regime': str(signal.volatility_regime),
-                'volume_confirmed': bool(signal.volume_confirmed),
-                'entry_reasons': [str(reason) for reason in signal.entry_reasons],
+                'confidence': signal.confidence,
+                'entry_price': signal.entry_price,
 
-                # 16 последних свечей
-                'recent_candles': [
-                    {
-                        'timestamp': int(c[0]),
-                        'open': float(c[1]),
-                        'high': float(c[2]),
-                        'low': float(c[3]),
-                        'close': float(c[4]),
-                        'volume': float(c[5])
-                    } for c in recent_candles
-                ],
+                # Данные согласно инструкции
+                'pattern_type': signal.pattern_type,
+                'higher_tf_trend': signal.higher_tf_trend,
+                'validation_score': signal.validation_score,
+                'atr_current': signal.atr_current,
+                'volume_ratio': signal.volume_ratio,
 
-                # Ключевые индикаторы (последние 16 значений)
-                'indicators': safe_json_serialize({
-                    'tema3': signal.indicators_data.get('tema3_values', [])[-16:],
-                    'tema5': signal.indicators_data.get('tema5_values', [])[-16:],
-                    'tema8': signal.indicators_data.get('tema8_values', [])[-16:],
-                    'rsi': signal.indicators_data.get('rsi_values', [])[-16:],
-                    'stoch_k': signal.indicators_data.get('stoch_k', [])[-16:],
-                    'stoch_d': signal.indicators_data.get('stoch_d', [])[-16:],
-                    'macd_line': signal.indicators_data.get('macd_line', [])[-16:],
-                    'macd_signal': signal.indicators_data.get('macd_signal', [])[-16:],
-                    'atr': signal.indicators_data.get('atr_values', [])[-16:],
+                # Мультитаймфреймные данные
+                'timeframes': {
+                    '5m_candles': [
+                        {
+                            'timestamp': int(c[0]),
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in recent_5m
+                    ],
+                    '15m_context': [
+                        {
+                            'timestamp': int(c[0]),
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in recent_15m
+                    ]
+                },
 
-                    # Текущие значения
-                    'current_rsi': signal.indicators_data.get('rsi_current', 50.0),
-                    'current_atr': signal.indicators_data.get('atr_current', 0.0),
-                    'tema_alignment': signal.indicators_data.get('tema_alignment', False),
-                    'tema_slope': signal.indicators_data.get('tema_slope', 0.0),
-                    'macd_crossover': signal.indicators_data.get('macd_crossover', 'NONE'),
-                    'stoch_signal': signal.indicators_data.get('stoch_signal', 'NEUTRAL'),
-
-                    # Объемы и уровни
-                    'volume_ratio': signal.indicators_data.get('volume_ratio', 1.0),
-                    'volume_strength': signal.indicators_data.get('volume_strength', 0),
-                    'support_levels': signal.indicators_data.get('support_levels', []),
-                    'resistance_levels': signal.indicators_data.get('resistance_levels', []),
-                    'near_support': signal.indicators_data.get('near_support', False),
-                    'near_resistance': signal.indicators_data.get('near_resistance', False),
-
-                    # Микроструктура
-                    'price_velocity': signal.indicators_data.get('price_velocity', 0.0),
-                    'momentum_acceleration': signal.indicators_data.get('momentum_acceleration', 0.0),
-                    'trend_strength': signal.indicators_data.get('trend_strength', 0)
+                # Индикаторы согласно инструкции
+                'technical_indicators': safe_json_serialize({
+                    'ema_system': {
+                        'ema5': signal.indicators_data.get('ema5', [])[-20:],
+                        'ema8': signal.indicators_data.get('ema8', [])[-20:],
+                        'ema20': signal.indicators_data.get('ema20', [])[-20:]
+                    },
+                    'momentum': {
+                        'rsi9': signal.indicators_data.get('rsi', [])[-20:],
+                        'rsi_current': signal.indicators_data.get('rsi_current', 50),
+                        'macd_line': signal.indicators_data.get('macd_line', [])[-20:],
+                        'macd_signal': signal.indicators_data.get('macd_signal', [])[-20:],
+                        'macd_histogram': signal.indicators_data.get('macd_histogram', [])[-20:]
+                    },
+                    'volatility': {
+                        'atr14': signal.indicators_data.get('atr', [])[-20:],
+                        'atr_current': signal.indicators_data.get('atr_current', 0),
+                        'atr_mean': signal.indicators_data.get('atr_mean', 0)
+                    },
+                    'bollinger_bands': {
+                        'upper': signal.indicators_data.get('bb_upper', [])[-20:],
+                        'middle': signal.indicators_data.get('bb_middle', [])[-20:],
+                        'lower': signal.indicators_data.get('bb_lower', [])[-20:]
+                    },
+                    'volume': {
+                        'volume_sma20': signal.indicators_data.get('volume_sma', [])[-20:],
+                        'current_volume': signal.indicators_data.get('volume_current', 0),
+                        'volume_ratio': signal.indicators_data.get('volume_ratio', 1.0)
+                    }
                 })
             }
 
             prepared_data.append(signal_data)
 
         return {
+            'analysis_method': 'multi_timeframe_instruction_based',
+            'context_tf': '15m',
+            'entry_tf': '5m',
             'signals_count': len(prepared_data),
-            'timeframe': '15m',
-            'strategy': 'scalping_3_4_candles',
             'timestamp': int(time.time()),
             'signals': prepared_data
         }
 
-    async def select_best_pairs(self, signals: List[ScalpingSignal]) -> List[str]:
-        """Первичный отбор через ИИ (16 свечей)"""
+    async def select_best_pairs(self, signals: List[InstructionBasedSignal]) -> List[str]:
+        """ИИ отбор лучших пар согласно инструкции"""
         if not self.selection_prompt or not signals:
             return []
 
         logger.info(f"🤖 ЭТАП 2: ИИ отбор из {len(signals)} сигналов")
 
         try:
-            # Ограничиваем количество сигналов для ИИ
             top_signals = signals[:SCALPING_CONFIG['max_pairs_to_ai']]
-
-            # Подготавливаем данные
             ai_data = self._prepare_signals_for_ai(top_signals)
 
-            # Формируем запрос
             message = f"""{self.selection_prompt}
 
-=== СКАЛЬПИНГ 15M: ПЕРВИЧНЫЙ ОТБОР ===
+=== МУЛЬТИТАЙМФРЕЙМНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
+МЕТОД: 15m контекст + 5m точный вход
+ИНДИКАТОРЫ: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)
+ШАБЛОНЫ: Momentum breakout, Pullback, Squeeze breakout, Range scalp
 КОЛИЧЕСТВО СИГНАЛОВ: {len(top_signals)}
-УДЕРЖАНИЕ: 3-4 свечи
-ДАННЫЕ: Последние 16 свечей + индикаторы
 
 {json.dumps(ai_data, indent=2, ensure_ascii=False)}
 
-ВАЖНО: Выбери максимум 3-5 лучших пар для скальпинга.
+ЗАДАЧА: Выбери максимум 3-5 лучших пар для торговли по инструкции.
+Учти валидацию сигналов (3 из 4 чек-пунктов) и объемное подтверждение.
+
 Верни JSON: {{"pairs": ["BTCUSDT", "ETHUSDT"]}}"""
 
-            # Отправляем в ИИ для быстрого отбора
             ai_response = await deep_seek_selection(message)
 
             if not ai_response:
-                logger.error("❌ ИИ не ответил")
                 return []
 
-            # Парсим ответ
             selected_pairs = self._parse_ai_response(ai_response)
-
-            logger.info(f"✅ ЭТАП 2 завершен: ИИ выбрал {len(selected_pairs)} пар")
+            logger.info(f"✅ ЭТАП 2: ИИ выбрал {len(selected_pairs)} пар")
             return selected_pairs
 
         except Exception as e:
             logger.error(f"❌ Ошибка ИИ отбора: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
     def _parse_ai_response(self, response: str) -> List[str]:
         """Парсинг ответа ИИ"""
         try:
-            # Ищем JSON с парами
             json_match = re.search(r'\{[^}]*"pairs"[^}]*\}', response)
             if json_match:
                 data = json.loads(json_match.group())
@@ -355,92 +388,149 @@ class AIScalpingSelector:
             return []
 
     async def detailed_analysis(self, pair: str) -> Optional[str]:
-        """Детальный анализ выбранной пары (200 свечей)"""
+        """Детальный анализ пары согласно инструкции"""
         if not self.analysis_prompt:
             return None
 
         logger.info(f"🔬 ЭТАП 3: Детальный анализ {pair}")
 
         try:
-            # Получаем полные данные
-            full_candles = await get_klines_async(pair, "15", limit=SCALPING_CONFIG['candles_for_detailed'])
+            # Получаем полные данные для детального анализа
+            full_candles_5m = await get_klines_async(pair, '5', limit=SCALPING_CONFIG['candles_for_ai_analysis'])
+            full_candles_15m = await get_klines_async(pair, '15', limit=60)
 
-            if not full_candles or len(full_candles) < 100:
-                logger.error(f"❌ Недостаточно данных для {pair}")
+            if not full_candles_5m or not full_candles_15m:
                 return None
 
-            # Рассчитываем полные индикаторы
-            full_indicators = calculate_scalping_indicators(full_candles)
+            # Полный расчет индикаторов
+            full_indicators = calculate_indicators_by_instruction(full_candles_5m)
+            signal_analysis = detect_instruction_based_signals(full_candles_5m, full_candles_15m)
 
             # Подготавливаем данные для детального анализа
             analysis_data = {
                 'pair': pair,
                 'timestamp': int(time.time()),
-                'current_price': float(full_candles[-1][4]),
+                'current_price': float(full_candles_5m[-1][4]),
+                'analysis_method': 'instruction_based_multi_timeframe',
 
-                # Полная история (200 свечей)
-                'candles_count': len(full_candles),
-                'last_20_candles': [
-                    {
-                        'open': float(c[1]),
-                        'high': float(c[2]),
-                        'low': float(c[3]),
-                        'close': float(c[4]),
-                        'volume': float(c[5])
-                    } for c in full_candles[-20:]
-                ],
+                # Мультитаймфреймные данные
+                'market_context': {
+                    '15m_trend': signal_analysis.get('higher_tf_trend', 'UNKNOWN'),
+                    '5m_last_20_candles': [
+                        {
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in full_candles_5m[-20:]
+                    ],
+                    '15m_last_10_candles': [
+                        {
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in full_candles_15m[-10:]
+                    ]
+                },
 
-                # Полные индикаторы
-                'technical_analysis': safe_json_serialize({
-                    'tema_trend': {
-                        'current_alignment': full_indicators.get('tema_alignment', False),
-                        'slope': full_indicators.get('tema_slope', 0),
-                        'strength': full_indicators.get('trend_strength', 0)
+                # Полный технический анализ согласно инструкции
+                'instruction_based_analysis': {
+                    'signal_detected': signal_analysis.get('signal', 'NO_SIGNAL'),
+                    'pattern_type': signal_analysis.get('pattern_type', 'NONE'),
+                    'confidence': signal_analysis.get('confidence', 0),
+                    'validation_score': signal_analysis.get('validation_score', '0/4'),
+                    'entry_reasons': signal_analysis.get('entry_reasons', []),
+                    'validation_reasons': signal_analysis.get('validation_reasons', [])
+                },
+
+                # Индикаторы согласно инструкции
+                'technical_indicators': safe_json_serialize({
+                    'trend_following': {
+                        'ema5_current': full_indicators.get('ema5', [])[-1] if full_indicators.get('ema5') else 0,
+                        'ema8_current': full_indicators.get('ema8', [])[-1] if full_indicators.get('ema8') else 0,
+                        'ema20_current': full_indicators.get('ema20', [])[-1] if full_indicators.get('ema20') else 0,
+                        'ema_alignment': (
+                                len(full_indicators.get('ema5', [])) > 0 and
+                                len(full_indicators.get('ema8', [])) > 0 and
+                                len(full_indicators.get('ema20', [])) > 0 and
+                                full_indicators['ema5'][-1] > full_indicators['ema8'][-1] > full_indicators['ema20'][-1]
+                        )
                     },
-                    'momentum': {
-                        'rsi': full_indicators.get('rsi_current', 50),
-                        'stoch_signal': full_indicators.get('stoch_signal', 'NEUTRAL'),
-                        'macd_crossover': full_indicators.get('macd_crossover', 'NONE'),
-                        'acceleration': full_indicators.get('momentum_acceleration', 0)
+                    'momentum_filter': {
+                        'rsi9_current': full_indicators.get('rsi_current', 50),
+                        'rsi_trend': 'bullish' if full_indicators.get('rsi_current', 50) > 50 else 'bearish',
+                        'rsi_extreme': (
+                                full_indicators.get('rsi_current', 50) < 30 or
+                                full_indicators.get('rsi_current', 50) > 70
+                        )
                     },
-                    'volume': {
-                        'spike_detected': full_indicators.get('volume_spike', False),
-                        'ratio': full_indicators.get('volume_ratio', 1.0),
-                        'strength': full_indicators.get('volume_strength', 0)
+                    'macd_confirmation': {
+                        'macd_current': full_indicators.get('macd_line', [])[-1] if full_indicators.get(
+                            'macd_line') else 0,
+                        'signal_current': full_indicators.get('macd_signal', [])[-1] if full_indicators.get(
+                            'macd_signal') else 0,
+                        'histogram_current': full_indicators.get('macd_histogram', [])[-1] if full_indicators.get(
+                            'macd_histogram') else 0,
+                        'bullish_crossover': (
+                                len(full_indicators.get('macd_line', [])) >= 2 and
+                                len(full_indicators.get('macd_signal', [])) >= 2 and
+                                full_indicators['macd_line'][-2] <= full_indicators['macd_signal'][-2] and
+                                full_indicators['macd_line'][-1] > full_indicators['macd_signal'][-1]
+                        )
                     },
-                    'volatility': {
-                        'regime': full_indicators.get('volatility_regime', 'MEDIUM'),
-                        'atr_current': full_indicators.get('atr_current', 0),
-                        'price_velocity': full_indicators.get('price_velocity', 0)
+                    'volatility_control': {
+                        'atr14_current': full_indicators.get('atr_current', 0),
+                        'atr_mean': full_indicators.get('atr_mean', 0),
+                        'volatility_suitable': full_indicators.get('atr_current', 0) >= full_indicators.get('atr_mean',
+                                                                                                            0) * 0.9,
+                        'atr_percent': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100
                     },
-                    'levels': {
-                        'support': full_indicators.get('support_levels', []),
-                        'resistance': full_indicators.get('resistance_levels', []),
-                        'near_support': full_indicators.get('near_support', False),
-                        'near_resistance': full_indicators.get('near_resistance', False)
+                    'volume_confirmation': {
+                        'volume_current': full_indicators.get('volume_current', 0),
+                        'volume_sma20': full_indicators.get('volume_sma', [])[-1] if full_indicators.get(
+                            'volume_sma') else 0,
+                        'volume_ratio': full_indicators.get('volume_ratio', 1.0),
+                        'volume_spike': full_indicators.get('volume_ratio', 1.0) > 1.5
+                    },
+                    'bollinger_analysis': {
+                        'bb_upper': full_indicators.get('bb_upper', [])[-1] if full_indicators.get('bb_upper') else 0,
+                        'bb_middle': full_indicators.get('bb_middle', [])[-1] if full_indicators.get(
+                            'bb_middle') else 0,
+                        'bb_lower': full_indicators.get('bb_lower', [])[-1] if full_indicators.get('bb_lower') else 0,
+                        'price_position': self._get_bb_position(float(full_candles_5m[-1][4]), full_indicators),
+                        'squeeze_potential': self._detect_bb_squeeze(full_indicators)
                     }
                 }),
 
-                'signal_quality': full_indicators.get('signal_quality', 0)
+                'risk_metrics': {
+                    'atr_based_stop': full_indicators.get('atr_current', 0) * 1.2,
+                    'atr_percent_risk': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100,
+                    'volume_liquidity': 'high' if full_indicators.get('volume_ratio', 1.0) > 1.5 else 'normal'
+                }
             }
 
-            # Формируем запрос для детального анализа
             message = f"""{self.analysis_prompt}
 
-=== ДЕТАЛЬНЫЙ АНАЛИЗ СКАЛЬПИНГА ===
+=== ДЕТАЛЬНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
 ПАРА: {pair}
-СТРАТЕГИЯ: Удержание 3-4 свечи на 15M
-ТЕКУЩАЯ ЦЕНА: {analysis_data['current_price']}
+МЕТОД: Мультитаймфреймный анализ (15m контекст + 5m вход)
+ИНДИКАТОРЫ: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)
+ЦЕНА: {analysis_data['current_price']}
 
 {json.dumps(analysis_data, indent=2, ensure_ascii=False)}
 
-Проанализируй и дай конкретные рекомендации по торговле."""
+Проанализируй согласно инструкции и дай конкретные рекомендации:
+1. Подтверждение сигнала по шаблонам
+2. Расчет стоп-лосса и тейк-профита
+3. Валидация объемом и волатильностью
+4. Мультитаймфреймное подтверждение"""
 
-            # Отправляем в ИИ для детального анализа
             analysis_result = await deep_seek_analysis(message)
 
             if analysis_result:
-                # Сохраняем результат
                 self._save_analysis(pair, analysis_result)
                 logger.info(f"✅ Анализ {pair} завершен")
                 return analysis_result
@@ -448,16 +538,45 @@ class AIScalpingSelector:
             return None
 
         except Exception as e:
-            logger.error(f"❌ Ошибка детального анализа {pair}: {e}")
+            logger.error(f"❌ Ошибка анализа {pair}: {e}")
             return None
 
+    def _get_bb_position(self, price: float, indicators: Dict) -> str:
+        """Позиция цены относительно Bollinger Bands"""
+        bb_upper = indicators.get('bb_upper', [])
+        bb_lower = indicators.get('bb_lower', [])
+
+        if not bb_upper or not bb_lower:
+            return 'unknown'
+
+        if price > bb_upper[-1]:
+            return 'above_upper'
+        elif price < bb_lower[-1]:
+            return 'below_lower'
+        else:
+            return 'inside_bands'
+
+    def _detect_bb_squeeze(self, indicators: Dict) -> bool:
+        """Определение сжатия Bollinger Bands"""
+        bb_upper = indicators.get('bb_upper', [])
+        bb_lower = indicators.get('bb_lower', [])
+
+        if len(bb_upper) < 10 or len(bb_lower) < 10:
+            return False
+
+        current_width = bb_upper[-1] - bb_lower[-1]
+        avg_width = sum(bb_upper[i] - bb_lower[i] for i in range(-10, 0)) / 10
+
+        return current_width < avg_width * 0.8
+
     def _save_analysis(self, pair: str, analysis: str):
-        """Сохранение результата анализа"""
+        """Сохранение анализа"""
         try:
-            with open('scalping_analysis.log', 'a', encoding='utf-8') as f:
+            with open('instruction_based_analysis.log', 'a', encoding='utf-8') as f:
                 f.write(f"\n{'=' * 80}\n")
                 f.write(f"ПАРА: {pair}\n")
                 f.write(f"ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"МЕТОД: Инструкция (15m+5m)\n")
                 f.write(f"АНАЛИЗ:\n{analysis}\n")
                 f.write(f"{'=' * 80}\n")
         except Exception as e:
@@ -465,35 +584,36 @@ class AIScalpingSelector:
 
 
 async def main():
-    """Главная функция оптимизированного скальпингового бота"""
-    logger.info("🚀 СКАЛЬПИНГОВЫЙ БОТ 15M - ЗАПУСК")
-    logger.info("🎯 Стратегия: Удержание 3-4 свечи")
-    logger.info("⚡ Режим: Быстрый анализ + ИИ отбор")
+    """Главная функция бота согласно инструкции"""
+    logger.info("🎯 СКАЛЬПИНГОВЫЙ БОТ ПО ИНСТРУКЦИИ - ЗАПУСК")
+    logger.info("📊 Метод: 15m контекст + 5m точный вход")
+    logger.info("🔧 Индикаторы: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)")
 
-    # Инициализация компонентов
-    analyzer = FastScalpingAnalyzer()
-    ai_selector = AIScalpingSelector()
+    analyzer = InstructionBasedAnalyzer()
+    ai_selector = InstructionBasedAISelector()
 
     try:
-        # ЭТАП 1: Быстрое сканирование всех пар
+        # ЭТАП 1: Сканирование с фильтрацией согласно инструкции
         promising_signals = await analyzer.mass_scan_markets()
 
         if not promising_signals:
-            logger.info("ℹ️ Качественных сигналов не найдено")
+            logger.info("ℹ️ Сигналы согласно инструкции не найдены")
             return
 
-        logger.info(f"📈 Найдено {len(promising_signals)} перспективных сигналов")
+        logger.info(f"📈 Найдено {len(promising_signals)} сигналов по инструкции")
+        for signal in promising_signals[:5]:  # Показываем топ-5
+            logger.info(f"   {signal.pair}: {signal.pattern_type} ({signal.confidence}%, {signal.validation_score})")
 
-        # ЭТАП 2: ИИ отбор лучших (16 свечей)
+        # ЭТАП 2: ИИ отбор согласно критериям
         selected_pairs = await ai_selector.select_best_pairs(promising_signals)
 
         if not selected_pairs:
-            logger.info("ℹ️ ИИ не выбрал ни одной пары")
+            logger.info("ℹ️ ИИ не выбрал пары согласно критериям")
             return
 
         logger.info(f"🤖 ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
 
-        # ЭТАП 3: Детальный анализ каждой выбранной пары (200 свечей)
+        # ЭТАП 3: Детальный анализ каждой пары
         successful_analyses = 0
 
         for pair in selected_pairs:
@@ -501,26 +621,24 @@ async def main():
 
             if analysis:
                 successful_analyses += 1
-                logger.info(f"✅ {pair} - анализ завершен")
+                logger.info(f"✅ {pair} - детальный анализ завершен")
             else:
                 logger.error(f"❌ {pair} - ошибка анализа")
 
-            # Пауза между запросами к ИИ
-            await asyncio.sleep(1)
+            await asyncio.sleep(1)  # Пауза между запросами
 
         # ИТОГИ
-        logger.info(f"\n🎉 АНАЛИЗ ЗАВЕРШЕН!")
-        logger.info(f"📊 Отсканировано пар: много")
+        logger.info(f"\n🎉 АНАЛИЗ ПО ИНСТРУКЦИИ ЗАВЕРШЕН!")
+        logger.info(f"📊 Метод: Мультитаймфреймный (15m+5m)")
         logger.info(f"🎯 Найдено сигналов: {len(promising_signals)}")
-        logger.info(f"🤖 ИИ выбрал: {len(selected_pairs)}")
+        logger.info(f"🤖 ИИ отобрал: {len(selected_pairs)}")
         logger.info(f"📋 Успешных анализов: {successful_analyses}")
-        logger.info(f"📁 Результаты: scalping_analysis.log")
+        logger.info(f"📁 Результаты: instruction_based_analysis.log")
 
-        # Очищаем HTTP клиент при завершении
         await cleanup_http_client()
 
     except KeyboardInterrupt:
-        logger.info("⏹️ Остановка по запросу пользователя")
+        logger.info("⏹️ Остановка по запросу")
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}")
         import traceback
@@ -529,9 +647,10 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("=" * 80)
-    logger.info("🎯 СКАЛЬПИНГОВЫЙ БОТ - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ")
-    logger.info("📊 Удержание: 3-4 свечи на 15M")
-    logger.info("⚡ Быстрые индикаторы + ИИ анализ")
+    logger.info("🎯 СКАЛЬПИНГОВЫЙ БОТ СОГЛАСНО ИНСТРУКЦИИ")
+    logger.info("📊 15m контекст + 5m точный вход")
+    logger.info("🔧 EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)")
+    logger.info("📋 Шаблоны: Momentum, Pullback, Squeeze, Range scalp")
     logger.info("=" * 80)
 
     try:

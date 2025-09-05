@@ -3,25 +3,38 @@ from typing import List, Dict, Any, Tuple
 import time
 import math
 
-# СКАЛЬПИНГОВЫЕ ПАРАМЕТРЫ (УСКОРЕННЫЕ ДЛЯ 15M)
+# ПАРАМЕТРЫ СОГЛАСНО ИНСТРУКЦИИ
 SCALPING_PARAMS = {
-    'tema_fast': 3,  # Очень быстрая TEMA
-    'tema_medium': 5,  # Средняя TEMA
-    'tema_slow': 8,  # Медленная TEMA
-    'rsi_period': 5,  # Быстрый RSI
-    'stoch_k': 5,  # Stochastic %K
-    'stoch_d': 3,  # Stochastic %D
-    'macd_fast': 5,  # Быстрая MACD
-    'macd_slow': 13,  # Медленная MACD
-    'macd_signal': 5,  # Сигнальная MACD
-    'atr_period': 8,  # Период ATR
-    'volume_lookback': 8,  # Анализ объемов
-    'min_confidence': 70  # Минимальная уверенность
+    # EMA параметры (5/8/20)
+    'ema_fast': 5,
+    'ema_medium': 8,
+    'ema_slow': 20,
+
+    # RSI(9) для фильтра импульса
+    'rsi_period': 9,
+
+    # MACD стандарт (12,26,9)
+    'macd_fast': 12,
+    'macd_slow': 26,
+    'macd_signal': 9,
+
+    # ATR(14) для волатильности
+    'atr_period': 14,
+
+    # Volume анализ
+    'volume_sma': 20,
+
+    # Bollinger Bands (20,2)
+    'bb_period': 20,
+    'bb_std': 2,
+
+    # Минимальная уверенность
+    'min_confidence': 70
 }
 
 
 def safe_float(value):
-    """Безопасное преобразование в float с обработкой NaN"""
+    """Безопасное преобразование в float"""
     try:
         result = float(value)
         if math.isnan(result) or math.isinf(result):
@@ -42,14 +55,6 @@ def safe_int(value):
         return 0
 
 
-def safe_bool(value):
-    """Безопасное преобразование в bool"""
-    try:
-        return bool(value)
-    except:
-        return False
-
-
 def safe_list(arr):
     """Безопасное преобразование массива в список"""
     try:
@@ -61,14 +66,6 @@ def safe_list(arr):
             return []
     except:
         return []
-
-
-def calculate_tema(prices: np.ndarray, period: int) -> np.ndarray:
-    """Triple Exponential Moving Average - самый быстрый тренд"""
-    ema1 = calculate_ema(prices, period)
-    ema2 = calculate_ema(ema1, period)
-    ema3 = calculate_ema(ema2, period)
-    return 3 * ema1 - 3 * ema2 + ema3
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
@@ -83,8 +80,8 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
     return ema
 
 
-def calculate_fast_rsi(prices: np.ndarray, period: int = 5) -> np.ndarray:
-    """Быстрый RSI для скальпинга"""
+def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
+    """RSI(9) для фильтра импульса согласно инструкции"""
     deltas = np.diff(prices)
     gains = np.where(deltas > 0, deltas, 0)
     losses = np.where(deltas < 0, -deltas, 0)
@@ -92,9 +89,10 @@ def calculate_fast_rsi(prices: np.ndarray, period: int = 5) -> np.ndarray:
     avg_gains = np.zeros_like(prices)
     avg_losses = np.zeros_like(prices)
 
-    # Используем SMA для первого значения
-    avg_gains[period] = np.mean(gains[:period])
-    avg_losses[period] = np.mean(losses[:period])
+    # Первое значение через SMA
+    if len(gains) >= period:
+        avg_gains[period] = np.mean(gains[:period])
+        avg_losses[period] = np.mean(losses[:period])
 
     # EMA для последующих значений
     alpha = 1.0 / period
@@ -108,31 +106,8 @@ def calculate_fast_rsi(prices: np.ndarray, period: int = 5) -> np.ndarray:
     return rsi
 
 
-def calculate_stochastic(candles: List[List[str]], k_period: int = 5, d_period: int = 3) -> Dict[str, np.ndarray]:
-    """Stochastic Oscillator для momentum"""
-    highs = np.array([float(c[2]) for c in candles])
-    lows = np.array([float(c[3]) for c in candles])
-    closes = np.array([float(c[4]) for c in candles])
-
-    k_values = np.zeros_like(closes)
-
-    for i in range(k_period - 1, len(closes)):
-        highest_high = np.max(highs[i - k_period + 1:i + 1])
-        lowest_low = np.min(lows[i - k_period + 1:i + 1])
-
-        if highest_high != lowest_low:
-            k_values[i] = (closes[i] - lowest_low) / (highest_high - lowest_low) * 100
-        else:
-            k_values[i] = 50
-
-    # %D - сглаженная версия %K
-    d_values = calculate_ema(k_values, d_period)
-
-    return {'k': k_values, 'd': d_values}
-
-
-def calculate_macd_fast(prices: np.ndarray, fast: int = 5, slow: int = 13, signal: int = 5) -> Dict[str, np.ndarray]:
-    """Быстрая MACD для скальпинга"""
+def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, np.ndarray]:
+    """MACD стандарт (12,26,9) согласно инструкции"""
     ema_fast = calculate_ema(prices, fast)
     ema_slow = calculate_ema(prices, slow)
 
@@ -147,180 +122,8 @@ def calculate_macd_fast(prices: np.ndarray, fast: int = 5, slow: int = 13, signa
     }
 
 
-def calculate_price_velocity(prices: np.ndarray, period: int = 3) -> float:
-    """Скорость изменения цены"""
-    if len(prices) < period:
-        return 0.0
-
-    recent_change = abs(prices[-1] - prices[-period])
-    avg_price = np.mean(prices[-period:])
-
-    return safe_float((recent_change / avg_price * 100) if avg_price > 0 else 0.0)
-
-
-def calculate_momentum_acceleration(prices: np.ndarray) -> float:
-    """Ускорение моментума"""
-    if len(prices) < 6:
-        return 0.0
-
-    # Momentum за последние 3 свечи
-    recent_momentum = prices[-1] - prices[-4]
-    # Momentum за предыдущие 3 свечи
-    prev_momentum = prices[-4] - prices[-7] if len(prices) >= 7 else 0
-
-    return safe_float(abs(recent_momentum - prev_momentum) / prices[-1] * 100 if prices[-1] > 0 else 0.0)
-
-
-def analyze_volume_spike(candles: List[List[str]], lookback: int = 8) -> Dict[str, Any]:
-    """Анализ объемных всплесков для скальпинга"""
-    if len(candles) < lookback:
-        return {'spike': False, 'ratio': 1.0, 'strength': 0}
-
-    volumes = np.array([float(c[5]) for c in candles])
-    current_volume = volumes[-1]
-    avg_volume = np.mean(volumes[-lookback:-1])  # Исключаем текущую свечу
-
-    if avg_volume == 0:
-        return {'spike': False, 'ratio': 1.0, 'strength': 0}
-
-    ratio = current_volume / avg_volume
-
-    return {
-        'spike': safe_bool(ratio > 1.5),  # Снижен порог для скальпинга
-        'ratio': safe_float(ratio),
-        'strength': safe_int(min(100, (ratio - 1) * 50))  # 0-100 шкала
-    }
-
-
-def find_micro_support_resistance(candles: List[List[str]], window: int = 8) -> Dict[str, List[float]]:
-    """Поиск микро-уровней поддержки/сопротивления"""
-    if len(candles) < window:
-        return {'support': [], 'resistance': []}
-
-    highs = np.array([float(c[2]) for c in candles])
-    lows = np.array([float(c[3]) for c in candles])
-
-    support_levels = []
-    resistance_levels = []
-
-    # Ищем локальные экстремумы в окне
-    for i in range(2, len(lows) - 2):
-        # Локальный минимум
-        if lows[i] <= lows[i - 1] and lows[i] <= lows[i - 2] and lows[i] <= lows[i + 1] and lows[i] <= lows[i + 2]:
-            support_levels.append(safe_float(lows[i]))
-
-        # Локальный максимум
-        if highs[i] >= highs[i - 1] and highs[i] >= highs[i - 2] and highs[i] >= highs[i + 1] and highs[i] >= highs[
-            i + 2]:
-            resistance_levels.append(safe_float(highs[i]))
-
-    return {
-        'support': sorted(set(support_levels))[-3:],  # Последние 3 уровня
-        'resistance': sorted(set(resistance_levels))[-3:]
-    }
-
-
-def calculate_scalping_indicators(candles: List[List[str]]) -> Dict[str, Any]:
-    """
-    ГЛАВНАЯ ФУНКЦИЯ: Расчет всех индикаторов для скальпинга 15M
-    Оптимизирована для удержания 3-4 свечи
-    """
-    if len(candles) < 20:
-        return {}
-
-    # Извлекаем цены
-    prices = np.array([float(c[4]) for c in candles])
-
-    # Быстрые трендовые индикаторы
-    tema3 = calculate_tema(prices, SCALPING_PARAMS['tema_fast'])
-    tema5 = calculate_tema(prices, SCALPING_PARAMS['tema_medium'])
-    tema8 = calculate_tema(prices, SCALPING_PARAMS['tema_slow'])
-
-    # Momentum индикаторы
-    rsi = calculate_fast_rsi(prices, SCALPING_PARAMS['rsi_period'])
-    stoch = calculate_stochastic(candles, SCALPING_PARAMS['stoch_k'], SCALPING_PARAMS['stoch_d'])
-    macd = calculate_macd_fast(prices, SCALPING_PARAMS['macd_fast'],
-                               SCALPING_PARAMS['macd_slow'], SCALPING_PARAMS['macd_signal'])
-
-    # Волатильность
-    atr_data = calculate_atr_fast(candles, SCALPING_PARAMS['atr_period'])
-
-    # Объемный анализ
-    volume_data = analyze_volume_spike(candles, SCALPING_PARAMS['volume_lookback'])
-
-    # Микроструктура
-    levels = find_micro_support_resistance(candles[-16:])  # Только последние 16 свечей
-
-    # Динамические метрики
-    price_velocity = calculate_price_velocity(prices[-8:])
-    momentum_accel = calculate_momentum_acceleration(prices[-8:])
-
-    # Безопасные вычисления для логических операций
-    tema_alignment = safe_bool(len(tema3) > 0 and len(tema5) > 0 and len(tema8) > 0 and
-                               tema3[-1] > tema5[-1] > tema8[-1])
-
-    tema_slope = safe_float((tema3[-1] - tema3[-2]) / tema3[-2] * 100 if len(tema3) >= 2 and tema3[-2] != 0 else 0.0)
-
-    rsi_current = safe_float(rsi[-1] if len(rsi) > 0 else 50.0)
-
-    # Определение сигнала Stochastic
-    stoch_k_current = safe_float(stoch['k'][-1] if len(stoch['k']) > 0 else 50.0)
-    if stoch_k_current < 20:
-        stoch_signal = 'OVERSOLD'
-    elif stoch_k_current > 80:
-        stoch_signal = 'OVERBOUGHT'
-    else:
-        stoch_signal = 'NEUTRAL'
-
-    return {
-        # Тренд
-        'tema3_values': safe_list(tema3),
-        'tema5_values': safe_list(tema5),
-        'tema8_values': safe_list(tema8),
-        'tema_alignment': tema_alignment,
-        'tema_slope': tema_slope,
-
-        # Momentum
-        'rsi_values': safe_list(rsi),
-        'rsi_current': rsi_current,
-        'stoch_k': safe_list(stoch['k']),
-        'stoch_d': safe_list(stoch['d']),
-        'stoch_signal': stoch_signal,
-
-        # MACD
-        'macd_line': safe_list(macd['macd']),
-        'macd_signal': safe_list(macd['signal']),
-        'macd_histogram': safe_list(macd['histogram']),
-        'macd_crossover': detect_macd_crossover(macd),
-
-        # Волатильность
-        'atr_values': safe_list(atr_data['atr']),
-        'atr_current': safe_float(atr_data['current']),
-        'volatility_regime': classify_volatility(atr_data['current'], prices[-1]),
-
-        # Объемы
-        'volume_spike': volume_data['spike'],
-        'volume_ratio': volume_data['ratio'],
-        'volume_strength': volume_data['strength'],
-
-        # Уровни
-        'support_levels': levels['support'],
-        'resistance_levels': levels['resistance'],
-        'near_support': safe_bool(is_near_level(prices[-1], levels['support'], 0.3)),
-        'near_resistance': safe_bool(is_near_level(prices[-1], levels['resistance'], 0.3)),
-
-        # Микроструктура
-        'price_velocity': price_velocity,
-        'momentum_acceleration': momentum_accel,
-        'trend_strength': safe_int(calculate_trend_strength(tema3, tema5, tema8)),
-
-        # Общие метрики
-        'signal_quality': safe_int(calculate_signal_quality_fast(candles, prices, rsi, stoch, volume_data))
-    }
-
-
-def calculate_atr_fast(candles: List[List[str]], period: int = 8) -> Dict[str, Any]:
-    """Быстрый расчет ATR"""
+def calculate_atr(candles: List[List[str]], period: int = 14) -> Dict[str, Any]:
+    """ATR(14) для волатильности согласно инструкции"""
     if len(candles) < period + 1:
         return {'atr': [], 'current': 0.0}
 
@@ -337,10 +140,11 @@ def calculate_atr_fast(candles: List[List[str]], period: int = 8) -> Dict[str, A
         )
 
     atr = np.zeros(len(candles))
-    atr[period] = np.mean(tr[1:period + 1])
+    if len(tr) > period:
+        atr[period] = np.mean(tr[1:period + 1])
 
-    for i in range(period + 1, len(candles)):
-        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+        for i in range(period + 1, len(candles)):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
 
     return {
         'atr': safe_list(atr),
@@ -348,231 +152,432 @@ def calculate_atr_fast(candles: List[List[str]], period: int = 8) -> Dict[str, A
     }
 
 
-def detect_macd_crossover(macd: Dict[str, np.ndarray]) -> str:
-    """Определение пересечения MACD"""
-    if len(macd['macd']) < 2 or len(macd['signal']) < 2:
-        return 'NONE'
+def calculate_bollinger_bands(prices: np.ndarray, period: int = 20, std: float = 2.0) -> Dict[str, np.ndarray]:
+    """Bollinger Bands (20,2) согласно инструкции"""
+    sma = np.zeros_like(prices)
+    upper = np.zeros_like(prices)
+    lower = np.zeros_like(prices)
 
-    macd_line = macd['macd']
-    signal_line = macd['signal']
+    for i in range(period - 1, len(prices)):
+        window = prices[i - period + 1:i + 1]
+        sma[i] = np.mean(window)
+        std_dev = np.std(window)
+        upper[i] = sma[i] + (std_dev * std)
+        lower[i] = sma[i] - (std_dev * std)
 
-    # Бычье пересечение
-    if macd_line[-2] <= signal_line[-2] and macd_line[-1] > signal_line[-1]:
-        return 'BULLISH'
-
-    # Медвежье пересечение
-    if macd_line[-2] >= signal_line[-2] and macd_line[-1] < signal_line[-1]:
-        return 'BEARISH'
-
-    return 'NONE'
+    return {
+        'upper': upper,
+        'middle': sma,
+        'lower': lower
+    }
 
 
-def classify_volatility(atr: float, price: float) -> str:
-    """Классификация режима волатильности"""
-    if price == 0:
-        return 'UNKNOWN'
+def calculate_volume_sma(candles: List[List[str]], period: int = 20) -> np.ndarray:
+    """Volume SMA(20) для подтверждения пробоев"""
+    volumes = np.array([float(c[5]) for c in candles])
+    volume_sma = np.zeros_like(volumes)
 
-    atr_percent = (atr / price) * 100
+    for i in range(period - 1, len(volumes)):
+        volume_sma[i] = np.mean(volumes[i - period + 1:i + 1])
 
-    if atr_percent > 2.0:
-        return 'HIGH'
-    elif atr_percent > 1.0:
-        return 'MEDIUM'
+    return volume_sma
+
+
+def analyze_higher_timeframe_trend(candles_15m: List[List[str]]) -> Dict[str, Any]:
+    """Анализ старшего таймфрейма (15m) для контекста"""
+    if len(candles_15m) < 30:
+        return {'trend': 'UNKNOWN', 'strength': 0}
+
+    closes = np.array([float(c[4]) for c in candles_15m])
+    ema20 = calculate_ema(closes, 20)
+    ema50 = calculate_ema(closes, 50)
+
+    current_price = closes[-1]
+    ema20_current = ema20[-1]
+    ema50_current = ema50[-1]
+
+    # Определение тренда
+    if current_price > ema20_current > ema50_current:
+        trend = 'UPTREND'
+        strength = safe_int(((current_price - ema50_current) / ema50_current) * 1000)
+    elif current_price < ema20_current < ema50_current:
+        trend = 'DOWNTREND'
+        strength = safe_int(((ema50_current - current_price) / ema50_current) * 1000)
     else:
-        return 'LOW'
+        trend = 'SIDEWAYS'
+        strength = 0
+
+    return {
+        'trend': trend,
+        'strength': min(100, abs(strength)),
+        'ema20': safe_float(ema20_current),
+        'ema50': safe_float(ema50_current)
+    }
 
 
-def is_near_level(price: float, levels: List[float], threshold: float = 0.3) -> bool:
-    """Проверка близости к уровню"""
-    if not levels or price == 0:
-        return False
+def detect_momentum_breakout(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
+    """Шаблон A: Momentum breakout (импульсный вход)"""
+    if len(candles) < 5:
+        return {'signal': False, 'confidence': 0}
 
-    for level in levels:
-        distance = abs(price - level) / price * 100
-        if distance <= threshold:
-            return True
+    closes = np.array([float(c[4]) for c in candles])
+    volumes = np.array([float(c[5]) for c in candles])
 
-    return False
+    current_close = closes[-1]
+    ema20 = indicators.get('ema20', [])
+    macd_hist = indicators.get('macd_histogram', [])
+    volume_sma = indicators.get('volume_sma', [])
 
+    if not ema20 or not macd_hist or not volume_sma:
+        return {'signal': False, 'confidence': 0}
 
-def calculate_trend_strength(tema3: np.ndarray, tema5: np.ndarray, tema8: np.ndarray) -> int:
-    """Расчет силы тренда (0-100)"""
-    if len(tema3) < 5:
-        return 0
+    # Условия согласно инструкции
+    price_above_ema20 = current_close > ema20[-1]
+    macd_positive = macd_hist[-1] > 0
+    volume_confirmed = len(volume_sma) > 0 and volumes[-1] > volume_sma[-1]
+    atr_valid = indicators.get('atr_current', 0) >= indicators.get('atr_mean', 0) * 0.9
 
-    # Проверяем выравнивание TEMA
-    alignment_score = 0
-    if tema3[-1] > tema5[-1] > tema8[-1]:  # Восходящий тренд
-        alignment_score = 40
-    elif tema3[-1] < tema5[-1] < tema8[-1]:  # Нисходящий тренд
-        alignment_score = 40
+    if price_above_ema20 and macd_positive and volume_confirmed and atr_valid:
+        confidence = 85
+        return {
+            'signal': True,
+            'direction': 'LONG',
+            'confidence': confidence,
+            'type': 'MOMENTUM_BREAKOUT',
+            'reasons': ['price_above_ema20', 'macd_positive', 'volume_confirmed']
+        }
 
-    # Проверяем консистентность направления
-    consistency_score = 0
-    try:
-        tema3_rising = all(tema3[i] > tema3[i - 1] for i in range(-3, 0))
-        tema3_falling = all(tema3[i] < tema3[i - 1] for i in range(-3, 0))
-
-        if tema3_rising or tema3_falling:
-            consistency_score = 30
-    except:
-        consistency_score = 0
-
-    # Проверяем угол наклона
-    slope_score = 0
-    if len(tema3) >= 5 and tema3[-5] != 0:
-        try:
-            slope = abs((tema3[-1] - tema3[-5]) / tema3[-5] * 100)
-            slope_score = min(30, slope * 10)
-        except:
-            slope_score = 0
-
-    return safe_int(alignment_score + consistency_score + slope_score)
+    return {'signal': False, 'confidence': 0}
 
 
-def calculate_signal_quality_fast(candles: List[List[str]], prices: np.ndarray,
-                                  rsi: np.ndarray, stoch: Dict, volume_data: Dict) -> int:
-    """Быстрая оценка качества сигнала (0-100)"""
-    quality = 0
+def detect_pullback_entry(candles: List[List[str]], indicators: Dict, higher_tf_trend: str) -> Dict[str, Any]:
+    """Шаблон B: Pullback to EMA (вход по откату в тренде)"""
+    if len(candles) < 10:
+        return {'signal': False, 'confidence': 0}
 
-    # Объемное подтверждение (25 баллов)
-    if volume_data.get('spike', False):
-        quality += 25
-    elif volume_data.get('ratio', 1.0) > 1.2:
-        quality += 15
+    closes = np.array([float(c[4]) for c in candles])
+    current_close = closes[-1]
 
-    # RSI в оптимальной зоне (25 баллов)
-    current_rsi = safe_float(rsi[-1] if len(rsi) > 0 else 50.0)
-    if 30 < current_rsi < 70:
-        quality += 25
-    elif current_rsi <= 30 or current_rsi >= 70:
-        quality += 15  # Экстремальные значения тоже хороши для скальпинга
+    ema8 = indicators.get('ema8', [])
+    ema20 = indicators.get('ema20', [])
+    rsi = indicators.get('rsi', [])
+    macd = indicators.get('macd_line', [])
 
-    # Stochastic подтверждение (25 баллов)
-    if len(stoch['k']) > 0 and len(stoch['d']) > 0:
-        k_current = safe_float(stoch['k'][-1])
-        d_current = safe_float(stoch['d'][-1])
+    if not ema8 or not ema20 or not rsi:
+        return {'signal': False, 'confidence': 0}
 
-        if k_current < 20 and k_current > d_current:  # Выход из перепроданности
-            quality += 25
-        elif k_current > 80 and k_current < d_current:  # Выход из перекупленности
-            quality += 25
-        elif 20 < k_current < 80:  # Нейтральная зона
-            quality += 15
+    # Только в направлении старшего тренда
+    if higher_tf_trend == 'UPTREND':
+        # Откат к EMA в восходящем тренде
+        near_ema8 = abs(current_close - ema8[-1]) / current_close < 0.005  # в пределах 0.5%
+        rsi_recovered = len(rsi) > 0 and rsi[-1] > 45
+        macd_not_against = not macd or macd[-1] > macd[-2]
 
-    # Ценовая активность (25 баллов)
-    if len(prices) >= 5:
-        recent_range = max(prices[-5:]) - min(prices[-5:])
-        avg_price = np.mean(prices[-5:])
-        activity = safe_float((recent_range / avg_price * 100) if avg_price > 0 else 0.0)
+        if near_ema8 and rsi_recovered:
+            return {
+                'signal': True,
+                'direction': 'LONG',
+                'confidence': 75,
+                'type': 'PULLBACK_ENTRY',
+                'reasons': ['uptrend_pullback', 'near_ema', 'rsi_recovered']
+            }
 
-        if 0.5 < activity < 3.0:  # Оптимальная активность для скальпинга
-            quality += 25
-        elif activity > 0.2:
-            quality += 15
+    elif higher_tf_trend == 'DOWNTREND':
+        # Откат к EMA в нисходящем тренде
+        near_ema8 = abs(current_close - ema8[-1]) / current_close < 0.005
+        rsi_weak = len(rsi) > 0 and rsi[-1] < 55
 
-    return min(100, safe_int(quality))
+        if near_ema8 and rsi_weak:
+            return {
+                'signal': True,
+                'direction': 'SHORT',
+                'confidence': 75,
+                'type': 'PULLBACK_ENTRY',
+                'reasons': ['downtrend_pullback', 'near_ema', 'rsi_weak']
+            }
+
+    return {'signal': False, 'confidence': 0}
 
 
-def detect_scalping_signal(candles: List[List[str]]) -> Dict[str, Any]:
+def detect_bollinger_squeeze(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
+    """Шаблон C: Bollinger Squeeze breakout"""
+    if len(candles) < 25:
+        return {'signal': False, 'confidence': 0}
+
+    closes = np.array([float(c[4]) for c in candles])
+    volumes = np.array([float(c[5]) for c in candles])
+
+    bb_upper = indicators.get('bb_upper', [])
+    bb_lower = indicators.get('bb_lower', [])
+    volume_sma = indicators.get('volume_sma', [])
+    atr_values = indicators.get('atr', [])
+
+    if not bb_upper or not bb_lower or not volume_sma:
+        return {'signal': False, 'confidence': 0}
+
+    current_close = closes[-1]
+
+    # Проверяем сжатие полос (последние 5 свечей)
+    if len(bb_upper) >= 5:
+        recent_width = np.mean([(bb_upper[i] - bb_lower[i]) for i in range(-5, 0)])
+        historical_width = np.mean([(bb_upper[i] - bb_lower[i]) for i in range(-20, -5)])
+
+        squeeze_detected = recent_width < historical_width * 0.8
+
+        # Пробой верхней/нижней полосы с объемом
+        breakout_up = current_close > bb_upper[-1]
+        breakout_down = current_close < bb_lower[-1]
+        volume_confirmed = volumes[-1] > volume_sma[-1]
+
+        # ATR начинает расти
+        atr_rising = len(atr_values) >= 3 and atr_values[-1] > atr_values[-3]
+
+        if squeeze_detected and volume_confirmed and atr_rising:
+            if breakout_up:
+                return {
+                    'signal': True,
+                    'direction': 'LONG',
+                    'confidence': 80,
+                    'type': 'SQUEEZE_BREAKOUT',
+                    'reasons': ['bollinger_squeeze', 'upside_breakout', 'volume_spike']
+                }
+            elif breakout_down:
+                return {
+                    'signal': True,
+                    'direction': 'SHORT',
+                    'confidence': 80,
+                    'type': 'SQUEEZE_BREAKOUT',
+                    'reasons': ['bollinger_squeeze', 'downside_breakout', 'volume_spike']
+                }
+
+    return {'signal': False, 'confidence': 0}
+
+
+def detect_range_scalp(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
+    """Шаблон D: Range scalp (внутри диапазона)"""
+    if len(candles) < 30:
+        return {'signal': False, 'confidence': 0}
+
+    closes = np.array([float(c[4]) for c in candles])
+    highs = np.array([float(c[2]) for c in candles])
+    lows = np.array([float(c[3]) for c in candles])
+
+    # Определяем диапазон (последние 20 свечей)
+    recent_high = np.max(highs[-20:])
+    recent_low = np.min(lows[-20:])
+    range_size = recent_high - recent_low
+    current_close = closes[-1]
+
+    # Проверяем, что мы в боковом движении
+    range_ratio = range_size / current_close
+    if range_ratio < 0.02:  # менее 2% диапазон
+        return {'signal': False, 'confidence': 0}
+
+    rsi = indicators.get('rsi', [])
+    if not rsi:
+        return {'signal': False, 'confidence': 0}
+
+    # Близость к границам диапазона
+    near_support = abs(current_close - recent_low) / range_size < 0.1
+    near_resistance = abs(current_close - recent_high) / range_size < 0.1
+
+    current_rsi = rsi[-1]
+
+    # Отскок от поддержки
+    if near_support and current_rsi < 30:
+        return {
+            'signal': True,
+            'direction': 'LONG',
+            'confidence': 70,
+            'type': 'RANGE_SCALP',
+            'reasons': ['support_bounce', 'rsi_oversold']
+        }
+
+    # Отскок от сопротивления
+    elif near_resistance and current_rsi > 70:
+        return {
+            'signal': True,
+            'direction': 'SHORT',
+            'confidence': 70,
+            'type': 'RANGE_SCALP',
+            'reasons': ['resistance_rejection', 'rsi_overbought']
+        }
+
+    return {'signal': False, 'confidence': 0}
+
+
+def calculate_indicators_by_instruction(candles: List[List[str]]) -> Dict[str, Any]:
     """
-    ОСНОВНАЯ ФУНКЦИЯ ОПРЕДЕЛЕНИЯ СИГНАЛОВ ДЛЯ СКАЛЬПИНГА
-    Заменяет enhanced_signal_detection для более быстрой работы
+    Расчет индикаторов согласно инструкции:
+    EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2), Volume SMA(20)
     """
     if len(candles) < 30:
+        return {}
+
+    closes = np.array([float(c[4]) for c in candles])
+
+    # EMA согласно инструкции (5/8/20)
+    ema5 = calculate_ema(closes, SCALPING_PARAMS['ema_fast'])
+    ema8 = calculate_ema(closes, SCALPING_PARAMS['ema_medium'])
+    ema20 = calculate_ema(closes, SCALPING_PARAMS['ema_slow'])
+
+    # RSI(9) для фильтра импульса
+    rsi = calculate_rsi(closes, SCALPING_PARAMS['rsi_period'])
+
+    # MACD стандарт (12,26,9)
+    macd = calculate_macd(closes,
+                          SCALPING_PARAMS['macd_fast'],
+                          SCALPING_PARAMS['macd_slow'],
+                          SCALPING_PARAMS['macd_signal'])
+
+    # ATR(14) для волатильности
+    atr_data = calculate_atr(candles, SCALPING_PARAMS['atr_period'])
+
+    # Bollinger Bands (20,2)
+    bb = calculate_bollinger_bands(closes,
+                                   SCALPING_PARAMS['bb_period'],
+                                   SCALPING_PARAMS['bb_std'])
+
+    # Volume SMA(20)
+    volume_sma = calculate_volume_sma(candles, SCALPING_PARAMS['volume_sma'])
+
+    return {
+        # EMA тренд/сжатие
+        'ema5': safe_list(ema5),
+        'ema8': safe_list(ema8),
+        'ema20': safe_list(ema20),
+
+        # RSI фильтр импульса
+        'rsi': safe_list(rsi),
+        'rsi_current': safe_float(rsi[-1] if len(rsi) > 0 else 50.0),
+
+        # MACD подтверждение направления
+        'macd_line': safe_list(macd['macd']),
+        'macd_signal': safe_list(macd['signal']),
+        'macd_histogram': safe_list(macd['histogram']),
+
+        # ATR волатильность
+        'atr': safe_list(atr_data['atr']),
+        'atr_current': atr_data['current'],
+        'atr_mean': safe_float(np.mean(atr_data['atr'][-10:]) if len(atr_data['atr']) >= 10 else 0),
+
+        # Bollinger Bands squeeze/breakout
+        'bb_upper': safe_list(bb['upper']),
+        'bb_middle': safe_list(bb['middle']),
+        'bb_lower': safe_list(bb['lower']),
+
+        # Volume подтверждение пробоев
+        'volume_sma': safe_list(volume_sma),
+        'volume_current': safe_float(float(candles[-1][5]) if candles else 0),
+        'volume_ratio': safe_float(
+            float(candles[-1][5]) / volume_sma[-1] if len(volume_sma) > 0 and volume_sma[-1] > 0 else 1.0)
+    }
+
+
+def detect_instruction_based_signals(candles_5m: List[List[str]], candles_15m: List[List[str]] = None) -> Dict[
+    str, Any]:
+    """
+    ГЛАВНАЯ ФУНКЦИЯ: Определение сигналов согласно инструкции
+    Использует мультитаймфреймный анализ: 15m для контекста, 5m для входа
+    """
+    if len(candles_5m) < 50:
         return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'INSUFFICIENT_DATA'}
 
-    # Рассчитываем индикаторы
-    indicators = calculate_scalping_indicators(candles)
+    # Рассчитываем индикаторы для 5m
+    indicators = calculate_indicators_by_instruction(candles_5m)
 
     if not indicators:
         return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'CALCULATION_ERROR'}
 
-    # Определяем сигнал на основе быстрых индикаторов
-    signal_type = 'NO_SIGNAL'
-    confidence = 0
-    entry_reasons = []
+    # Анализ старшего таймфрейма (15m) для контекста
+    higher_tf_trend = 'UNKNOWN'
+    if candles_15m and len(candles_15m) >= 30:
+        trend_analysis = analyze_higher_timeframe_trend(candles_15m)
+        higher_tf_trend = trend_analysis['trend']
 
-    # BULLISH условия
-    bullish_conditions = 0
-    if indicators.get('tema_alignment', False) and indicators.get('tema_slope', 0.0) > 0.1:
-        bullish_conditions += 1
-        entry_reasons.append('TEMA_BULLISH')
+    # Применяем шаблоны входа согласно инструкции
+    signal_results = []
 
-    if indicators.get('macd_crossover', 'NONE') == 'BULLISH':
-        bullish_conditions += 1
-        entry_reasons.append('MACD_BULLISH')
+    # A) Momentum breakout
+    momentum_signal = detect_momentum_breakout(candles_5m, indicators)
+    if momentum_signal['signal']:
+        signal_results.append(momentum_signal)
 
-    if indicators.get('rsi_current', 50.0) < 40:  # RSI показывает потенциал роста
-        bullish_conditions += 1
-        entry_reasons.append('RSI_OVERSOLD')
+    # B) Pullback to EMA (только в направлении старшего тренда)
+    pullback_signal = detect_pullback_entry(candles_5m, indicators, higher_tf_trend)
+    if pullback_signal['signal']:
+        signal_results.append(pullback_signal)
 
-    if (indicators.get('stoch_signal', 'NEUTRAL') == 'OVERSOLD' and
-            len(indicators.get('stoch_k', [])) > 0 and len(indicators.get('stoch_d', [])) > 0 and
-            indicators.get('stoch_k', [])[-1] > indicators.get('stoch_d', [])[-1]):
-        bullish_conditions += 1
-        entry_reasons.append('STOCH_REVERSAL')
+    # C) Bollinger Squeeze breakout
+    squeeze_signal = detect_bollinger_squeeze(candles_5m, indicators)
+    if squeeze_signal['signal']:
+        signal_results.append(squeeze_signal)
 
-    # BEARISH условия
-    bearish_conditions = 0
-    if not indicators.get('tema_alignment', False) and indicators.get('tema_slope', 0.0) < -0.1:
-        bearish_conditions += 1
-        entry_reasons.append('TEMA_BEARISH')
+    # D) Range scalp
+    range_signal = detect_range_scalp(candles_5m, indicators)
+    if range_signal['signal']:
+        signal_results.append(range_signal)
 
-    if indicators.get('macd_crossover', 'NONE') == 'BEARISH':
-        bearish_conditions += 1
-        entry_reasons.append('MACD_BEARISH')
+    # Выбираем лучший сигнал
+    if not signal_results:
+        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'NO_PATTERN_FOUND'}
 
-    if indicators.get('rsi_current', 50.0) > 60:  # RSI показывает потенциал падения
-        bearish_conditions += 1
-        entry_reasons.append('RSI_OVERBOUGHT')
+    # Сортируем по уверенности
+    signal_results.sort(key=lambda x: x['confidence'], reverse=True)
+    best_signal = signal_results[0]
 
-    if (indicators.get('stoch_signal', 'NEUTRAL') == 'OVERBOUGHT' and
-            len(indicators.get('stoch_k', [])) > 0 and len(indicators.get('stoch_d', [])) > 0 and
-            indicators.get('stoch_k', [])[-1] < indicators.get('stoch_d', [])[-1]):
-        bearish_conditions += 1
-        entry_reasons.append('STOCH_REVERSAL')
+    # Финальная валидация согласно инструкции (3 из 4 чек-пунктов)
+    validation_score = 0
+    validation_reasons = []
 
-    # Определяем сигнал
-    if bullish_conditions >= 2:
-        signal_type = 'LONG'
-        confidence = min(100, bullish_conditions * 25 + indicators.get('signal_quality', 0) * 0.3)
-    elif bearish_conditions >= 2:
-        signal_type = 'SHORT'
-        confidence = min(100, bearish_conditions * 25 + indicators.get('signal_quality', 0) * 0.3)
+    # 1. Тренд старшего TF совпадает
+    if higher_tf_trend in ['UPTREND', 'DOWNTREND']:
+        if (higher_tf_trend == 'UPTREND' and best_signal['direction'] == 'LONG') or \
+                (higher_tf_trend == 'DOWNTREND' and best_signal['direction'] == 'SHORT'):
+            validation_score += 1
+            validation_reasons.append('higher_tf_aligned')
+    else:
+        validation_score += 0.5  # нейтральный тренд
 
-    # Дополнительные проверки качества
-    if signal_type != 'NO_SIGNAL':
-        # Объемное подтверждение обязательно
-        if not indicators.get('volume_spike', False) and indicators.get('volume_ratio', 1.0) < 1.3:
-            confidence *= 0.7
+    # 2. Цена + свечная формация (закрытие свечи в нужном направлении)
+    closes = np.array([float(c[4]) for c in candles_5m])
+    if len(closes) >= 2:
+        if best_signal['direction'] == 'LONG' and closes[-1] > closes[-2]:
+            validation_score += 1
+            validation_reasons.append('price_direction_confirmed')
+        elif best_signal['direction'] == 'SHORT' and closes[-1] < closes[-2]:
+            validation_score += 1
+            validation_reasons.append('price_direction_confirmed')
 
-        # Проверка близости к уровням (может быть как плюсом, так и минусом)
-        if indicators.get('near_support', False) or indicators.get('near_resistance', False):
-            if signal_type == 'LONG' and indicators.get('near_support', False):
-                confidence *= 1.1  # Отскок от поддержки
-            elif signal_type == 'SHORT' and indicators.get('near_resistance', False):
-                confidence *= 1.1  # Отскок от сопротивления
-            else:
-                confidence *= 0.9  # Торговля против уровня
+    # 3. Объём >= средний
+    if indicators.get('volume_ratio', 1.0) >= 1.0:
+        validation_score += 1
+        validation_reasons.append('volume_confirmed')
 
-        # Режим волатильности
-        volatility = indicators.get('volatility_regime', 'MEDIUM')
-        if volatility == 'HIGH':
-            confidence *= 1.1  # Высокая волатильность хороша для скальпинга
-        elif volatility == 'LOW':
-            confidence *= 0.8  # Низкая волатильность хуже
+    # 4. ATR достаточна
+    if indicators.get('atr_current', 0) >= indicators.get('atr_mean', 0) * 0.7:
+        validation_score += 1
+        validation_reasons.append('atr_sufficient')
 
-    # Финальная проверка минимального качества
-    if confidence < SCALPING_PARAMS['min_confidence']:
-        signal_type = 'NO_SIGNAL'
-        confidence = 0
+    # Требуется минимум 3 из 4
+    if validation_score < 3:
+        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'VALIDATION_FAILED'}
+
+    # Финальная уверенность с учетом валидации
+    final_confidence = min(100, int(best_signal['confidence'] * (validation_score / 4)))
+
+    if final_confidence < SCALPING_PARAMS['min_confidence']:
+        return {'signal': 'NO_SIGNAL', 'confidence': final_confidence, 'reason': 'LOW_CONFIDENCE'}
 
     return {
-        'signal': signal_type,
-        'confidence': safe_int(confidence),
-        'entry_reasons': entry_reasons,
+        'signal': best_signal['direction'],
+        'confidence': final_confidence,
+        'pattern_type': best_signal['type'],
+        'entry_reasons': best_signal['reasons'],
+        'validation_reasons': validation_reasons,
+        'validation_score': f"{validation_score}/4",
+        'higher_tf_trend': higher_tf_trend,
         'indicators': indicators,
-        'quality_score': indicators.get('signal_quality', 0),
-        'volatility_regime': indicators.get('volatility_regime', 'MEDIUM')
+        'atr_current': indicators.get('atr_current', 0),
+        'volume_ratio': indicators.get('volume_ratio', 1.0)
     }
