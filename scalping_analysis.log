@@ -1,35 +1,81 @@
 
 ================================================================================
-ПАРА: AINUSDT
-ВРЕМЯ: 2025-09-05 09:38:37
+ПАРА: GORKUSDT
+ВРЕМЯ: 2025-09-05 11:04:10
 АНАЛИЗ:
-{"coin": "AINUSDT", "direction": "long", "entry_price": 0.10505, "stop_loss": 0.10435, "take_profit": 0.10558, "leverage": "3x"}
+{"coin": "GORKUSDT", "direction": "long", "entry_price": 0.00952, "stop_loss": 0.00942, "take_profit": 0.00962, "leverage": "3x"}
 ================================================================================
 
 ================================================================================
-ПАРА: JELLYJELLYUSDT
-ВРЕМЯ: 2025-09-05 09:38:44
+ПАРА: ESPORTSUSDT
+ВРЕМЯ: 2025-09-05 11:04:17
 АНАЛИЗ:
-{"coin": "JELLYJELLYUSDT", "direction": "long", "entry_price": 0.042155, "stop_loss": 0.04185, "take_profit": 0.042365, "leverage": "3x"}
+{"coin": "ESPORTSUSDT", "direction": "long", "entry_price": 0.11616, "stop_loss": 0.11542, "take_profit": 0.11678, "leverage": "4x"}
 ================================================================================
 
 ================================================================================
-ПАРА: PROMPTUSDT
-ВРЕМЯ: 2025-09-05 09:38:51
+ПАРА: IPUSDT
+ВРЕМЯ: 2025-09-05 11:04:25
 АНАЛИЗ:
-{"coin": "PROMPTUSDT", "direction": "short", "entry_price": 0.17727, "stop_loss": 0.17885, "take_profit": 0.17595, "leverage": "4x"}
+{"coin": "IPUSDT", "direction": "short", "entry_price": 8.2271, "stop_loss": 8.2705, "take_profit": 8.1862, "leverage": "3x"}
 ================================================================================
 
 ================================================================================
-ПАРА: ALPINEUSDT
-ВРЕМЯ: 2025-09-05 10:06:51
+ПАРА: ESPORTSUSDT
+ВРЕМЯ: 2025-09-05 11:04:59
 АНАЛИЗ:
-{"coin": "ALPINEUSDT", "direction": "short", "entry_price": 2.033, "stop_loss": 2.055, "take_profit": 2.013, "leverage": "4x"}
+{
+  "coin": "ESPORTSUSDT",
+  "direction": "long",
+  "entry_price": 0.11616,
+  "stop_loss": 0.11540,
+  "take_profit": 0.11685,
+  "leverage": "3x",
+  "confidence": 78,
+  "max_position_usd": 850,
+  "time_horizon": "15-30 minutes",
+  "risk_reward_ratio": 1.28,
+  "spread_check": 0.00008,
+  "volume_confirmation": true
+}
 ================================================================================
 
 ================================================================================
-ПАРА: JELLYJELLYUSDT
-ВРЕМЯ: 2025-09-05 10:06:59
+ПАРА: GORKUSDT
+ВРЕМЯ: 2025-09-05 11:05:09
 АНАЛИЗ:
-{"coin": "JELLYJELLYUSDT", "direction": "short", "entry_price": 0.04160, "stop_loss": 0.04215, "take_profit": 0.04120, "leverage": "3x"}
+{
+  "coin": "GORKUSDT",
+  "direction": "long",
+  "entry_price": 0.00952,
+  "stop_loss": 0.00945,
+  "take_profit": 0.00957,
+  "leverage": "3x",
+  "confidence": 75,
+  "max_position_usd": 800,
+  "time_horizon": "15-30 minutes",
+  "risk_reward_ratio": 1.4,
+  "spread_check": 0.00008,
+  "volume_confirmation": true
+}
+================================================================================
+
+================================================================================
+ПАРА: IPUSDT
+ВРЕМЯ: 2025-09-05 11:05:19
+АНАЛИЗ:
+{
+  "coin": "IPUSDT",
+  "direction": "short",
+  "entry_price": 8.2271,
+  "stop_loss": 8.2700,
+  "take_profit": 8.1860,
+  "leverage": "3x",
+  "confidence": 72,
+  "max_position_usd": 800,
+  "time_horizon": "15-30 minutes",
+  "risk_reward_ratio": 1.12,
+  "spread_check": 0.08,
+  "volume_confirmation": true
+}
 ================================================================================
