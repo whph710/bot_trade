@@ -40,7 +40,7 @@ SCALPING_CONFIG = {
     'candles_for_ai_analysis': 100,  # Для детального анализа
 
     # Параметры обработки
-    'batch_size': 40,
+    'batch_size': 50,
     'min_confidence': 60,
     'max_pairs_to_ai': 8,
 
