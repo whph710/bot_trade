@@ -20,11 +20,12 @@
    C) Squeeze breakout: сжатие Bollinger + пробой с объемом + ATR растет
    D) Range scalp: боковик + цена у границ + RSI экстремум
 
-4. ВАЛИДАЦИЯ СИГНАЛА (3 из 4 ОБЯЗАТЕЛЬНО):
+4. ВАЛИДАЦИЯ СИГНАЛА (3 из 5 ОБЯЗАТЕЛЬНО):
    ✓ Тренд 15m совпадает с направлением входа
    ✓ Свеча закрылась в нужном направлении
    ✓ Объем ≥ Volume SMA(20)
    ✓ ATR достаточный для размера позиции
+   ✓ Свечной паттерн на последней свече совпадает с направлением входа
 
 5. РАСЧЕТ УРОВНЕЙ (КОНКРЕТНЫЕ ФОРМУЛЫ):
 
@@ -50,13 +51,13 @@
   "take_profit": 46400.00,
   "risk_reward_ratio": 1.5,
   "position_size_percent": 2.5,
-  "max_hold_time": "15-30 minutes",
+  "max_hold_time": "* minutes",
   "validation_checklist": {
     "higher_tf_trend_aligned": true,
     "candle_closed_correctly": true,
     "volume_confirmed": true,
     "atr_sufficient": true,
-    "score": "4/4"
+    "score": "5/5"
   },
   "key_levels": {
     "support": [45000, 44800],

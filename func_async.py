@@ -65,7 +65,7 @@ async def get_usdt_trading_pairs() -> List[str]:
     params = {"category": "linear"}
 
     try:
-        timeout = aiohttp.ClientTimeout(total=15)
+        timeout = aiohttp.ClientTimeout(total=45)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, params=params) as response:
                 data = await response.json()
