@@ -8,21 +8,23 @@ logger = logging.getLogger(__name__)
 async def get_klines_async(symbol: str, interval: str = "15", limit: int = 200) -> List[List[str]]:
     """
     Асинхронно получает данные свечей для торговой пары.
+    ИСПРАВЛЕНО: правильная обработка порядка свечей и отрезание незакрытой свечи
 
     Args:
         symbol: Торговая пара (например, BTCUSDT)
         interval: Интервал свечей (по умолчанию "15")
-        limit: Количество свечей (по умолчанию 100)
+        limit: Количество свечей (по умолчанию 200)
 
     Returns:
         Список свечей в формате Bybit [timestamp, open, high, low, close, volume, turnover]
+        ОТ СТАРЫХ К НОВЫМ, БЕЗ ПОСЛЕДНЕЙ НЕЗАКРЫТОЙ СВЕЧИ
     """
     url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
         "interval": interval,
-        "limit": limit
+        "limit": limit + 1  # Запрашиваем +1 свечу чтобы гарантированно отрезать последнюю
     }
 
     try:
@@ -38,13 +40,27 @@ async def get_klines_async(symbol: str, interval: str = "15", limit: int = 200) 
 
                 klines = data["result"]["list"]
 
-                # Проверяем порядок и при необходимости разворачиваем (от старых к новым)
-                if klines and len(klines) > 1:
-                    if int(klines[0][0]) > int(klines[-1][0]):
-                        klines.reverse()
+                if not klines or len(klines) < 2:
+                    logger.error(f"Недостаточно данных для {symbol}")
+                    raise Exception(f"Insufficient data for {symbol}")
 
-                logger.debug(f"Получено {len(klines)} свечей для {symbol}")
-                return klines[:-1]
+                # Проверяем порядок свечей (Bybit возвращает от новых к старым)
+                if len(klines) > 1:
+                    if int(klines[0][0]) > int(klines[-1][0]):
+                        # Данные от новых к старым - разворачиваем
+                        klines.reverse()
+                        logger.debug(f"Развернул порядок свечей для {symbol} (новые→старые)")
+                    else:
+                        logger.debug(f"Порядок свечей корректный для {symbol} (старые→новые)")
+
+                # ВСЕГДА отрезаем последнюю незакрытую свечу
+                closed_klines = klines[:-1]
+
+                logger.debug(f"Получено {len(closed_klines)} закрытых свечей для {symbol} "
+                             f"(от {closed_klines[0][0] if closed_klines else 'N/A'} "
+                             f"до {closed_klines[-1][0] if closed_klines else 'N/A'})")
+
+                return closed_klines
 
     except aiohttp.ClientError as e:
         logger.error(f"Сетевая ошибка для {symbol}: {e}")
