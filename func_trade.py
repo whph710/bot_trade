@@ -1,40 +1,41 @@
+"""
+Модуль технического анализа и определения торговых сигналов
+Реализует мультитаймфреймный анализ согласно инструкции
+"""
+
 import numpy as np
 from typing import List, Dict, Any, Tuple
 import time
 import math
+from config import config
 
-# ПАРАМЕТРЫ СОГЛАСНО ИНСТРУКЦИИ
+# Параметры согласно инструкции из конфигурации
 SCALPING_PARAMS = {
-    # EMA параметры (5/8/20)
-    'ema_fast': 5,
-    'ema_medium': 8,
-    'ema_slow': 20,
-
-    # RSI(9) для фильтра импульса
-    'rsi_period': 9,
-
-    # MACD стандарт (12,26,9)
-    'macd_fast': 12,
-    'macd_slow': 26,
-    'macd_signal': 9,
-
-    # ATR(14) для волатильности
-    'atr_period': 14,
-
-    # Volume анализ
-    'volume_sma': 20,
-
-    # Bollinger Bands (20,2)
-    'bb_period': 20,
-    'bb_std': 2,
-
-    # Минимальная уверенность
-    'min_confidence': 70
+    'ema_fast': config.indicators.EMA_FAST,
+    'ema_medium': config.indicators.EMA_MEDIUM,
+    'ema_slow': config.indicators.EMA_SLOW,
+    'rsi_period': config.indicators.RSI_PERIOD,
+    'macd_fast': config.indicators.MACD_FAST,
+    'macd_slow': config.indicators.MACD_SLOW,
+    'macd_signal': config.indicators.MACD_SIGNAL,
+    'atr_period': config.indicators.ATR_PERIOD,
+    'volume_sma': config.indicators.VOLUME_SMA,
+    'bb_period': config.indicators.BB_PERIOD,
+    'bb_std': config.indicators.BB_STD,
+    'min_confidence': config.trading.MIN_CONFIDENCE
 }
 
 
 def safe_float(value):
-    """Безопасное преобразование в float"""
+    """
+    Безопасное преобразование в float
+
+    Args:
+        value: Значение для преобразования
+
+    Returns:
+        float: Преобразованное значение или 0.0
+    """
     try:
         result = float(value)
         if math.isnan(result) or math.isinf(result):
@@ -45,7 +46,15 @@ def safe_float(value):
 
 
 def safe_int(value):
-    """Безопасное преобразование в int"""
+    """
+    Безопасное преобразование в int
+
+    Args:
+        value: Значение для преобразования
+
+    Returns:
+        int: Преобразованное значение или 0
+    """
     try:
         result = int(value)
         if math.isnan(result) or math.isinf(result):
@@ -56,7 +65,15 @@ def safe_int(value):
 
 
 def safe_list(arr):
-    """Безопасное преобразование массива в список"""
+    """
+    Безопасное преобразование массива в список
+
+    Args:
+        arr: Массив для преобразования
+
+    Returns:
+        list: Преобразованный список
+    """
     try:
         if isinstance(arr, np.ndarray):
             return [safe_float(x) for x in arr.tolist()]
@@ -69,7 +86,16 @@ def safe_list(arr):
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
-    """Exponential Moving Average"""
+    """
+    Расчет экспоненциальной скользящей средней (EMA)
+
+    Args:
+        prices: Массив цен
+        period: Период EMA
+
+    Returns:
+        np.ndarray: Массив значений EMA
+    """
     ema = np.zeros_like(prices)
     alpha = 2.0 / (period + 1)
     ema[0] = prices[0]
@@ -81,7 +107,16 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
 
 
 def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
-    """RSI(9) для фильтра импульса согласно инструкции"""
+    """
+    Расчет RSI(9) для фильтра импульса согласно инструкции
+
+    Args:
+        prices: Массив цен
+        period: Период RSI (по умолчанию 9)
+
+    Returns:
+        np.ndarray: Массив значений RSI
+    """
     deltas = np.diff(prices)
     gains = np.where(deltas > 0, deltas, 0)
     losses = np.where(deltas < 0, -deltas, 0)
@@ -107,7 +142,18 @@ def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
 
 
 def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, np.ndarray]:
-    """MACD стандарт (12,26,9) согласно инструкции"""
+    """
+    Расчет MACD стандарт (12,26,9) согласно инструкции
+
+    Args:
+        prices: Массив цен
+        fast: Быстрый период
+        slow: Медленный период
+        signal: Период сигнальной линии
+
+    Returns:
+        dict: Словарь с MACD линией, сигнальной линией и гистограммой
+    """
     ema_fast = calculate_ema(prices, fast)
     ema_slow = calculate_ema(prices, slow)
 
@@ -123,7 +169,16 @@ def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: i
 
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> Dict[str, Any]:
-    """ATR(14) для волатильности согласно инструкции"""
+    """
+    Расчет ATR(14) для контроля волатильности согласно инструкции
+
+    Args:
+        candles: Список свечей
+        period: Период ATR (по умолчанию 14)
+
+    Returns:
+        dict: Словарь с массивом ATR и текущим значением
+    """
     if len(candles) < period + 1:
         return {'atr': [], 'current': 0.0}
 
@@ -153,7 +208,17 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> Dict[str, Any]:
 
 
 def calculate_bollinger_bands(prices: np.ndarray, period: int = 20, std: float = 2.0) -> Dict[str, np.ndarray]:
-    """Bollinger Bands (20,2) согласно инструкции"""
+    """
+    Расчет Bollinger Bands (20,2) согласно инструкции
+
+    Args:
+        prices: Массив цен
+        period: Период для расчета (по умолчанию 20)
+        std: Количество стандартных отклонений (по умолчанию 2)
+
+    Returns:
+        dict: Словарь с верхней, средней и нижней полосами
+    """
     sma = np.zeros_like(prices)
     upper = np.zeros_like(prices)
     lower = np.zeros_like(prices)
@@ -173,7 +238,16 @@ def calculate_bollinger_bands(prices: np.ndarray, period: int = 20, std: float =
 
 
 def calculate_volume_sma(candles: List[List[str]], period: int = 20) -> np.ndarray:
-    """Volume SMA(20) для подтверждения пробоев"""
+    """
+    Расчет Volume SMA(20) для подтверждения пробоев
+
+    Args:
+        candles: Список свечей
+        period: Период SMA (по умолчанию 20)
+
+    Returns:
+        np.ndarray: Массив значений Volume SMA
+    """
     volumes = np.array([float(c[5]) for c in candles])
     volume_sma = np.zeros_like(volumes)
 
@@ -183,8 +257,74 @@ def calculate_volume_sma(candles: List[List[str]], period: int = 20) -> np.ndarr
     return volume_sma
 
 
+def calculate_indicators_by_instruction(candles: List[List[str]]) -> Dict[str, Any]:
+    """
+    Расчет всех индикаторов согласно инструкции
+
+    Args:
+        candles: Список свечей 5m таймфрейма
+
+    Returns:
+        dict: Словарь со всеми рассчитанными индикаторами
+    """
+    if len(candles) < 50:
+        return {}
+
+    closes = np.array([float(c[4]) for c in candles])
+    volumes = np.array([float(c[5]) for c in candles])
+
+    # EMA система (5, 8, 20)
+    ema5 = calculate_ema(closes, SCALPING_PARAMS['ema_fast'])
+    ema8 = calculate_ema(closes, SCALPING_PARAMS['ema_medium'])
+    ema20 = calculate_ema(closes, SCALPING_PARAMS['ema_slow'])
+
+    # RSI(9) фильтр импульса
+    rsi = calculate_rsi(closes, SCALPING_PARAMS['rsi_period'])
+
+    # MACD(12,26,9) подтверждение направления
+    macd_data = calculate_macd(closes, SCALPING_PARAMS['macd_fast'],
+                               SCALPING_PARAMS['macd_slow'], SCALPING_PARAMS['macd_signal'])
+
+    # ATR(14) контроль волатильности
+    atr_data = calculate_atr(candles, SCALPING_PARAMS['atr_period'])
+
+    # Bollinger Bands (20,2)
+    bb_data = calculate_bollinger_bands(closes, SCALPING_PARAMS['bb_period'], SCALPING_PARAMS['bb_std'])
+
+    # Volume SMA(20)
+    volume_sma = calculate_volume_sma(candles, SCALPING_PARAMS['volume_sma'])
+
+    return {
+        'ema5': safe_list(ema5),
+        'ema8': safe_list(ema8),
+        'ema20': safe_list(ema20),
+        'rsi': safe_list(rsi),
+        'rsi_current': safe_float(rsi[-1] if len(rsi) > 0 else 50),
+        'macd_line': safe_list(macd_data['macd']),
+        'macd_signal': safe_list(macd_data['signal']),
+        'macd_histogram': safe_list(macd_data['histogram']),
+        'atr': atr_data['atr'],
+        'atr_current': atr_data['current'],
+        'atr_mean': safe_float(np.mean(atr_data['atr'][-20:]) if len(atr_data['atr']) >= 20 else 0),
+        'bb_upper': safe_list(bb_data['upper']),
+        'bb_middle': safe_list(bb_data['middle']),
+        'bb_lower': safe_list(bb_data['lower']),
+        'volume_sma': safe_list(volume_sma),
+        'volume_current': safe_float(volumes[-1]),
+        'volume_ratio': safe_float(volumes[-1] / volume_sma[-1] if volume_sma[-1] > 0 else 1.0)
+    }
+
+
 def analyze_higher_timeframe_trend(candles_15m: List[List[str]]) -> Dict[str, Any]:
-    """Анализ старшего таймфрейма (15m) для контекста"""
+    """
+    Анализ старшего таймфрейма (15m) для определения контекста
+
+    Args:
+        candles_15m: Список 15-минутных свечей
+
+    Returns:
+        dict: Информация о тренде старшего таймфрейма
+    """
     if len(candles_15m) < 30:
         return {'trend': 'UNKNOWN', 'strength': 0}
 
@@ -196,7 +336,7 @@ def analyze_higher_timeframe_trend(candles_15m: List[List[str]]) -> Dict[str, An
     ema20_current = ema20[-1]
     ema50_current = ema50[-1]
 
-    # Определение тренда
+    # Определение тренда на основе положения цены относительно EMA
     if current_price > ema20_current > ema50_current:
         trend = 'UPTREND'
         strength = safe_int(((current_price - ema50_current) / ema50_current) * 1000)
@@ -216,42 +356,63 @@ def analyze_higher_timeframe_trend(candles_15m: List[List[str]]) -> Dict[str, An
 
 
 def detect_momentum_breakout(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
-    """Шаблон A: Momentum breakout (импульсный вход)"""
+    """
+    Шаблон A: Momentum breakout (импульсный вход)
+    Условия: цена выше EMA20 + MACD гистограмма >0 + объем выше среднего
+
+    Args:
+        candles: Список свечей
+        indicators: Рассчитанные индикаторы
+
+    Returns:
+        dict: Информация о сигнале
+    """
     if len(candles) < 5:
         return {'signal': False, 'confidence': 0}
 
     closes = np.array([float(c[4]) for c in candles])
-    volumes = np.array([float(c[5]) for c in candles])
-
     current_close = closes[-1]
-    ema20 = indicators.get('ema20', [])
-    macd_hist = indicators.get('macd_histogram', [])
-    volume_sma = indicators.get('volume_sma', [])
 
-    if not ema20 or not macd_hist or not volume_sma:
+    ema20 = indicators.get('ema20', [])
+    macd_histogram = indicators.get('macd_histogram', [])
+    volume_ratio = indicators.get('volume_ratio', 1.0)
+
+    if not ema20 or not macd_histogram:
         return {'signal': False, 'confidence': 0}
 
-    # Условия согласно инструкции
-    price_above_ema20 = current_close > ema20[-1]
-    macd_positive = macd_hist[-1] > 0
-    volume_confirmed = len(volume_sma) > 0 and volumes[-1] > volume_sma[-1]
-    atr_valid = indicators.get('atr_current', 0) >= indicators.get('atr_mean', 0) * 0.9
+    # Проверяем условия momentum breakout
+    conditions = {
+        'price_above_ema20': current_close > ema20[-1],
+        'macd_positive': macd_histogram[-1] > 0,
+        'volume_spike': volume_ratio > 1.5,
+        'ema_alignment': len(indicators.get('ema5', [])) > 0 and
+                         len(indicators.get('ema8', [])) > 0 and
+                         indicators['ema5'][-1] > indicators['ema8'][-1] > ema20[-1]
+    }
 
-    if price_above_ema20 and macd_positive and volume_confirmed and atr_valid:
-        confidence = 85
-        return {
-            'signal': True,
-            'direction': 'LONG',
-            'confidence': confidence,
-            'type': 'MOMENTUM_BREAKOUT',
-            'reasons': ['price_above_ema20', 'macd_positive', 'volume_confirmed']
-        }
+    signal = all(conditions.values())
+    confidence = sum(conditions.values()) * 20  # Каждое условие = 20%
 
-    return {'signal': False, 'confidence': 0}
+    return {
+        'signal': signal,
+        'confidence': confidence,
+        'pattern': 'MOMENTUM_BREAKOUT',
+        'conditions': conditions
+    }
 
 
-def detect_pullback_entry(candles: List[List[str]], indicators: Dict, higher_tf_trend: str) -> Dict[str, Any]:
-    """Шаблон B: Pullback to EMA (вход по откату в тренде)"""
+def detect_pullback_entry(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
+    """
+    Шаблон B: Pullback to EMA (откат к EMA)
+    Условия: откат к EMA8-20 в тренде + свечная формация + RSI восстановление
+
+    Args:
+        candles: Список свечей
+        indicators: Рассчитанные индикаторы
+
+    Returns:
+        dict: Информация о сигнале
+    """
     if len(candles) < 10:
         return {'signal': False, 'confidence': 0}
 
@@ -260,324 +421,375 @@ def detect_pullback_entry(candles: List[List[str]], indicators: Dict, higher_tf_
 
     ema8 = indicators.get('ema8', [])
     ema20 = indicators.get('ema20', [])
-    rsi = indicators.get('rsi', [])
-    macd = indicators.get('macd_line', [])
+    rsi_current = indicators.get('rsi_current', 50)
 
-    if not ema8 or not ema20 or not rsi:
+    if not ema8 or not ema20:
         return {'signal': False, 'confidence': 0}
 
-    # Только в направлении старшего тренда
-    if higher_tf_trend == 'UPTREND':
-        # Откат к EMA в восходящем тренде
-        near_ema8 = abs(current_close - ema8[-1]) / current_close < 0.005  # в пределах 0.5%
-        rsi_recovered = len(rsi) > 0 and rsi[-1] > 45
-        macd_not_against = not macd or macd[-1] > macd[-2]
+    # Проверяем близость к EMA
+    ema8_proximity = abs(current_close - ema8[-1]) / current_close < config.patterns.PULLBACK_EMA_PROXIMITY
+    ema20_proximity = abs(current_close - ema20[-1]) / current_close < config.patterns.PULLBACK_EMA_PROXIMITY
 
-        if near_ema8 and rsi_recovered:
-            return {
-                'signal': True,
-                'direction': 'LONG',
-                'confidence': 75,
-                'type': 'PULLBACK_ENTRY',
-                'reasons': ['uptrend_pullback', 'near_ema', 'rsi_recovered']
-            }
+    # Условия pullback entry
+    conditions = {
+        'near_ema': ema8_proximity or ema20_proximity,
+        'rsi_recovery_long': 30 < rsi_current < config.patterns.PULLBACK_RSI_RECOVERY,
+        'rsi_recovery_short': config.patterns.PULLBACK_RSI_WEAK < rsi_current < 70,
+        'trend_alignment': len(indicators.get('ema5', [])) > 0 and
+                           indicators['ema5'][-1] > ema8[-1]
+    }
 
-    elif higher_tf_trend == 'DOWNTREND':
-        # Откат к EMA в нисходящем тренде
-        near_ema8 = abs(current_close - ema8[-1]) / current_close < 0.005
-        rsi_weak = len(rsi) > 0 and rsi[-1] < 55
+    # Определяем направление
+    if conditions['near_ema'] and conditions['rsi_recovery_long'] and conditions['trend_alignment']:
+        signal_type = 'LONG'
+        confidence = 75
+    elif conditions['near_ema'] and conditions['rsi_recovery_short']:
+        signal_type = 'SHORT'
+        confidence = 70
+    else:
+        signal_type = False
+        confidence = 0
 
-        if near_ema8 and rsi_weak:
-            return {
-                'signal': True,
-                'direction': 'SHORT',
-                'confidence': 75,
-                'type': 'PULLBACK_ENTRY',
-                'reasons': ['downtrend_pullback', 'near_ema', 'rsi_weak']
-            }
-
-    return {'signal': False, 'confidence': 0}
+    return {
+        'signal': signal_type != False,
+        'signal_type': signal_type,
+        'confidence': confidence,
+        'pattern': 'PULLBACK_ENTRY',
+        'conditions': conditions
+    }
 
 
-def detect_bollinger_squeeze(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
-    """Шаблон C: Bollinger Squeeze breakout"""
-    if len(candles) < 25:
+def detect_squeeze_breakout(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
+    """
+    Шаблон C: Squeeze breakout (сжатие Bollinger)
+    Условия: сжатие Bollinger + пробой с объемом + ATR растет
+
+    Args:
+        candles: Список свечей
+        indicators: Рассчитанные индикаторы
+
+    Returns:
+        dict: Информация о сигнале
+    """
+    if len(candles) < 20:
         return {'signal': False, 'confidence': 0}
 
     closes = np.array([float(c[4]) for c in candles])
-    volumes = np.array([float(c[5]) for c in candles])
+    current_close = closes[-1]
 
     bb_upper = indicators.get('bb_upper', [])
     bb_lower = indicators.get('bb_lower', [])
-    volume_sma = indicators.get('volume_sma', [])
-    atr_values = indicators.get('atr', [])
+    volume_ratio = indicators.get('volume_ratio', 1.0)
+    atr = indicators.get('atr', [])
 
-    if not bb_upper or not bb_lower or not volume_sma:
+    if not bb_upper or not bb_lower or not atr:
         return {'signal': False, 'confidence': 0}
 
-    current_close = closes[-1]
+    # Проверяем сжатие (последние 10 периодов)
+    if len(bb_upper) >= 10 and len(bb_lower) >= 10:
+        current_width = bb_upper[-1] - bb_lower[-1]
+        avg_width = np.mean([bb_upper[i] - bb_lower[i] for i in range(-10, 0)])
+        squeeze = current_width < avg_width * config.indicators.BB_SQUEEZE_RATIO
+    else:
+        squeeze = False
 
-    # Проверяем сжатие полос (последние 5 свечей)
-    if len(bb_upper) >= 5:
-        recent_width = np.mean([(bb_upper[i] - bb_lower[i]) for i in range(-5, 0)])
-        historical_width = np.mean([(bb_upper[i] - bb_lower[i]) for i in range(-20, -5)])
+    # Проверяем пробой
+    breakout_up = current_close > bb_upper[-1]
+    breakout_down = current_close < bb_lower[-1]
 
-        squeeze_detected = recent_width < historical_width * 0.8
+    # Условия squeeze breakout
+    conditions = {
+        'squeeze_detected': squeeze,
+        'breakout_occurred': breakout_up or breakout_down,
+        'volume_confirmation': volume_ratio > config.indicators.VOLUME_SPIKE_RATIO,
+        'atr_rising': len(atr) >= 3 and atr[-1] > atr[-3]
+    }
 
-        # Пробой верхней/нижней полосы с объемом
-        breakout_up = current_close > bb_upper[-1]
-        breakout_down = current_close < bb_lower[-1]
-        volume_confirmed = volumes[-1] > volume_sma[-1]
+    signal = all(conditions.values())
+    confidence = sum(conditions.values()) * 20
 
-        # ATR начинает расти
-        atr_rising = len(atr_values) >= 3 and atr_values[-1] > atr_values[-3]
-
-        if squeeze_detected and volume_confirmed and atr_rising:
-            if breakout_up:
-                return {
-                    'signal': True,
-                    'direction': 'LONG',
-                    'confidence': 80,
-                    'type': 'SQUEEZE_BREAKOUT',
-                    'reasons': ['bollinger_squeeze', 'upside_breakout', 'volume_spike']
-                }
-            elif breakout_down:
-                return {
-                    'signal': True,
-                    'direction': 'SHORT',
-                    'confidence': 80,
-                    'type': 'SQUEEZE_BREAKOUT',
-                    'reasons': ['bollinger_squeeze', 'downside_breakout', 'volume_spike']
-                }
-
-    return {'signal': False, 'confidence': 0}
+    return {
+        'signal': signal,
+        'confidence': confidence,
+        'pattern': 'SQUEEZE_BREAKOUT',
+        'conditions': conditions,
+        'breakout_direction': 'LONG' if breakout_up else 'SHORT' if breakout_down else 'NONE'
+    }
 
 
 def detect_range_scalp(candles: List[List[str]], indicators: Dict) -> Dict[str, Any]:
-    """Шаблон D: Range scalp (внутри диапазона)"""
-    if len(candles) < 30:
+    """
+    Шаблон D: Range scalp (скальпинг в боковике)
+    Условия: боковик + цена у границ + RSI экстремум
+
+    Args:
+        candles: Список свечей
+        indicators: Рассчитанные индикаторы
+
+    Returns:
+        dict: Информация о сигнале
+    """
+    if len(candles) < 20:
         return {'signal': False, 'confidence': 0}
 
     closes = np.array([float(c[4]) for c in candles])
     highs = np.array([float(c[2]) for c in candles])
     lows = np.array([float(c[3]) for c in candles])
 
-    # Определяем диапазон (последние 20 свечей)
-    recent_high = np.max(highs[-20:])
-    recent_low = np.min(lows[-20:])
-    range_size = recent_high - recent_low
     current_close = closes[-1]
+    rsi_current = indicators.get('rsi_current', 50)
 
-    # Проверяем, что мы в боковом движении
-    range_ratio = range_size / current_close
-    if range_ratio < 0.02:  # менее 2% диапазон
-        return {'signal': False, 'confidence': 0}
+    # Определяем диапазон (последние 20 свечей)
+    range_high = np.max(highs[-20:])
+    range_low = np.min(lows[-20:])
+    range_size = (range_high - range_low) / current_close * 100
 
-    rsi = indicators.get('rsi', [])
-    if not rsi:
-        return {'signal': False, 'confidence': 0}
+    # Проверяем условия диапазона
+    near_resistance = abs(current_close - range_high) / current_close < config.patterns.RANGE_BOUNDARY_PROXIMITY
+    near_support = abs(current_close - range_low) / current_close < config.patterns.RANGE_BOUNDARY_PROXIMITY
 
-    # Близость к границам диапазона
-    near_support = abs(current_close - recent_low) / range_size < 0.1
-    near_resistance = abs(current_close - recent_high) / range_size < 0.1
+    # Условия range scalp
+    conditions = {
+        'range_size_adequate': range_size > config.patterns.RANGE_MIN_SIZE_PERCENT,
+        'near_boundary': near_resistance or near_support,
+        'rsi_oversold': rsi_current < config.indicators.RSI_OVERSOLD,
+        'rsi_overbought': rsi_current > config.indicators.RSI_OVERBOUGHT
+    }
 
-    current_rsi = rsi[-1]
-
-    # Отскок от поддержки
-    if near_support and current_rsi < 30:
-        return {
-            'signal': True,
-            'direction': 'LONG',
-            'confidence': 70,
-            'type': 'RANGE_SCALP',
-            'reasons': ['support_bounce', 'rsi_oversold']
-        }
-
-    # Отскок от сопротивления
-    elif near_resistance and current_rsi > 70:
-        return {
-            'signal': True,
-            'direction': 'SHORT',
-            'confidence': 70,
-            'type': 'RANGE_SCALP',
-            'reasons': ['resistance_rejection', 'rsi_overbought']
-        }
-
-    return {'signal': False, 'confidence': 0}
-
-
-def calculate_indicators_by_instruction(candles: List[List[str]]) -> Dict[str, Any]:
-    """
-    Расчет индикаторов согласно инструкции:
-    EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2), Volume SMA(20)
-    """
-    if len(candles) < 30:
-        return {}
-
-    closes = np.array([float(c[4]) for c in candles])
-
-    # EMA согласно инструкции (5/8/20)
-    ema5 = calculate_ema(closes, SCALPING_PARAMS['ema_fast'])
-    ema8 = calculate_ema(closes, SCALPING_PARAMS['ema_medium'])
-    ema20 = calculate_ema(closes, SCALPING_PARAMS['ema_slow'])
-
-    # RSI(9) для фильтра импульса
-    rsi = calculate_rsi(closes, SCALPING_PARAMS['rsi_period'])
-
-    # MACD стандарт (12,26,9)
-    macd = calculate_macd(closes,
-                          SCALPING_PARAMS['macd_fast'],
-                          SCALPING_PARAMS['macd_slow'],
-                          SCALPING_PARAMS['macd_signal'])
-
-    # ATR(14) для волатильности
-    atr_data = calculate_atr(candles, SCALPING_PARAMS['atr_period'])
-
-    # Bollinger Bands (20,2)
-    bb = calculate_bollinger_bands(closes,
-                                   SCALPING_PARAMS['bb_period'],
-                                   SCALPING_PARAMS['bb_std'])
-
-    # Volume SMA(20)
-    volume_sma = calculate_volume_sma(candles, SCALPING_PARAMS['volume_sma'])
+    # Определяем направление
+    if conditions['range_size_adequate'] and near_support and conditions['rsi_oversold']:
+        signal_type = 'LONG'
+        confidence = 70
+        signal = True
+    elif conditions['range_size_adequate'] and near_resistance and conditions['rsi_overbought']:
+        signal_type = 'SHORT'
+        confidence = 70
+        signal = True
+    else:
+        signal_type = 'NONE'
+        confidence = 0
+        signal = False
 
     return {
-        # EMA тренд/сжатие
-        'ema5': safe_list(ema5),
-        'ema8': safe_list(ema8),
-        'ema20': safe_list(ema20),
-
-        # RSI фильтр импульса
-        'rsi': safe_list(rsi),
-        'rsi_current': safe_float(rsi[-1] if len(rsi) > 0 else 50.0),
-
-        # MACD подтверждение направления
-        'macd_line': safe_list(macd['macd']),
-        'macd_signal': safe_list(macd['signal']),
-        'macd_histogram': safe_list(macd['histogram']),
-
-        # ATR волатильность
-        'atr': safe_list(atr_data['atr']),
-        'atr_current': atr_data['current'],
-        'atr_mean': safe_float(np.mean(atr_data['atr'][-10:]) if len(atr_data['atr']) >= 10 else 0),
-
-        # Bollinger Bands squeeze/breakout
-        'bb_upper': safe_list(bb['upper']),
-        'bb_middle': safe_list(bb['middle']),
-        'bb_lower': safe_list(bb['lower']),
-
-        # Volume подтверждение пробоев
-        'volume_sma': safe_list(volume_sma),
-        'volume_current': safe_float(float(candles[-1][5]) if candles else 0),
-        'volume_ratio': safe_float(
-            float(candles[-1][5]) / volume_sma[-1] if len(volume_sma) > 0 and volume_sma[-1] > 0 else 1.0)
+        'signal': signal,
+        'signal_type': signal_type,
+        'confidence': confidence,
+        'pattern': 'RANGE_SCALP',
+        'conditions': conditions,
+        'range_levels': {'high': range_high, 'low': range_low}
     }
 
 
-def detect_instruction_based_signals(candles_5m: List[List[str]], candles_15m: List[List[str]] = None) -> Dict[
-    str, Any]:
+def validate_signal(candles_5m: List[List[str]], candles_15m: List[List[str]],
+                    signal_data: Dict, indicators: Dict) -> Dict[str, Any]:
     """
-    ГЛАВНАЯ ФУНКЦИЯ: Определение сигналов согласно инструкции
-    Использует мультитаймфреймный анализ: 15m для контекста, 5m для входа
+    Валидация сигнала согласно инструкции (5 из 5 проверок)
+
+    Args:
+        candles_5m: Свечи 5m
+        candles_15m: Свечи 15m
+        signal_data: Данные о сигнале
+        indicators: Рассчитанные индикаторы
+
+    Returns:
+        dict: Результат валидации
     """
-    if len(candles_5m) < 50:
-        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'INSUFFICIENT_DATA'}
+    if not candles_5m or not candles_15m:
+        return {'score': '0/5', 'valid': False, 'checks': {}}
+
+    # Анализ старшего таймфрейма
+    htf_analysis = analyze_higher_timeframe_trend(candles_15m)
+
+    # Получаем направление сигнала
+    signal_direction = signal_data.get('signal_type', 'NONE')
+
+    # 5 проверок валидации
+    checks = {}
+
+    # 1. Тренд 15m совпадает с направлением входа
+    if signal_direction == 'LONG':
+        checks['higher_tf_trend_aligned'] = htf_analysis['trend'] in ['UPTREND', 'SIDEWAYS']
+    elif signal_direction == 'SHORT':
+        checks['higher_tf_trend_aligned'] = htf_analysis['trend'] in ['DOWNTREND', 'SIDEWAYS']
+    else:
+        checks['higher_tf_trend_aligned'] = False
+
+    # 2. Свеча закрылась в нужном направлении
+    if len(candles_5m) >= 2:
+        prev_close = float(candles_5m[-2][4])
+        curr_close = float(candles_5m[-1][4])
+
+        if signal_direction == 'LONG':
+            checks['candle_closed_correctly'] = curr_close > prev_close
+        elif signal_direction == 'SHORT':
+            checks['candle_closed_correctly'] = curr_close < prev_close
+        else:
+            checks['candle_closed_correctly'] = False
+    else:
+        checks['candle_closed_correctly'] = False
+
+    # 3. Объем >= Volume SMA(20)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    checks['volume_confirmed'] = volume_ratio >= config.indicators.VOLUME_MIN_RATIO
+
+    # 4. ATR достаточный для размера позиции
+    atr_current = indicators.get('atr_current', 0)
+    atr_mean = indicators.get('atr_mean', 0)
+    checks['atr_sufficient'] = atr_current >= atr_mean * config.indicators.ATR_OPTIMAL_RATIO
+
+    # 5. Свечной паттерн на последней свече совпадает с направлением
+    if len(candles_5m) >= 1:
+        last_candle = candles_5m[-1]
+        candle_open = float(last_candle[1])
+        candle_close = float(last_candle[4])
+
+        if signal_direction == 'LONG':
+            checks['candle_pattern_aligned'] = candle_close > candle_open
+        elif signal_direction == 'SHORT':
+            checks['candle_pattern_aligned'] = candle_close < candle_open
+        else:
+            checks['candle_pattern_aligned'] = False
+    else:
+        checks['candle_pattern_aligned'] = False
+
+    # Подсчет результата
+    passed_checks = sum(checks.values())
+    total_checks = len(checks)
+
+    return {
+        'score': f'{passed_checks}/{total_checks}',
+        'valid': passed_checks >= config.trading.VALIDATION_CHECKS_REQUIRED,
+        'checks': checks,
+        'passed': passed_checks,
+        'total': total_checks
+    }
+
+
+def detect_instruction_based_signals(candles_5m: List[List[str]],
+                                     candles_15m: List[List[str]]) -> Dict[str, Any]:
+    """
+    Основная функция определения сигналов согласно инструкции
+    Мультитаймфреймный анализ: 15m контекст + 5m вход
+
+    Args:
+        candles_5m: Свечи 5m таймфрейма для точного входа
+        candles_15m: Свечи 15m таймфрейма для контекста
+
+    Returns:
+        dict: Полная информация о сигнале
+    """
+    if not candles_5m or not candles_15m:
+        return {
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'pattern_type': 'NONE',
+            'validation_score': '0/5'
+        }
 
     # Рассчитываем индикаторы для 5m
     indicators = calculate_indicators_by_instruction(candles_5m)
-
     if not indicators:
-        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'CALCULATION_ERROR'}
+        return {
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'pattern_type': 'NONE',
+            'validation_score': '0/5'
+        }
 
-    # Анализ старшего таймфрейма (15m) для контекста
-    higher_tf_trend = 'UNKNOWN'
-    if candles_15m and len(candles_15m) >= 30:
-        trend_analysis = analyze_higher_timeframe_trend(candles_15m)
-        higher_tf_trend = trend_analysis['trend']
+    # Анализируем старший таймфрейм
+    htf_analysis = analyze_higher_timeframe_trend(candles_15m)
 
-    # Применяем шаблоны входа согласно инструкции
-    signal_results = []
+    # Проверяем все шаблоны входа согласно приоритету
+    patterns = [
+        ('MOMENTUM_BREAKOUT', detect_momentum_breakout(candles_5m, indicators)),
+        ('SQUEEZE_BREAKOUT', detect_squeeze_breakout(candles_5m, indicators)),
+        ('PULLBACK_ENTRY', detect_pullback_entry(candles_5m, indicators)),
+        ('RANGE_SCALP', detect_range_scalp(candles_5m, indicators))
+    ]
 
-    # A) Momentum breakout
-    momentum_signal = detect_momentum_breakout(candles_5m, indicators)
-    if momentum_signal['signal']:
-        signal_results.append(momentum_signal)
+    # Ищем лучший сигнал
+    best_signal = None
+    best_confidence = 0
+    best_pattern = 'NONE'
 
-    # B) Pullback to EMA (только в направлении старшего тренда)
-    pullback_signal = detect_pullback_entry(candles_5m, indicators, higher_tf_trend)
-    if pullback_signal['signal']:
-        signal_results.append(pullback_signal)
+    for pattern_name, pattern_result in patterns:
+        if pattern_result['signal'] and pattern_result['confidence'] > best_confidence:
+            best_signal = pattern_result
+            best_confidence = pattern_result['confidence']
+            best_pattern = pattern_name
 
-    # C) Bollinger Squeeze breakout
-    squeeze_signal = detect_bollinger_squeeze(candles_5m, indicators)
-    if squeeze_signal['signal']:
-        signal_results.append(squeeze_signal)
+    # Если сигнал не найден
+    if not best_signal:
+        return {
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'pattern_type': 'NONE',
+            'higher_tf_trend': htf_analysis['trend'],
+            'validation_score': '0/5',
+            'indicators': indicators
+        }
 
-    # D) Range scalp
-    range_signal = detect_range_scalp(candles_5m, indicators)
-    if range_signal['signal']:
-        signal_results.append(range_signal)
+    # Определяем направление сигнала
+    signal_direction = best_signal.get('signal_type',
+                                       best_signal.get('breakout_direction', 'LONG'))
 
-    # Выбираем лучший сигнал
-    if not signal_results:
-        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'NO_PATTERN_FOUND'}
+    # Валидируем сигнал (5 из 5 проверок)
+    validation = validate_signal(candles_5m, candles_15m,
+                                 {'signal_type': signal_direction}, indicators)
 
-    # Сортируем по уверенности
-    signal_results.sort(key=lambda x: x['confidence'], reverse=True)
-    best_signal = signal_results[0]
+    # Применяем модификаторы уверенности из конфига
+    final_confidence = best_confidence
 
-    # Финальная валидация согласно инструкции (3 из 4 чек-пунктов)
-    validation_score = 0
-    validation_reasons = []
+    # Модификаторы согласно конфигурации
+    if validation['checks'].get('higher_tf_trend_aligned', False):
+        final_confidence *= config.scoring.CONFIDENCE_MODIFIERS['higher_tf_aligned']
 
-    # 1. Тренд старшего TF совпадает
-    if higher_tf_trend in ['UPTREND', 'DOWNTREND']:
-        if (higher_tf_trend == 'UPTREND' and best_signal['direction'] == 'LONG') or \
-                (higher_tf_trend == 'DOWNTREND' and best_signal['direction'] == 'SHORT'):
-            validation_score += 1
-            validation_reasons.append('higher_tf_aligned')
-    else:
-        validation_score += 0.5  # нейтральный тренд
+    if indicators.get('volume_ratio', 1.0) > config.indicators.VOLUME_SPIKE_RATIO:
+        final_confidence *= config.scoring.CONFIDENCE_MODIFIERS['volume_spike']
 
-    # 2. Цена + свечная формация (закрытие свечи в нужном направлении)
-    closes = np.array([float(c[4]) for c in candles_5m])
-    if len(closes) >= 2:
-        if best_signal['direction'] == 'LONG' and closes[-1] > closes[-2]:
-            validation_score += 1
-            validation_reasons.append('price_direction_confirmed')
-        elif best_signal['direction'] == 'SHORT' and closes[-1] < closes[-2]:
-            validation_score += 1
-            validation_reasons.append('price_direction_confirmed')
+    if (len(indicators.get('ema5', [])) > 0 and len(indicators.get('ema8', [])) > 0 and
+            len(indicators.get('ema20', [])) > 0):
+        ema5_curr = indicators['ema5'][-1]
+        ema8_curr = indicators['ema8'][-1]
+        ema20_curr = indicators['ema20'][-1]
 
-    # 3. Объём >= средний
-    if indicators.get('volume_ratio', 1.0) >= 1.0:
-        validation_score += 1
-        validation_reasons.append('volume_confirmed')
+        if signal_direction == 'LONG' and ema5_curr > ema8_curr > ema20_curr:
+            final_confidence *= config.scoring.CONFIDENCE_MODIFIERS['perfect_ema_alignment']
+        elif signal_direction == 'SHORT' and ema5_curr < ema8_curr < ema20_curr:
+            final_confidence *= config.scoring.CONFIDENCE_MODIFIERS['perfect_ema_alignment']
 
-    # 4. ATR достаточна
-    if indicators.get('atr_current', 0) >= indicators.get('atr_mean', 0) * 0.7:
-        validation_score += 1
-        validation_reasons.append('atr_sufficient')
+    if validation['passed'] == validation['total']:
+        final_confidence *= config.scoring.CONFIDENCE_MODIFIERS['validation_perfect']
 
-    # Требуется минимум 3 из 4
-    if validation_score < 3:
-        return {'signal': 'NO_SIGNAL', 'confidence': 0, 'reason': 'VALIDATION_FAILED'}
+    # Ограничиваем уверенность
+    final_confidence = min(100, int(final_confidence))
 
-    # Финальная уверенность с учетом валидации
-    final_confidence = min(100, int(best_signal['confidence'] * (validation_score / 4)))
-
-    if final_confidence < SCALPING_PARAMS['min_confidence']:
-        return {'signal': 'NO_SIGNAL', 'confidence': final_confidence, 'reason': 'LOW_CONFIDENCE'}
+    # Проверяем минимальную валидацию
+    if not validation['valid']:
+        return {
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'pattern_type': best_pattern,
+            'higher_tf_trend': htf_analysis['trend'],
+            'validation_score': validation['score'],
+            'validation_reasons': [k for k, v in validation['checks'].items() if not v],
+            'indicators': indicators
+        }
 
     return {
-        'signal': best_signal['direction'],
+        'signal': signal_direction,
         'confidence': final_confidence,
-        'pattern_type': best_signal['type'],
-        'entry_reasons': best_signal['reasons'],
-        'validation_reasons': validation_reasons,
-        'validation_score': f"{validation_score}/4",
-        'higher_tf_trend': higher_tf_trend,
-        'indicators': indicators,
+        'pattern_type': best_pattern,
+        'higher_tf_trend': htf_analysis['trend'],
+        'validation_score': validation['score'],
         'atr_current': indicators.get('atr_current', 0),
-        'volume_ratio': indicators.get('volume_ratio', 1.0)
+        'volume_ratio': indicators.get('volume_ratio', 1.0),
+        'entry_reasons': [
+            f"{best_pattern} pattern detected",
+            f"Higher TF trend: {htf_analysis['trend']}",
+            f"Volume ratio: {indicators.get('volume_ratio', 1.0):.2f}",
+            f"ATR current: {indicators.get('atr_current', 0):.6f}"
+        ],
+        'validation_reasons': [k for k, v in validation['checks'].items() if v],
+        'indicators': indicators
     }

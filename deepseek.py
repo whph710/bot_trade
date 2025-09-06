@@ -7,21 +7,17 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import time
 
+# Импорт конфигурации
+from config import config
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Кэшируем промпты для скорости
 _cached_prompts = {}
 
-# СКАЛЬПИНГОВЫЕ НАСТРОЙКИ (критично для скорости)
-SCALPING_CONFIG = {
-    'default_timeout': 40,  # Быстрый таймаут для скальпинга
-    'selection_timeout': 40,  # Еще быстрее для первичного отбора
-    'analysis_timeout': 40,  # Чуть больше для детального анализа
-    'max_retries': 2,  # Меньше попыток для скорости
-    'max_tokens_selection': 1000,  # Меньше токенов для отбора
-    'max_tokens_analysis': 3000,  # Больше для анализа
-}
+# Глобальный HTTP клиент для переиспользования соединений
+_global_http_client = None
 
 
 def get_cached_prompt(filename: str = 'prompt.txt') -> str:
@@ -30,7 +26,7 @@ def get_cached_prompt(filename: str = 'prompt.txt') -> str:
 
     if filename not in _cached_prompts:
         try:
-            with open(filename, 'r', encoding='utf-8') as file:
+            with open(filename, 'r', encoding=config.system.ENCODING) as file:
                 _cached_prompts[filename] = file.read()
                 logger.info(f"Промпт загружен из {filename}")
         except FileNotFoundError:
@@ -41,27 +37,26 @@ def get_cached_prompt(filename: str = 'prompt.txt') -> str:
     return _cached_prompts[filename]
 
 
-# Глобальный HTTP клиент для переиспользования соединений (экономия времени)
-_global_http_client = None
-
-
-async def get_http_client(timeout: int = 25) -> httpx.AsyncClient:
+async def get_http_client(timeout: int = None) -> httpx.AsyncClient:
     """Переиспользуемый HTTP клиент для скорости."""
     global _global_http_client
+
+    if timeout is None:
+        timeout = config.ai.DEFAULT_TIMEOUT
 
     if _global_http_client is None or _global_http_client.is_closed:
         _global_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
             limits=httpx.Limits(
-                max_connections=10,  # Больше соединений для батчей
-                max_keepalive_connections=5
+                max_connections=config.exchange.MAX_CONNECTIONS,
+                max_keepalive_connections=config.exchange.MAX_KEEPALIVE_CONNECTIONS
             ),
             verify=True,
             http2=True,
             # Настройки для скорости
             headers={
                 'Connection': 'keep-alive',
-                'Keep-Alive': 'timeout=30, max=100'
+                'Keep-Alive': f'timeout={config.exchange.KEEPALIVE_TIMEOUT}, max={config.exchange.KEEPALIVE_MAX}'
             }
         )
 
@@ -87,23 +82,29 @@ async def deep_seek(data: str,
     """
     start_time = time.time()
 
-    api_key = os.getenv('DEEPSEEK')
+    api_key = os.getenv(config.ai.API_KEY_ENV)
     if not api_key:
-        error_msg = "API ключ DEEPSEEK не найден"
+        error_msg = f"API ключ {config.ai.API_KEY_ENV} не найден"
         logger.error(error_msg)
         return f"Ошибка: {error_msg}"
 
     # Адаптивные настройки в зависимости от типа запроса
     if request_type == 'selection':
-        timeout = timeout or SCALPING_CONFIG['selection_timeout']
-        max_tokens = max_tokens or SCALPING_CONFIG['max_tokens_selection']
-        max_retries = max_retries or SCALPING_CONFIG['max_retries']
-        prompt_file = 'prompt2.txt'  # Промпт для отбора
+        timeout = timeout or config.ai.SELECTION_TIMEOUT
+        max_tokens = max_tokens or config.ai.MAX_TOKENS_SELECTION
+        max_retries = max_retries or config.ai.MAX_RETRIES
+        prompt_file = config.ai.SELECTION_PROMPT_FILE
+        temperature = config.ai.TEMPERATURE_SELECTION
+        top_p = config.ai.TOP_P_SELECTION
+        presence_penalty = config.ai.PRESENCE_PENALTY_SELECTION
     else:  # analysis
-        timeout = timeout or SCALPING_CONFIG['analysis_timeout']
-        max_tokens = max_tokens or SCALPING_CONFIG['max_tokens_analysis']
-        max_retries = max_retries or SCALPING_CONFIG['max_retries']
-        prompt_file = 'prompt.txt'  # Промпт для анализа
+        timeout = timeout or config.ai.ANALYSIS_TIMEOUT
+        max_tokens = max_tokens or config.ai.MAX_TOKENS_ANALYSIS
+        max_retries = max_retries or config.ai.MAX_RETRIES
+        prompt_file = config.ai.ANALYSIS_PROMPT_FILE
+        temperature = config.ai.TEMPERATURE_ANALYSIS
+        top_p = config.ai.TOP_P_ANALYSIS
+        presence_penalty = config.ai.PRESENCE_PENALTY_ANALYSIS
 
     # Загружаем промпт
     if prompt is None:
@@ -114,7 +115,7 @@ async def deep_seek(data: str,
 
     client = AsyncOpenAI(
         api_key=api_key,
-        base_url="https://api.deepseek.com",
+        base_url=config.ai.API_BASE_URL,
         http_client=http_client
     )
 
@@ -124,7 +125,7 @@ async def deep_seek(data: str,
 
             # Оптимизированные параметры для скальпинга
             response = await client.chat.completions.create(
-                model="deepseek-chat",
+                model=config.ai.API_MODEL,
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": str(data)},
@@ -133,43 +134,44 @@ async def deep_seek(data: str,
                 max_tokens=max_tokens,
 
                 # Настройки для скорости и качества скальпинга
-                temperature=0.3 if request_type == 'selection' else 0.7,  # Меньше креативности для отбора
-                top_p=0.8 if request_type == 'selection' else 0.9,
-                frequency_penalty=0.1,
-                presence_penalty=0.1 if request_type == 'selection' else 0.05
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=config.ai.FREQUENCY_PENALTY,
+                presence_penalty=presence_penalty
             )
 
             result = response.choices[0].message.content
             execution_time = time.time() - start_time
 
-            logger.info(f"✅ DeepSeek {request_type} ответ получен: {len(result)} символов за {execution_time:.2f}сек")
+            logger.info(f"DeepSeek {request_type} ответ получен: {len(result)} символов за {execution_time:.2f}сек")
 
             # Предупреждение о медленной работе для скальпинга
             if execution_time > (timeout * 0.8):
-                logger.warning(f"⚠️ Медленный ответ ИИ: {execution_time:.2f}сек (лимит {timeout}сек)")
+                logger.warning(f"Медленный ответ ИИ: {execution_time:.2f}сек (лимит {timeout}сек)")
+
             print(result)
             return result
 
         except asyncio.TimeoutError:
-            logger.error(f"❌ Таймаут ИИ на попытке {attempt + 1}: {timeout}сек")
+            logger.error(f"Таймаут ИИ на попытке {attempt + 1}: {timeout}сек")
             if attempt < max_retries - 1:
-                await asyncio.sleep(1)  # Короткая пауза для скальпинга
+                await asyncio.sleep(config.ai.RETRY_DELAY)
 
         except Exception as e:
             error_msg = str(e)
-            logger.warning(f"❌ Попытка {attempt + 1} неудачна: {error_msg}")
+            logger.warning(f"Попытка {attempt + 1} неудачна: {error_msg}")
 
             if attempt < max_retries - 1:
-                # Короткая задержка для скальпинга (не экспоненциальная)
-                wait_time = 1 + (attempt * 0.5)  # Максимум 2 секунды ожидания
-                logger.info(f"⏳ Ожидание {wait_time:.1f}с...")
+                # Задержка для скальпинга
+                wait_time = config.ai.RETRY_DELAY + (attempt * 0.5)  # Максимум 2 секунды ожидания
+                logger.info(f"Ожидание {wait_time:.1f}с...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"💥 Все попытки исчерпаны: {error_msg}")
+                logger.error(f"Все попытки исчерпаны: {error_msg}")
                 return f"Ошибка после {max_retries} попыток: {error_msg}"
 
     execution_time = time.time() - start_time
-    logger.error(f"💥 Полная неудача DeepSeek за {execution_time:.2f}сек")
+    logger.error(f"Полная неудача DeepSeek за {execution_time:.2f}сек")
     return f"Критическая ошибка DeepSeek API после {max_retries} попыток"
 
 
@@ -193,31 +195,31 @@ async def deep_seek_analysis(data: str, prompt: str = None) -> str:
 
 async def test_deepseek_connection() -> bool:
     """Быстрая проверка подключения к DeepSeek API."""
-    api_key = os.getenv('DEEPSEEK')
+    api_key = os.getenv(config.ai.API_KEY_ENV)
     if not api_key:
         logger.error("API ключ не найден")
         return False
 
     try:
-        http_client = await get_http_client(15)  # Быстрая проверка
+        http_client = await get_http_client(config.ai.HEALTH_CHECK_TIMEOUT)
         api_client = AsyncOpenAI(
             api_key=api_key,
-            base_url="https://api.deepseek.com",
+            base_url=config.ai.API_BASE_URL,
             http_client=http_client
         )
 
         response = await api_client.chat.completions.create(
-            model="deepseek-chat",
+            model=config.ai.API_MODEL,
             messages=[{"role": "user", "content": "Test connection"}],
-            max_tokens=5,
+            max_tokens=config.ai.MAX_TOKENS_TEST,
             temperature=0.1
         )
 
-        logger.info("✅ DeepSeek API работает")
+        logger.info("DeepSeek API работает")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Ошибка DeepSeek API: {e}")
+        logger.error(f"Ошибка DeepSeek API: {e}")
         return False
 
 
@@ -239,7 +241,7 @@ async def batch_deep_seek(requests: list, request_type: str = 'selection') -> li
         tasks.append(task)
 
     # Выполняем параллельно с ограничением
-    semaphore = asyncio.Semaphore(3)  # Максимум 3 одновременных запроса
+    semaphore = asyncio.Semaphore(config.processing.SEMAPHORE_LIMIT)
 
     async def bounded_request(task):
         async with semaphore:
@@ -256,7 +258,7 @@ async def check_api_health() -> dict:
     start_time = time.time()
 
     health_info = {
-        "api_key_exists": bool(os.getenv('DEEPSEEK')),
+        "api_key_exists": bool(os.getenv(config.ai.API_KEY_ENV)),
         "api_functional": False,
         "response_time": None,
         "suitable_for_scalping": False
@@ -272,12 +274,12 @@ async def check_api_health() -> dict:
         health_info["suitable_for_scalping"] = response_time < 10.0
 
         if response_time > 15.0:
-            logger.warning(f"⚠️ Медленное API ({response_time}сек) - не подходит для скальпинга")
+            logger.warning(f"Медленное API ({response_time}сек) - не подходит для скальпинга")
         else:
-            logger.info(f"✅ API быстрое ({response_time}сек) - подходит для скальпинга")
+            logger.info(f"API быстрое ({response_time}сек) - подходит для скальпинга")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка проверки API: {e}")
+        logger.error(f"Ошибка проверки API: {e}")
 
     return health_info
 
@@ -288,7 +290,7 @@ async def cleanup_http_client():
     if _global_http_client and not _global_http_client.is_closed:
         await _global_http_client.aclose()
         _global_http_client = None
-        logger.info("🧹 HTTP клиент очищен")
+        logger.info("HTTP клиент очищен")
 
 
 # Функция для совместимости со старым кодом

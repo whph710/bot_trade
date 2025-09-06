@@ -44,33 +44,35 @@
 {
   "analysis": "краткое обоснование сигнала и соответствие инструкции",
   "signal": "LONG/SHORT/NO_SIGNAL",
-  "confidence": 85,
+  "confidence": *,
   "pattern_used": "MOMENTUM_BREAKOUT/PULLBACK_ENTRY/SQUEEZE_BREAKOUT/RANGE_SCALP/NONE",
-  "entry_price": 45678.50,
-  "stop_loss": 45200.00,
-  "take_profit": 46400.00,
-  "risk_reward_ratio": 1.5,
-  "position_size_percent": 2.5,
+  "entry_price": *,
+  "stop_loss": *,
+  "take_profit": *,
+  "risk_reward_ratio": *,
+  "position_size_percent": *,
   "max_hold_time": "* minutes",
   "validation_checklist": {
     "higher_tf_trend_aligned": true,
     "candle_closed_correctly": true,
     "volume_confirmed": true,
     "atr_sufficient": true,
-    "score": "5/5"
+    "candle_pattern_aligned": true,
+    "score": "*/5"
   },
   "key_levels": {
-    "support": [45000, 44800],
-    "resistance": [46500, 46800]
+    "support": [*, *],
+    "resistance": [*, *]
   },
   "execution_notes": "конкретные указания по входу и управлению позицией"
 }
 
 КРИТИЧЕСКИ ВАЖНО:
-- Если валидация <3/4 - сигнал NO_SIGNAL
+- Если валидация <3/5 - сигнал NO_SIGNAL
 - Стоп-лосс ВСЕГДА больше ATR×1.5 или 0.4%
 - Тейк-профит обеспечивает Risk/Reward минимум 1:1.2
 - Объем ОБЯЗАТЕЛЬНО должен подтверждать сигнал
 - Время удержания: максимум 30-45 минут
+- Валидация ВСЕГДА содержит 5 проверок и счет "X/5"
 
 АНАЛИЗИРУЙ ПРЕДОСТАВЛЕННЫЕ ДАННЫЕ И ДАВАЙ ТОЧНЫЕ ТОРГОВЫЕ РЕКОМЕНДАЦИИ.

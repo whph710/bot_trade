@@ -13,41 +13,22 @@ import datetime
 from func_async import get_klines_async, get_usdt_trading_pairs
 from deepseek import deep_seek_selection, deep_seek_analysis, cleanup_http_client
 
-# НОВЫЙ ИМПОРТ с индикаторами по инструкции
+# Импорт с индикаторами по инструкции
 from func_trade import detect_instruction_based_signals, calculate_indicators_by_instruction
 
-# Настройка логирования
+# Импорт конфигурации
+from config import config
+
+# Настройка логирования без эмоджи
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=getattr(logging, config.system.LOG_LEVEL),
+    format=config.system.LOG_FORMAT,
     handlers=[
-        logging.FileHandler('scalping_bot.log', encoding='utf-8'),
+        logging.FileHandler(config.system.LOG_FILE, encoding=config.system.ENCODING),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
-
-# КОНФИГУРАЦИЯ ПО ИНСТРУКЦИИ
-SCALPING_CONFIG = {
-    # Таймфреймы согласно иерархии
-    'context_tf': '15',  # 15m для контекста/фильтра
-    'entry_tf': '5',  # 5m для точного входа
-
-    # Количество свечей
-    'candles_15m': 100,  # Для контекста
-    'candles_5m': 200,  # Для анализа входа
-    'candles_for_ai_selection': 30,  # Для первичного отбора ИИ
-    'candles_for_ai_analysis': 100,  # Для детального анализа
-
-    # Параметры обработки
-    'batch_size': 50,
-    'min_confidence': 60,
-    'max_pairs_to_ai': 8,
-
-    # Фильтры по инструкции
-    'min_liquidity_volume': 10_000_000,  # Минимум $50M объем
-    'max_spread_percent': 0.5,  # Максимум 0.15% спред
-}
 
 
 def clean_value(value):
@@ -88,7 +69,7 @@ class InstructionBasedSignal:
     # Данные по инструкции
     pattern_type: str  # 'MOMENTUM_BREAKOUT', 'PULLBACK_ENTRY', etc.
     higher_tf_trend: str  # Тренд 15m
-    validation_score: str  # "3/4" чек-пунктов
+    validation_score: str  # "5/5" чек-пунктов
     atr_current: float  # Текущий ATR для волатильности
     volume_ratio: float  # Соотношение объемов
 
@@ -103,18 +84,18 @@ class InstructionBasedAnalyzer:
 
     def __init__(self):
         self.session_start = time.time()
-        logger.info("🎯 Анализатор по инструкции запущен (15m+5m)")
+        logger.info("Анализатор по инструкции запущен (15m+5m)")
 
     def passes_liquidity_filter(self, symbol: str, candles: List) -> bool:
         """Фильтр ликвидности согласно инструкции"""
         if not candles:
             return False
 
-        # Примерная оценка объема (последние 24 свечи 5m ≈ 2 часа)
+        # Примерная оценка объема (последние 24 свечи 5m = 2 часа)
         recent_volumes = [float(c[5]) * float(c[4]) for c in candles[-24:]]  # Объем в USD
         avg_hourly_volume = sum(recent_volumes) * 12  # Приблизительно за 24ч
 
-        return avg_hourly_volume > SCALPING_CONFIG['min_liquidity_volume']
+        return avg_hourly_volume > config.trading.MIN_LIQUIDITY_VOLUME
 
     def check_spread_quality(self, candles: List) -> bool:
         """Проверка стабильности спреда (упрощенно через ATR)"""
@@ -130,16 +111,16 @@ class InstructionBasedAnalyzer:
         avg_range = sum(h - l for h, l in zip(highs, lows)) / len(highs)
 
         spread_estimate = (avg_range / avg_price) * 100
-        return spread_estimate < SCALPING_CONFIG['max_spread_percent']
+        return spread_estimate < config.trading.MAX_SPREAD_PERCENT
 
     async def quick_scan_pair(self, symbol: str) -> Optional[InstructionBasedSignal]:
         """Быстрое сканирование пары согласно инструкции"""
         try:
             # Получаем данные для мультитаймфреймного анализа
-            candles_5m = await get_klines_async(symbol, SCALPING_CONFIG['entry_tf'],
-                                                limit=SCALPING_CONFIG['candles_5m'])
-            candles_15m = await get_klines_async(symbol, SCALPING_CONFIG['context_tf'],
-                                                 limit=SCALPING_CONFIG['candles_15m'])
+            candles_5m = await get_klines_async(symbol, config.timeframe.ENTRY_TF,
+                                                limit=config.timeframe.CANDLES_5M)
+            candles_15m = await get_klines_async(symbol, config.timeframe.CONTEXT_TF,
+                                                 limit=config.timeframe.CANDLES_15M)
 
             if not candles_5m or not candles_15m:
                 return None
@@ -161,7 +142,7 @@ class InstructionBasedAnalyzer:
             entry_price = float(candles_5m[-1][4])
             confidence = int(signal_result['confidence'])
 
-            if math.isnan(entry_price) or confidence < SCALPING_CONFIG['min_confidence']:
+            if math.isnan(entry_price) or confidence < config.trading.MIN_CONFIDENCE:
                 return None
 
             return InstructionBasedSignal(
@@ -174,37 +155,37 @@ class InstructionBasedAnalyzer:
                 # Данные согласно инструкции
                 pattern_type=signal_result.get('pattern_type', 'UNKNOWN'),
                 higher_tf_trend=signal_result.get('higher_tf_trend', 'UNKNOWN'),
-                validation_score=signal_result.get('validation_score', '0/4'),
+                validation_score=signal_result.get('validation_score', '0/5'),
                 atr_current=signal_result.get('atr_current', 0.0),
                 volume_ratio=signal_result.get('volume_ratio', 1.0),
 
                 # Данные для ИИ
-                candles_5m=candles_5m[-SCALPING_CONFIG['candles_for_ai_selection']:],
-                candles_15m=candles_15m[-20:],  # Последние 20 свечей 15m для контекста
+                candles_5m=candles_5m[-config.timeframe.CANDLES_FOR_AI_SELECTION:],
+                candles_15m=candles_15m[-config.timeframe.CANDLES_FOR_CONTEXT:],
                 indicators_data=clean_value(signal_result.get('indicators', {}))
             )
 
         except Exception as e:
-            logger.error(f"❌ Ошибка сканирования {symbol}: {e}")
+            logger.error(f"Ошибка сканирования {symbol}: {e}")
             return None
 
     async def mass_scan_markets(self) -> List[InstructionBasedSignal]:
         """Массовое сканирование с фильтрацией согласно инструкции"""
         start_time = time.time()
-        logger.info("🔍 ЭТАП 1: Сканирование с фильтрами по инструкции")
+        logger.info("ЭТАП 1: Сканирование с фильтрами по инструкции")
 
         try:
             pairs = await get_usdt_trading_pairs()
             if not pairs:
                 return []
 
-            logger.info(f"📊 Сканируем {len(pairs)} пар (15m контекст + 5m вход)")
+            logger.info(f"Сканируем {len(pairs)} пар (15m контекст + 5m вход)")
 
             promising_signals = []
 
             # Обрабатываем батчами
-            for i in range(0, len(pairs), SCALPING_CONFIG['batch_size']):
-                batch = pairs[i:i + SCALPING_CONFIG['batch_size']]
+            for i in range(0, len(pairs), config.processing.BATCH_SIZE):
+                batch = pairs[i:i + config.processing.BATCH_SIZE]
                 tasks = [self.quick_scan_pair(pair) for pair in batch]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -212,22 +193,22 @@ class InstructionBasedAnalyzer:
                     if isinstance(result, InstructionBasedSignal):
                         promising_signals.append(result)
 
-                processed = min(i + SCALPING_CONFIG['batch_size'], len(pairs))
-                logger.info(f"⏳ Обработано: {processed}/{len(pairs)}")
+                processed = min(i + config.processing.BATCH_SIZE, len(pairs))
+                logger.info(f"Обработано: {processed}/{len(pairs)}")
 
-                if i + SCALPING_CONFIG['batch_size'] < len(pairs):
-                    await asyncio.sleep(0.1)
+                if i + config.processing.BATCH_SIZE < len(pairs):
+                    await asyncio.sleep(config.processing.BATCH_DELAY)
 
             # Сортируем по уверенности
             promising_signals.sort(key=lambda x: x.confidence, reverse=True)
 
             execution_time = time.time() - start_time
-            logger.info(f"✅ ЭТАП 1: {len(promising_signals)} сигналов за {execution_time:.2f}сек")
+            logger.info(f"ЭТАП 1: {len(promising_signals)} сигналов за {execution_time:.2f}сек")
 
             return promising_signals
 
         except Exception as e:
-            logger.error(f"❌ Ошибка сканирования: {e}")
+            logger.error(f"Ошибка сканирования: {e}")
             return []
 
 
@@ -235,8 +216,8 @@ class InstructionBasedAISelector:
     """ИИ селектор согласно инструкции"""
 
     def __init__(self):
-        self.selection_prompt = self._load_prompt('prompt2.txt')
-        self.analysis_prompt = self._load_prompt('prompt.txt')
+        self.selection_prompt = self._load_prompt(config.ai.SELECTION_PROMPT_FILE)
+        self.analysis_prompt = self._load_prompt(config.ai.ANALYSIS_PROMPT_FILE)
 
     def _load_prompt(self, filename: str) -> str:
         """Загрузка промпта"""
@@ -244,7 +225,7 @@ class InstructionBasedAISelector:
             with open(filename, 'r', encoding='utf-8') as f:
                 return f.read().strip()
         except FileNotFoundError:
-            logger.error(f"❌ Файл {filename} не найден")
+            logger.error(f"Файл {filename} не найден")
             return ""
 
     def _prepare_signals_for_ai(self, signals: List[InstructionBasedSignal]) -> Dict[str, Any]:
@@ -330,8 +311,8 @@ class InstructionBasedAISelector:
 
         return {
             'analysis_method': 'multi_timeframe_instruction_based',
-            'context_tf': '15m',
-            'entry_tf': '5m',
+            'context_tf': config.timeframe.CONTEXT_TF + 'm',
+            'entry_tf': config.timeframe.ENTRY_TF + 'm',
             'signals_count': len(prepared_data),
             'timestamp': int(time.time()),
             'signals': prepared_data
@@ -342,24 +323,24 @@ class InstructionBasedAISelector:
         if not self.selection_prompt or not signals:
             return []
 
-        logger.info(f"🤖 ЭТАП 2: ИИ отбор из {len(signals)} сигналов")
+        logger.info(f"ЭТАП 2: ИИ отбор из {len(signals)} сигналов")
 
         try:
-            top_signals = signals[:SCALPING_CONFIG['max_pairs_to_ai']]
+            top_signals = signals[:config.ai.MAX_PAIRS_TO_AI]
             ai_data = self._prepare_signals_for_ai(top_signals)
 
             message = f"""{self.selection_prompt}
 
 === МУЛЬТИТАЙМФРЕЙМНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
-МЕТОД: 15m контекст + 5m точный вход
-ИНДИКАТОРЫ: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)
+МЕТОД: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход
+ИНДИКАТОРЫ: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})
 ШАБЛОНЫ: Momentum breakout, Pullback, Squeeze breakout, Range scalp
 КОЛИЧЕСТВО СИГНАЛОВ: {len(top_signals)}
 
 {json.dumps(ai_data, indent=2, ensure_ascii=False)}
 
-ЗАДАЧА: Выбери максимум 3-5 лучших пар для торговли по инструкции.
-Учти валидацию сигналов (3 из 4 чек-пунктов) и объемное подтверждение.
+ЗАДАЧА: Выбери максимум {config.ai.MAX_SELECTED_PAIRS} лучших пар для торговли по инструкции.
+Учти валидацию сигналов ({config.trading.VALIDATION_CHECKS_REQUIRED} из {config.trading.VALIDATION_CHECKS_TOTAL} чек-пунктов) и объемное подтверждение.
 
 Верни JSON: {{"pairs": ["BTCUSDT", "ETHUSDT"]}}"""
 
@@ -369,11 +350,11 @@ class InstructionBasedAISelector:
                 return []
 
             selected_pairs = self._parse_ai_response(ai_response)
-            logger.info(f"✅ ЭТАП 2: ИИ выбрал {len(selected_pairs)} пар")
+            logger.info(f"ЭТАП 2: ИИ выбрал {len(selected_pairs)} пар")
             return selected_pairs
 
         except Exception as e:
-            logger.error(f"❌ Ошибка ИИ отбора: {e}")
+            logger.error(f"Ошибка ИИ отбора: {e}")
             return []
 
     def _parse_ai_response(self, response: str) -> List[str]:
@@ -392,12 +373,14 @@ class InstructionBasedAISelector:
         if not self.analysis_prompt:
             return None
 
-        logger.info(f"🔬 ЭТАП 3: Детальный анализ {pair}")
+        logger.info(f"ЭТАП 3: Детальный анализ {pair}")
 
         try:
             # Получаем полные данные для детального анализа
-            full_candles_5m = await get_klines_async(pair, '5', limit=SCALPING_CONFIG['candles_for_ai_analysis'])
-            full_candles_15m = await get_klines_async(pair, '15', limit=60)
+            full_candles_5m = await get_klines_async(pair, config.timeframe.ENTRY_TF,
+                                                   limit=config.timeframe.CANDLES_FOR_AI_ANALYSIS)
+            full_candles_15m = await get_klines_async(pair, config.timeframe.CONTEXT_TF,
+                                                    limit=60)
 
             if not full_candles_5m or not full_candles_15m:
                 return None
@@ -441,7 +424,7 @@ class InstructionBasedAISelector:
                     'signal_detected': signal_analysis.get('signal', 'NO_SIGNAL'),
                     'pattern_type': signal_analysis.get('pattern_type', 'NONE'),
                     'confidence': signal_analysis.get('confidence', 0),
-                    'validation_score': signal_analysis.get('validation_score', '0/4'),
+                    'validation_score': signal_analysis.get('validation_score', '0/5'),
                     'entry_reasons': signal_analysis.get('entry_reasons', []),
                     'validation_reasons': signal_analysis.get('validation_reasons', [])
                 },
@@ -463,17 +446,14 @@ class InstructionBasedAISelector:
                         'rsi9_current': full_indicators.get('rsi_current', 50),
                         'rsi_trend': 'bullish' if full_indicators.get('rsi_current', 50) > 50 else 'bearish',
                         'rsi_extreme': (
-                                full_indicators.get('rsi_current', 50) < 30 or
-                                full_indicators.get('rsi_current', 50) > 70
+                                full_indicators.get('rsi_current', 50) < config.indicators.RSI_OVERSOLD or
+                                full_indicators.get('rsi_current', 50) > config.indicators.RSI_OVERBOUGHT
                         )
                     },
                     'macd_confirmation': {
-                        'macd_current': full_indicators.get('macd_line', [])[-1] if full_indicators.get(
-                            'macd_line') else 0,
-                        'signal_current': full_indicators.get('macd_signal', [])[-1] if full_indicators.get(
-                            'macd_signal') else 0,
-                        'histogram_current': full_indicators.get('macd_histogram', [])[-1] if full_indicators.get(
-                            'macd_histogram') else 0,
+                        'macd_current': full_indicators.get('macd_line', [])[-1] if full_indicators.get('macd_line') else 0,
+                        'signal_current': full_indicators.get('macd_signal', [])[-1] if full_indicators.get('macd_signal') else 0,
+                        'histogram_current': full_indicators.get('macd_histogram', [])[-1] if full_indicators.get('macd_histogram') else 0,
                         'bullish_crossover': (
                                 len(full_indicators.get('macd_line', [])) >= 2 and
                                 len(full_indicators.get('macd_signal', [])) >= 2 and
@@ -484,21 +464,18 @@ class InstructionBasedAISelector:
                     'volatility_control': {
                         'atr14_current': full_indicators.get('atr_current', 0),
                         'atr_mean': full_indicators.get('atr_mean', 0),
-                        'volatility_suitable': full_indicators.get('atr_current', 0) >= full_indicators.get('atr_mean',
-                                                                                                            0) * 0.9,
+                        'volatility_suitable': full_indicators.get('atr_current', 0) >= full_indicators.get('atr_mean', 0) * config.indicators.ATR_OPTIMAL_RATIO,
                         'atr_percent': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100
                     },
                     'volume_confirmation': {
                         'volume_current': full_indicators.get('volume_current', 0),
-                        'volume_sma20': full_indicators.get('volume_sma', [])[-1] if full_indicators.get(
-                            'volume_sma') else 0,
+                        'volume_sma20': full_indicators.get('volume_sma', [])[-1] if full_indicators.get('volume_sma') else 0,
                         'volume_ratio': full_indicators.get('volume_ratio', 1.0),
-                        'volume_spike': full_indicators.get('volume_ratio', 1.0) > 1.5
+                        'volume_spike': full_indicators.get('volume_ratio', 1.0) > config.indicators.VOLUME_SPIKE_RATIO
                     },
                     'bollinger_analysis': {
                         'bb_upper': full_indicators.get('bb_upper', [])[-1] if full_indicators.get('bb_upper') else 0,
-                        'bb_middle': full_indicators.get('bb_middle', [])[-1] if full_indicators.get(
-                            'bb_middle') else 0,
+                        'bb_middle': full_indicators.get('bb_middle', [])[-1] if full_indicators.get('bb_middle') else 0,
                         'bb_lower': full_indicators.get('bb_lower', [])[-1] if full_indicators.get('bb_lower') else 0,
                         'price_position': self._get_bb_position(float(full_candles_5m[-1][4]), full_indicators),
                         'squeeze_potential': self._detect_bb_squeeze(full_indicators)
@@ -506,9 +483,9 @@ class InstructionBasedAISelector:
                 }),
 
                 'risk_metrics': {
-                    'atr_based_stop': full_indicators.get('atr_current', 0) * 1.2,
+                    'atr_based_stop': full_indicators.get('atr_current', 0) * config.indicators.ATR_MULTIPLIER_STOP,
                     'atr_percent_risk': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100,
-                    'volume_liquidity': 'high' if full_indicators.get('volume_ratio', 1.0) > 1.5 else 'normal'
+                    'volume_liquidity': 'high' if full_indicators.get('volume_ratio', 1.0) > config.indicators.VOLUME_SPIKE_RATIO else 'normal'
                 }
             }
 
@@ -516,8 +493,8 @@ class InstructionBasedAISelector:
 
 === ДЕТАЛЬНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
 ПАРА: {pair}
-МЕТОД: Мультитаймфреймный анализ (15m контекст + 5m вход)
-ИНДИКАТОРЫ: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)
+МЕТОД: Мультитаймфреймный анализ ({config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m вход)
+ИНДИКАТОРЫ: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})
 ЦЕНА: {analysis_data['current_price']}
 
 {json.dumps(analysis_data, indent=2, ensure_ascii=False)}
@@ -532,13 +509,13 @@ class InstructionBasedAISelector:
 
             if analysis_result:
                 self._save_analysis(pair, analysis_result)
-                logger.info(f"✅ Анализ {pair} завершен")
+                logger.info(f"Анализ {pair} завершен")
                 return analysis_result
 
             return None
 
         except Exception as e:
-            logger.error(f"❌ Ошибка анализа {pair}: {e}")
+            logger.error(f"Ошибка анализа {pair}: {e}")
             return None
 
     def _get_bb_position(self, price: float, indicators: Dict) -> str:
@@ -567,27 +544,27 @@ class InstructionBasedAISelector:
         current_width = bb_upper[-1] - bb_lower[-1]
         avg_width = sum(bb_upper[i] - bb_lower[i] for i in range(-10, 0)) / 10
 
-        return current_width < avg_width * 0.8
+        return current_width < avg_width * config.indicators.BB_SQUEEZE_RATIO
 
     def _save_analysis(self, pair: str, analysis: str):
         """Сохранение анализа"""
         try:
-            with open('instruction_based_analysis.log', 'a', encoding='utf-8') as f:
+            with open(config.system.ANALYSIS_LOG_FILE, 'a', encoding=config.system.ENCODING) as f:
                 f.write(f"\n{'=' * 80}\n")
                 f.write(f"ПАРА: {pair}\n")
                 f.write(f"ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"МЕТОД: Инструкция (15m+5m)\n")
+                f.write(f"МЕТОД: Инструкция ({config.timeframe.CONTEXT_TF}m+{config.timeframe.ENTRY_TF}m)\n")
                 f.write(f"АНАЛИЗ:\n{analysis}\n")
                 f.write(f"{'=' * 80}\n")
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения: {e}")
+            logger.error(f"Ошибка сохранения: {e}")
 
 
 async def main():
     """Главная функция бота согласно инструкции"""
-    logger.info("🎯 СКАЛЬПИНГОВЫЙ БОТ ПО ИНСТРУКЦИИ - ЗАПУСК")
-    logger.info("📊 Метод: 15m контекст + 5m точный вход")
-    logger.info("🔧 Индикаторы: EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)")
+    logger.info("СКАЛЬПИНГОВЫЙ БОТ ПО ИНСТРУКЦИИ - ЗАПУСК")
+    logger.info(f"Метод: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход")
+    logger.info(f"Индикаторы: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})")
 
     analyzer = InstructionBasedAnalyzer()
     ai_selector = InstructionBasedAISelector()
@@ -597,10 +574,10 @@ async def main():
         promising_signals = await analyzer.mass_scan_markets()
 
         if not promising_signals:
-            logger.info("ℹ️ Сигналы согласно инструкции не найдены")
+            logger.info("Сигналы согласно инструкции не найдены")
             return
 
-        logger.info(f"📈 Найдено {len(promising_signals)} сигналов по инструкции")
+        logger.info(f"Найдено {len(promising_signals)} сигналов по инструкции")
         for signal in promising_signals[:5]:  # Показываем топ-5
             logger.info(f"   {signal.pair}: {signal.pattern_type} ({signal.confidence}%, {signal.validation_score})")
 
@@ -608,10 +585,10 @@ async def main():
         selected_pairs = await ai_selector.select_best_pairs(promising_signals)
 
         if not selected_pairs:
-            logger.info("ℹ️ ИИ не выбрал пары согласно критериям")
+            logger.info("ИИ не выбрал пары согласно критериям")
             return
 
-        logger.info(f"🤖 ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
+        logger.info(f"ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
 
         # ЭТАП 3: Детальный анализ каждой пары
         successful_analyses = 0
@@ -621,43 +598,43 @@ async def main():
 
             if analysis:
                 successful_analyses += 1
-                logger.info(f"✅ {pair} - детальный анализ завершен")
+                logger.info(f"{pair} - детальный анализ завершен")
             else:
-                logger.error(f"❌ {pair} - ошибка анализа")
+                logger.error(f"{pair} - ошибка анализа")
 
             await asyncio.sleep(1)  # Пауза между запросами
 
         # ИТОГИ
-        logger.info(f"\n🎉 АНАЛИЗ ПО ИНСТРУКЦИИ ЗАВЕРШЕН!")
-        logger.info(f"📊 Метод: Мультитаймфреймный (15m+5m)")
-        logger.info(f"🎯 Найдено сигналов: {len(promising_signals)}")
-        logger.info(f"🤖 ИИ отобрал: {len(selected_pairs)}")
-        logger.info(f"📋 Успешных анализов: {successful_analyses}")
-        logger.info(f"📁 Результаты: instruction_based_analysis.log")
+        logger.info(f"\nАНАЛИЗ ПО ИНСТРУКЦИИ ЗАВЕРШЕН!")
+        logger.info(f"Метод: Мультитаймфреймный ({config.timeframe.CONTEXT_TF}m+{config.timeframe.ENTRY_TF}m)")
+        logger.info(f"Найдено сигналов: {len(promising_signals)}")
+        logger.info(f"ИИ отобрал: {len(selected_pairs)}")
+        logger.info(f"Успешных анализов: {successful_analyses}")
+        logger.info(f"Результаты: {config.system.ANALYSIS_LOG_FILE}")
 
         await cleanup_http_client()
 
     except KeyboardInterrupt:
-        logger.info("⏹️ Остановка по запросу")
+        logger.info("Остановка по запросу")
     except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {e}")
+        logger.error(f"Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
 
 
 if __name__ == "__main__":
     logger.info("=" * 80)
-    logger.info("🎯 СКАЛЬПИНГОВЫЙ БОТ СОГЛАСНО ИНСТРУКЦИИ")
-    logger.info("📊 15m контекст + 5m точный вход")
-    logger.info("🔧 EMA(5/8/20), RSI(9), MACD(12,26,9), ATR(14), Bollinger(20,2)")
-    logger.info("📋 Шаблоны: Momentum, Pullback, Squeeze, Range scalp")
+    logger.info("СКАЛЬПИНГОВЫЙ БОТ СОГЛАСНО ИНСТРУКЦИИ")
+    logger.info(f"{config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход")
+    logger.info(f"EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})")
+    logger.info("Шаблоны: Momentum, Pullback, Squeeze, Range scalp")
     logger.info("=" * 80)
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Программа остановлена")
+        logger.info("Программа остановлена")
     except Exception as e:
-        logger.error(f"💥 Фатальная ошибка: {e}")
+        logger.error(f"Фатальная ошибка: {e}")
     finally:
-        logger.info("🔚 Работа завершена")
+        logger.info("Работа завершена")
