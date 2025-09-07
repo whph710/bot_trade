@@ -1,24 +1,28 @@
-"""
-Упрощенный но мощный скальпинг-бот
-Фокус на проверенных прибыльных стратегиях
-"""
-
 import asyncio
+import json
 import logging
 import time
-from typing import List, Dict, Any
-from dataclasses import dataclass
+import math
+import numpy as np
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, asdict
+import re
+import datetime
 
-# Импорты модулей
+# ИМПОРТЫ
+from func_async import get_klines_async, get_usdt_trading_pairs
+from deepseek import deep_seek_selection, deep_seek_analysis, cleanup_http_client
+
+# Импорт с индикаторами по инструкции
+from func_trade import detect_instruction_based_signals, calculate_indicators_by_instruction
+
+# Импорт конфигурации
 from config import config
-from exchange import get_candles, get_usdt_pairs, cleanup as cleanup_exchange
-from indicators import generate_trading_signal, calculate_all_indicators
-from ai_client import select_best_pairs, analyze_pair_detailed, cleanup_ai, check_ai_health
 
-# Настройка логирования
+# Настройка логирования без эмоджи
 logging.basicConfig(
     level=getattr(logging, config.system.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format=config.system.LOG_FORMAT,
     handlers=[
         logging.FileHandler(config.system.LOG_FILE, encoding=config.system.ENCODING),
         logging.StreamHandler()
@@ -27,302 +31,610 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def clean_value(value):
+    """Очистка значений от NaN и Infinity"""
+    if isinstance(value, (np.integer, np.floating)):
+        value = float(value)
+    elif isinstance(value, np.bool_):
+        return bool(value)
+    elif isinstance(value, np.ndarray):
+        return [clean_value(x) for x in value.tolist()]
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return 0.0
+        return value
+    elif isinstance(value, dict):
+        return {k: clean_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [clean_value(item) for item in value]
+    else:
+        return value
+
+
+def safe_json_serialize(obj: Any) -> Any:
+    """Безопасная JSON сериализация"""
+    return clean_value(obj)
+
+
 @dataclass
-class TradingSignal:
-    """Торговый сигнал"""
+class InstructionBasedSignal:
+    """Сигнал согласно инструкции с мультитаймфреймным анализом"""
     pair: str
-    signal: str  # LONG/SHORT/NO_SIGNAL
+    signal_type: str  # 'LONG', 'SHORT', 'NO_SIGNAL'
     confidence: int
-    pattern: str
-    volume_ratio: float
-    trend_strength: float
-    candles_5m: List = None
-    candles_15m: List = None
-    indicators: Dict = None
+    entry_price: float
+    timestamp: int
+
+    # Данные по инструкции
+    pattern_type: str  # 'MOMENTUM_BREAKOUT', 'PULLBACK_ENTRY', etc.
+    higher_tf_trend: str  # Тренд 15m
+    validation_score: str  # "5/5" чек-пунктов
+    atr_current: float  # Текущий ATR для волатильности
+    volume_ratio: float  # Соотношение объемов
+
+    # Для ИИ
+    candles_5m: List = None  # 5m свечи для входа
+    candles_15m: List = None  # 15m свечи для контекста
+    indicators_data: Dict = None
 
 
-class SimplifiedScalpingBot:
-    """Упрощенный скальпинг-бот"""
+class InstructionBasedAnalyzer:
+    """Анализатор согласно инструкции: 15m контекст + 5m вход"""
 
     def __init__(self):
-        self.start_time = time.time()
-        logger.info("🚀 Simplified Scalping Bot Started")
+        self.session_start = time.time()
+        logger.info("Анализатор по инструкции запущен (15m+5m)")
 
-    async def scan_pair(self, pair: str) -> TradingSignal:
-        """Сканирование одной пары"""
+    def passes_liquidity_filter(self, symbol: str, candles: List) -> bool:
+        """Фильтр ликвидности согласно инструкции"""
+        if not candles:
+            return False
+
+        # Примерная оценка объема (последние 24 свечи 5m = 2 часа)
+        recent_volumes = [float(c[5]) * float(c[4]) for c in candles[-24:]]  # Объем в USD
+        avg_hourly_volume = sum(recent_volumes) * 12  # Приблизительно за 24ч
+
+        return avg_hourly_volume > config.trading.MIN_LIQUIDITY_VOLUME
+
+    def check_spread_quality(self, candles: List) -> bool:
+        """Проверка стабильности спреда (упрощенно через ATR)"""
+        if len(candles) < 5:
+            return False
+
+        # Используем ATR как прокси для спреда
+        highs = [float(c[2]) for c in candles[-5:]]
+        lows = [float(c[3]) for c in candles[-5:]]
+        closes = [float(c[4]) for c in candles[-5:]]
+
+        avg_price = sum(closes) / len(closes)
+        avg_range = sum(h - l for h, l in zip(highs, lows)) / len(highs)
+
+        spread_estimate = (avg_range / avg_price) * 100
+        return spread_estimate < config.trading.MAX_SPREAD_PERCENT
+
+    async def quick_scan_pair(self, symbol: str) -> Optional[InstructionBasedSignal]:
+        """Быстрое сканирование пары согласно инструкции"""
         try:
-            # Получаем данные с обоих таймфреймов
-            candles_5m = await get_candles(
-                pair,
-                config.trading.ENTRY_TF,
-                config.trading.CANDLES_ENTRY
-            )
-            candles_15m = await get_candles(
-                pair,
-                config.trading.HIGHER_TF,
-                config.trading.CANDLES_HIGHER
-            )
+            # Получаем данные для мультитаймфреймного анализа
+            candles_5m = await get_klines_async(symbol, config.timeframe.ENTRY_TF,
+                                                limit=config.timeframe.CANDLES_5M)
+            candles_15m = await get_klines_async(symbol, config.timeframe.CONTEXT_TF,
+                                                 limit=config.timeframe.CANDLES_15M)
 
             if not candles_5m or not candles_15m:
-                logger.debug(f"No data for {pair}")
                 return None
 
-            # Генерируем торговый сигнал
-            signal_data = generate_trading_signal(candles_5m, candles_15m)
-
-            if signal_data['signal'] == 'NO_SIGNAL':
+            # Фильтры согласно инструкции
+            if not self.passes_liquidity_filter(symbol, candles_5m):
                 return None
 
-            # Рассчитываем дополнительные индикаторы
-            indicators = calculate_all_indicators(candles_5m)
+            if not self.check_spread_quality(candles_5m):
+                return None
 
-            return TradingSignal(
-                pair=pair,
-                signal=signal_data['signal'],
-                confidence=signal_data['confidence'],
-                pattern=signal_data.get('pattern', 'UNKNOWN'),
-                volume_ratio=indicators.get('volume_ratio', 1.0),
-                trend_strength=indicators.get('trend', {}).get('strength', 0),
-                candles_5m=candles_5m,
-                candles_15m=candles_15m,
-                indicators=indicators
+            # Определяем сигнал согласно инструкции (мультитаймфрейм)
+            signal_result = detect_instruction_based_signals(candles_5m, candles_15m)
+
+            if signal_result['signal'] == 'NO_SIGNAL':
+                return None
+
+            # Создаем сигнал
+            entry_price = float(candles_5m[-1][4])
+            confidence = int(signal_result['confidence'])
+
+            if math.isnan(entry_price) or confidence < config.trading.MIN_CONFIDENCE:
+                return None
+
+            return InstructionBasedSignal(
+                pair=symbol,
+                signal_type=signal_result['signal'],
+                confidence=confidence,
+                entry_price=entry_price,
+                timestamp=int(time.time()),
+
+                # Данные согласно инструкции
+                pattern_type=signal_result.get('pattern_type', 'UNKNOWN'),
+                higher_tf_trend=signal_result.get('higher_tf_trend', 'UNKNOWN'),
+                validation_score=signal_result.get('validation_score', '0/5'),
+                atr_current=signal_result.get('atr_current', 0.0),
+                volume_ratio=signal_result.get('volume_ratio', 1.0),
+
+                # Данные для ИИ
+                candles_5m=candles_5m[-config.timeframe.CANDLES_FOR_AI_SELECTION:],
+                candles_15m=candles_15m[-config.timeframe.CANDLES_FOR_CONTEXT:],
+                indicators_data=clean_value(signal_result.get('indicators', {}))
             )
 
         except Exception as e:
-            logger.error(f"Error scanning {pair}: {e}")
+            logger.error(f"Ошибка сканирования {symbol}: {e}")
             return None
 
-    async def mass_scan(self) -> List[TradingSignal]:
-        """Массовое сканирование всех пар"""
-        logger.info("🔍 Starting mass market scan...")
+    async def mass_scan_markets(self) -> List[InstructionBasedSignal]:
+        """Массовое сканирование с фильтрацией согласно инструкции"""
         start_time = time.time()
+        logger.info("ЭТАП 1: Сканирование с фильтрами по инструкции")
 
         try:
-            # Получаем список активных пар
-            pairs = await get_usdt_pairs()
-            logger.info(f"Scanning {len(pairs)} USDT pairs")
+            pairs = await get_usdt_trading_pairs()
+            if not pairs:
+                return []
 
-            # Сканируем все пары параллельно (батчами для стабильности)
-            signals = []
-            batch_size = 20
+            logger.info(f"Сканируем {len(pairs)} пар (15m контекст + 5m вход)")
 
-            for i in range(0, len(pairs), batch_size):
-                batch = pairs[i:i + batch_size]
-                logger.info(f"Processing batch {i//batch_size + 1}: {len(batch)} pairs")
+            promising_signals = []
 
-                # Запускаем задачи параллельно
-                tasks = [self.scan_pair(pair) for pair in batch]
+            # Обрабатываем батчами
+            for i in range(0, len(pairs), config.processing.BATCH_SIZE):
+                batch = pairs[i:i + config.processing.BATCH_SIZE]
+                tasks = [self.quick_scan_pair(pair) for pair in batch]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Собираем успешные результаты
                 for result in results:
-                    if isinstance(result, TradingSignal):
-                        signals.append(result)
+                    if isinstance(result, InstructionBasedSignal):
+                        promising_signals.append(result)
 
-                # Небольшая пауза между батчами
-                if i + batch_size < len(pairs):
-                    await asyncio.sleep(0.1)
+                processed = min(i + config.processing.BATCH_SIZE, len(pairs))
+                logger.info(f"Обработано: {processed}/{len(pairs)}")
+
+                if i + config.processing.BATCH_SIZE < len(pairs):
+                    await asyncio.sleep(config.processing.BATCH_DELAY)
 
             # Сортируем по уверенности
-            signals.sort(key=lambda x: x.confidence, reverse=True)
+            promising_signals.sort(key=lambda x: x.confidence, reverse=True)
 
-            scan_time = time.time() - start_time
-            logger.info(f"✅ Scan complete: {len(signals)} signals found in {scan_time:.1f}s")
+            execution_time = time.time() - start_time
+            logger.info(f"ЭТАП 1: {len(promising_signals)} сигналов за {execution_time:.2f}сек")
 
-            # Показываем топ сигналы
-            for i, signal in enumerate(signals[:10]):
-                logger.info(f"  {i+1}. {signal.pair}: {signal.signal} {signal.pattern} ({signal.confidence}%)")
-
-            return signals
+            return promising_signals
 
         except Exception as e:
-            logger.error(f"Mass scan error: {e}")
+            logger.error(f"Ошибка сканирования: {e}")
             return []
 
-    async def ai_selection_phase(self, signals: List[TradingSignal]) -> List[str]:
-        """Фаза ИИ отбора лучших пар"""
-        if not signals:
-            logger.warning("No signals for AI selection")
-            return []
 
-        logger.info(f"🤖 AI selecting from {len(signals)} signals...")
+class InstructionBasedAISelector:
+    """ИИ селектор согласно инструкции"""
 
-        # Подготавливаем данные для ИИ
-        signal_data = []
+    def __init__(self):
+        self.selection_prompt = self._load_prompt(config.ai.SELECTION_PROMPT_FILE)
+        self.analysis_prompt = self._load_prompt(config.ai.ANALYSIS_PROMPT_FILE)
+
+    def _load_prompt(self, filename: str) -> str:
+        """Загрузка промпта"""
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            logger.error(f"Файл {filename} не найден")
+            return ""
+
+    def _prepare_signals_for_ai(self, signals: List[InstructionBasedSignal]) -> Dict[str, Any]:
+        """Подготовка данных для ИИ согласно инструкции"""
+        prepared_data = []
+
         for signal in signals:
-            signal_data.append({
+            # Свечи 5m для анализа входа
+            recent_5m = signal.candles_5m[-30:] if signal.candles_5m else []
+            # Свечи 15m для контекста
+            recent_15m = signal.candles_15m[-20:] if signal.candles_15m else []
+
+            signal_data = {
                 'pair': signal.pair,
-                'signal': signal.signal,
+                'signal_type': signal.signal_type,
                 'confidence': signal.confidence,
-                'pattern': signal.pattern,
+                'entry_price': signal.entry_price,
+
+                # Данные согласно инструкции
+                'pattern_type': signal.pattern_type,
+                'higher_tf_trend': signal.higher_tf_trend,
+                'validation_score': signal.validation_score,
+                'atr_current': signal.atr_current,
                 'volume_ratio': signal.volume_ratio,
-                'trend_strength': signal.trend_strength
-            })
+
+                # Мультитаймфреймные данные
+                'timeframes': {
+                    '5m_candles': [
+                        {
+                            'timestamp': int(c[0]),
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in recent_5m
+                    ],
+                    '15m_context': [
+                        {
+                            'timestamp': int(c[0]),
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in recent_15m
+                    ]
+                },
+
+                # Индикаторы согласно инструкции
+                'technical_indicators': safe_json_serialize({
+                    'ema_system': {
+                        'ema5': signal.indicators_data.get('ema5', [])[-20:],
+                        'ema8': signal.indicators_data.get('ema8', [])[-20:],
+                        'ema20': signal.indicators_data.get('ema20', [])[-20:]
+                    },
+                    'momentum': {
+                        'rsi9': signal.indicators_data.get('rsi', [])[-20:],
+                        'rsi_current': signal.indicators_data.get('rsi_current', 50),
+                        'macd_line': signal.indicators_data.get('macd_line', [])[-20:],
+                        'macd_signal': signal.indicators_data.get('macd_signal', [])[-20:],
+                        'macd_histogram': signal.indicators_data.get('macd_histogram', [])[-20:]
+                    },
+                    'volatility': {
+                        'atr14': signal.indicators_data.get('atr', [])[-20:],
+                        'atr_current': signal.indicators_data.get('atr_current', 0),
+                        'atr_mean': signal.indicators_data.get('atr_mean', 0)
+                    },
+                    'bollinger_bands': {
+                        'upper': signal.indicators_data.get('bb_upper', [])[-20:],
+                        'middle': signal.indicators_data.get('bb_middle', [])[-20:],
+                        'lower': signal.indicators_data.get('bb_lower', [])[-20:]
+                    },
+                    'volume': {
+                        'volume_sma20': signal.indicators_data.get('volume_sma', [])[-20:],
+                        'current_volume': signal.indicators_data.get('volume_current', 0),
+                        'volume_ratio': signal.indicators_data.get('volume_ratio', 1.0)
+                    }
+                })
+            }
+
+            prepared_data.append(signal_data)
+
+        return {
+            'analysis_method': 'multi_timeframe_instruction_based',
+            'context_tf': config.timeframe.CONTEXT_TF + 'm',
+            'entry_tf': config.timeframe.ENTRY_TF + 'm',
+            'signals_count': len(prepared_data),
+            'timestamp': int(time.time()),
+            'signals': prepared_data
+        }
+
+    async def select_best_pairs(self, signals: List[InstructionBasedSignal]) -> List[str]:
+        """ИИ отбор лучших пар согласно инструкции"""
+        if not self.selection_prompt or not signals:
+            return []
+
+        logger.info(f"ЭТАП 2: ИИ отбор из {len(signals)} сигналов")
 
         try:
-            selected_pairs = await select_best_pairs(signal_data)
-            logger.info(f"✅ AI selected {len(selected_pairs)} pairs: {selected_pairs}")
+            top_signals = signals[:config.ai.MAX_PAIRS_TO_AI]
+            ai_data = self._prepare_signals_for_ai(top_signals)
+
+            message = f"""{self.selection_prompt}
+
+=== МУЛЬТИТАЙМФРЕЙМНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
+МЕТОД: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход
+ИНДИКАТОРЫ: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})
+ШАБЛОНЫ: Momentum breakout, Pullback, Squeeze breakout, Range scalp
+КОЛИЧЕСТВО СИГНАЛОВ: {len(top_signals)}
+
+{json.dumps(ai_data, indent=2, ensure_ascii=False)}
+
+ЗАДАЧА: Выбери максимум {config.ai.MAX_SELECTED_PAIRS} лучших пар для торговли по инструкции.
+Учти валидацию сигналов ({config.trading.VALIDATION_CHECKS_REQUIRED} из {config.trading.VALIDATION_CHECKS_TOTAL} чек-пунктов) и объемное подтверждение.
+
+Верни JSON: {{"pairs": ["BTCUSDT", "ETHUSDT"]}}"""
+
+            ai_response = await deep_seek_selection(message)
+
+            if not ai_response:
+                return []
+
+            selected_pairs = self._parse_ai_response(ai_response)
+            logger.info(f"ЭТАП 2: ИИ выбрал {len(selected_pairs)} пар")
             return selected_pairs
 
         except Exception as e:
-            logger.error(f"AI selection error: {e}")
-            # Fallback - берем топ по confidence
-            fallback = [s.pair for s in signals[:config.ai.MAX_SELECTED_PAIRS]]
-            logger.info(f"Using fallback selection: {fallback}")
-            return fallback
+            logger.error(f"Ошибка ИИ отбора: {e}")
+            return []
 
-    async def detailed_analysis_phase(self, selected_pairs: List[str], all_signals: List[TradingSignal]) -> int:
-        """Фаза детального анализа выбранных пар"""
-        if not selected_pairs:
-            logger.warning("No pairs for detailed analysis")
-            return 0
-
-        logger.info(f"📊 Starting detailed analysis of {len(selected_pairs)} pairs...")
-
-        # Создаем словарь сигналов для быстрого доступа
-        signals_dict = {signal.pair: signal for signal in all_signals}
-
-        successful_analyses = 0
-
-        for pair in selected_pairs:
-            signal = signals_dict.get(pair)
-            if not signal:
-                logger.warning(f"Signal not found for {pair}")
-                continue
-
-            try:
-                logger.info(f"Analyzing {pair}...")
-
-                # Отправляем на детальный анализ ИИ
-                analysis = await analyze_pair_detailed(
-                    pair=pair,
-                    candles_5m=signal.candles_5m,
-                    candles_15m=signal.candles_15m,
-                    indicators=signal.indicators
-                )
-
-                if analysis:
-                    self._save_analysis(pair, analysis, signal)
-                    successful_analyses += 1
-                    logger.info(f"✅ {pair} analysis complete")
-                else:
-                    logger.error(f"❌ {pair} analysis failed")
-
-                # Пауза между анализами
-                await asyncio.sleep(1)
-
-            except Exception as e:
-                logger.error(f"Error analyzing {pair}: {e}")
-
-        return successful_analyses
-
-    def _save_analysis(self, pair: str, analysis: str, signal: TradingSignal):
-        """Сохранение результатов анализа"""
+    def _parse_ai_response(self, response: str) -> List[str]:
+        """Парсинг ответа ИИ"""
         try:
-            with open(config.system.ANALYSIS_FILE, 'a', encoding=config.system.ENCODING) as f:
-                f.write(f"\n{'='*80}\n")
-                f.write(f"PAIR: {pair}\n")
-                f.write(f"TIME: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"SIGNAL: {signal.signal}\n")
-                f.write(f"PATTERN: {signal.pattern}\n")
-                f.write(f"CONFIDENCE: {signal.confidence}%\n")
-                f.write(f"VOLUME RATIO: {signal.volume_ratio:.2f}\n")
-                f.write(f"TREND STRENGTH: {signal.trend_strength:.1f}\n")
-                f.write(f"{'='*40}\n")
-                f.write(f"{analysis}\n")
-                f.write(f"{'='*80}\n")
-        except Exception as e:
-            logger.error(f"Error saving analysis: {e}")
+            json_match = re.search(r'\{[^}]*"pairs"[^}]*\}', response)
+            if json_match:
+                data = json.loads(json_match.group())
+                return data.get('pairs', [])
+            return []
+        except:
+            return []
 
-    async def run_full_cycle(self):
-        """Полный цикл работы бота"""
-        cycle_start = time.time()
+    async def detailed_analysis(self, pair: str) -> Optional[str]:
+        """Детальный анализ пары согласно инструкции"""
+        if not self.analysis_prompt:
+            return None
+
+        logger.info(f"ЭТАП 3: Детальный анализ {pair}")
 
         try:
-            # Проверка ИИ
-            logger.info("🔧 Checking AI connection...")
-            if not await check_ai_health():
-                logger.error("AI health check failed - aborting")
-                return
+            # Получаем полные данные для детального анализа
+            full_candles_5m = await get_klines_async(pair, config.timeframe.ENTRY_TF,
+                                                   limit=config.timeframe.CANDLES_FOR_AI_ANALYSIS)
+            full_candles_15m = await get_klines_async(pair, config.timeframe.CONTEXT_TF,
+                                                    limit=60)
 
-            # Этап 1: Массовое сканирование
-            signals = await self.mass_scan()
-            if not signals:
-                logger.info("No trading signals found")
-                return
+            if not full_candles_5m or not full_candles_15m:
+                return None
 
-            # Этап 2: ИИ отбор
-            selected_pairs = await self.ai_selection_phase(signals)
-            if not selected_pairs:
-                logger.info("AI selected no pairs")
-                return
+            # Полный расчет индикаторов
+            full_indicators = calculate_indicators_by_instruction(full_candles_5m)
+            signal_analysis = detect_instruction_based_signals(full_candles_5m, full_candles_15m)
 
-            # Этап 3: Детальный анализ
-            successful_analyses = await self.detailed_analysis_phase(selected_pairs, signals)
+            # Подготавливаем данные для детального анализа
+            analysis_data = {
+                'pair': pair,
+                'timestamp': int(time.time()),
+                'current_price': float(full_candles_5m[-1][4]),
+                'analysis_method': 'instruction_based_multi_timeframe',
 
-            # Итоги
-            cycle_time = time.time() - cycle_start
-            total_time = time.time() - self.start_time
+                # Мультитаймфреймные данные
+                'market_context': {
+                    '15m_trend': signal_analysis.get('higher_tf_trend', 'UNKNOWN'),
+                    '5m_last_20_candles': [
+                        {
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in full_candles_5m[-20:]
+                    ],
+                    '15m_last_10_candles': [
+                        {
+                            'open': float(c[1]),
+                            'high': float(c[2]),
+                            'low': float(c[3]),
+                            'close': float(c[4]),
+                            'volume': float(c[5])
+                        } for c in full_candles_15m[-10:]
+                    ]
+                },
 
-            logger.info(f"\n{'='*60}")
-            logger.info(f"🏆 CYCLE COMPLETE")
-            logger.info(f"⏱️  Cycle time: {cycle_time:.1f}s")
-            logger.info(f"📊 Total signals found: {len(signals)}")
-            logger.info(f"🤖 AI selected pairs: {len(selected_pairs)}")
-            logger.info(f"✅ Successful analyses: {successful_analyses}")
-            logger.info(f"📈 Success rate: {successful_analyses/len(selected_pairs)*100:.1f}%")
-            logger.info(f"💾 Results saved to: {config.system.ANALYSIS_FILE}")
-            logger.info(f"🕒 Total runtime: {total_time:.1f}s")
-            logger.info(f"{'='*60}")
+                # Полный технический анализ согласно инструкции
+                'instruction_based_analysis': {
+                    'signal_detected': signal_analysis.get('signal', 'NO_SIGNAL'),
+                    'pattern_type': signal_analysis.get('pattern_type', 'NONE'),
+                    'confidence': signal_analysis.get('confidence', 0),
+                    'validation_score': signal_analysis.get('validation_score', '0/5'),
+                    'entry_reasons': signal_analysis.get('entry_reasons', []),
+                    'validation_reasons': signal_analysis.get('validation_reasons', [])
+                },
 
-        except KeyboardInterrupt:
-            logger.info("⏹️  Stopped by user")
+                # Индикаторы согласно инструкции
+                'technical_indicators': safe_json_serialize({
+                    'trend_following': {
+                        'ema5_current': full_indicators.get('ema5', [])[-1] if full_indicators.get('ema5') else 0,
+                        'ema8_current': full_indicators.get('ema8', [])[-1] if full_indicators.get('ema8') else 0,
+                        'ema20_current': full_indicators.get('ema20', [])[-1] if full_indicators.get('ema20') else 0,
+                        'ema_alignment': (
+                                len(full_indicators.get('ema5', [])) > 0 and
+                                len(full_indicators.get('ema8', [])) > 0 and
+                                len(full_indicators.get('ema20', [])) > 0 and
+                                full_indicators['ema5'][-1] > full_indicators['ema8'][-1] > full_indicators['ema20'][-1]
+                        )
+                    },
+                    'momentum_filter': {
+                        'rsi9_current': full_indicators.get('rsi_current', 50),
+                        'rsi_trend': 'bullish' if full_indicators.get('rsi_current', 50) > 50 else 'bearish',
+                        'rsi_extreme': (
+                                full_indicators.get('rsi_current', 50) < config.indicators.RSI_OVERSOLD or
+                                full_indicators.get('rsi_current', 50) > config.indicators.RSI_OVERBOUGHT
+                        )
+                    },
+                    'macd_confirmation': {
+                        'macd_current': full_indicators.get('macd_line', [])[-1] if full_indicators.get('macd_line') else 0,
+                        'signal_current': full_indicators.get('macd_signal', [])[-1] if full_indicators.get('macd_signal') else 0,
+                        'histogram_current': full_indicators.get('macd_histogram', [])[-1] if full_indicators.get('macd_histogram') else 0,
+                        'bullish_crossover': (
+                                len(full_indicators.get('macd_line', [])) >= 2 and
+                                len(full_indicators.get('macd_signal', [])) >= 2 and
+                                full_indicators['macd_line'][-2] <= full_indicators['macd_signal'][-2] and
+                                full_indicators['macd_line'][-1] > full_indicators['macd_signal'][-1]
+                        )
+                    },
+                    'volatility_control': {
+                        'atr14_current': full_indicators.get('atr_current', 0),
+                        'atr_mean': full_indicators.get('atr_mean', 0),
+                        'volatility_suitable': full_indicators.get('atr_current', 0) >= full_indicators.get('atr_mean', 0) * config.indicators.ATR_OPTIMAL_RATIO,
+                        'atr_percent': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100
+                    },
+                    'volume_confirmation': {
+                        'volume_current': full_indicators.get('volume_current', 0),
+                        'volume_sma20': full_indicators.get('volume_sma', [])[-1] if full_indicators.get('volume_sma') else 0,
+                        'volume_ratio': full_indicators.get('volume_ratio', 1.0),
+                        'volume_spike': full_indicators.get('volume_ratio', 1.0) > config.indicators.VOLUME_SPIKE_RATIO
+                    },
+                    'bollinger_analysis': {
+                        'bb_upper': full_indicators.get('bb_upper', [])[-1] if full_indicators.get('bb_upper') else 0,
+                        'bb_middle': full_indicators.get('bb_middle', [])[-1] if full_indicators.get('bb_middle') else 0,
+                        'bb_lower': full_indicators.get('bb_lower', [])[-1] if full_indicators.get('bb_lower') else 0,
+                        'price_position': self._get_bb_position(float(full_candles_5m[-1][4]), full_indicators),
+                        'squeeze_potential': self._detect_bb_squeeze(full_indicators)
+                    }
+                }),
+
+                'risk_metrics': {
+                    'atr_based_stop': full_indicators.get('atr_current', 0) * config.indicators.ATR_MULTIPLIER_STOP,
+                    'atr_percent_risk': (full_indicators.get('atr_current', 0) / float(full_candles_5m[-1][4])) * 100,
+                    'volume_liquidity': 'high' if full_indicators.get('volume_ratio', 1.0) > config.indicators.VOLUME_SPIKE_RATIO else 'normal'
+                }
+            }
+
+            message = f"""{self.analysis_prompt}
+
+=== ДЕТАЛЬНЫЙ АНАЛИЗ ПО ИНСТРУКЦИИ ===
+ПАРА: {pair}
+МЕТОД: Мультитаймфреймный анализ ({config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m вход)
+ИНДИКАТОРЫ: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})
+ЦЕНА: {analysis_data['current_price']}
+
+{json.dumps(analysis_data, indent=2, ensure_ascii=False)}
+
+Проанализируй согласно инструкции и дай конкретные рекомендации:
+1. Подтверждение сигнала по шаблонам
+2. Расчет стоп-лосса и тейк-профита
+3. Валидация объемом и волатильностью
+4. Мультитаймфреймное подтверждение"""
+
+            analysis_result = await deep_seek_analysis(message)
+
+            if analysis_result:
+                self._save_analysis(pair, analysis_result)
+                logger.info(f"Анализ {pair} завершен")
+                return analysis_result
+
+            return None
+
         except Exception as e:
-            logger.error(f"💥 Fatal error in cycle: {e}")
-        finally:
-            await self._cleanup()
+            logger.error(f"Ошибка анализа {pair}: {e}")
+            return None
 
-    async def _cleanup(self):
-        """Очистка ресурсов"""
-        logger.info("🧹 Cleaning up resources...")
+    def _get_bb_position(self, price: float, indicators: Dict) -> str:
+        """Позиция цены относительно Bollinger Bands"""
+        bb_upper = indicators.get('bb_upper', [])
+        bb_lower = indicators.get('bb_lower', [])
+
+        if not bb_upper or not bb_lower:
+            return 'unknown'
+
+        if price > bb_upper[-1]:
+            return 'above_upper'
+        elif price < bb_lower[-1]:
+            return 'below_lower'
+        else:
+            return 'inside_bands'
+
+    def _detect_bb_squeeze(self, indicators: Dict) -> bool:
+        """Определение сжатия Bollinger Bands"""
+        bb_upper = indicators.get('bb_upper', [])
+        bb_lower = indicators.get('bb_lower', [])
+
+        if len(bb_upper) < 10 or len(bb_lower) < 10:
+            return False
+
+        current_width = bb_upper[-1] - bb_lower[-1]
+        avg_width = sum(bb_upper[i] - bb_lower[i] for i in range(-10, 0)) / 10
+
+        return current_width < avg_width * config.indicators.BB_SQUEEZE_RATIO
+
+    def _save_analysis(self, pair: str, analysis: str):
+        """Сохранение анализа"""
         try:
-            await cleanup_ai()
-            await cleanup_exchange()
+            with open(config.system.ANALYSIS_LOG_FILE, 'a', encoding=config.system.ENCODING) as f:
+                f.write(f"\n{'=' * 80}\n")
+                f.write(f"ПАРА: {pair}\n")
+                f.write(f"ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"МЕТОД: Инструкция ({config.timeframe.CONTEXT_TF}m+{config.timeframe.ENTRY_TF}m)\n")
+                f.write(f"АНАЛИЗ:\n{analysis}\n")
+                f.write(f"{'=' * 80}\n")
         except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+            logger.error(f"Ошибка сохранения: {e}")
 
 
 async def main():
-    """Главная функция"""
-    logger.info("🚀 Starting Simplified Scalping Bot...")
+    """Главная функция бота согласно инструкции"""
+    logger.info("СКАЛЬПИНГОВЫЙ БОТ ПО ИНСТРУКЦИИ - ЗАПУСК")
+    logger.info(f"Метод: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход")
+    logger.info(f"Индикаторы: EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})")
 
-    # Проверка конфигурации
-    logger.info("🔧 Validating configuration...")
-    if not config.validate():
-        logger.error("❌ Configuration validation failed - check your .env file")
-        logger.error("💡 Make sure you have DEEPSEEK=your_api_key in .env file")
-        return
+    analyzer = InstructionBasedAnalyzer()
+    ai_selector = InstructionBasedAISelector()
 
-    # Создание и запуск бота
-    bot = SimplifiedScalpingBot()
+    try:
+        # ЭТАП 1: Сканирование с фильтрацией согласно инструкции
+        promising_signals = await analyzer.mass_scan_markets()
 
-    # Показываем настройки
-    logger.info(f"📊 Configuration:")
-    logger.info(f"   Timeframes: {config.trading.HIGHER_TF}m + {config.trading.ENTRY_TF}m")
-    logger.info(f"   Min confidence: {config.trading.MIN_CONFIDENCE}%")
-    logger.info(f"   Max pairs to AI: {config.ai.MAX_PAIRS_TO_AI}")
-    logger.info(f"   Max selected: {config.ai.MAX_SELECTED_PAIRS}")
-    logger.info(f"   API model: {config.ai.MODEL}")
+        if not promising_signals:
+            logger.info("Сигналы согласно инструкции не найдены")
+            return
 
-    await bot.run_full_cycle()
+        logger.info(f"Найдено {len(promising_signals)} сигналов по инструкции")
+        for signal in promising_signals[:5]:  # Показываем топ-5
+            logger.info(f"   {signal.pair}: {signal.pattern_type} ({signal.confidence}%, {signal.validation_score})")
+
+        # ЭТАП 2: ИИ отбор согласно критериям
+        selected_pairs = await ai_selector.select_best_pairs(promising_signals)
+
+        if not selected_pairs:
+            logger.info("ИИ не выбрал пары согласно критериям")
+            return
+
+        logger.info(f"ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
+
+        # ЭТАП 3: Детальный анализ каждой пары
+        successful_analyses = 0
+
+        for pair in selected_pairs:
+            analysis = await ai_selector.detailed_analysis(pair)
+
+            if analysis:
+                successful_analyses += 1
+                logger.info(f"{pair} - детальный анализ завершен")
+            else:
+                logger.error(f"{pair} - ошибка анализа")
+
+            await asyncio.sleep(1)  # Пауза между запросами
+
+        # ИТОГИ
+        logger.info(f"\nАНАЛИЗ ПО ИНСТРУКЦИИ ЗАВЕРШЕН!")
+        logger.info(f"Метод: Мультитаймфреймный ({config.timeframe.CONTEXT_TF}m+{config.timeframe.ENTRY_TF}m)")
+        logger.info(f"Найдено сигналов: {len(promising_signals)}")
+        logger.info(f"ИИ отобрал: {len(selected_pairs)}")
+        logger.info(f"Успешных анализов: {successful_analyses}")
+        logger.info(f"Результаты: {config.system.ANALYSIS_LOG_FILE}")
+
+        await cleanup_http_client()
+
+    except KeyboardInterrupt:
+        logger.info("Остановка по запросу")
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
+    logger.info("=" * 80)
+    logger.info("СКАЛЬПИНГОВЫЙ БОТ СОГЛАСНО ИНСТРУКЦИИ")
+    logger.info(f"{config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m точный вход")
+    logger.info(f"EMA({config.indicators.EMA_FAST}/{config.indicators.EMA_MEDIUM}/{config.indicators.EMA_SLOW}), RSI({config.indicators.RSI_PERIOD}), MACD({config.indicators.MACD_FAST},{config.indicators.MACD_SLOW},{config.indicators.MACD_SIGNAL}), ATR({config.indicators.ATR_PERIOD}), Bollinger({config.indicators.BB_PERIOD},{config.indicators.BB_STD})")
+    logger.info("Шаблоны: Momentum, Pullback, Squeeze, Range scalp")
+    logger.info("=" * 80)
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("⏹️  Application stopped by user")
+        logger.info("Программа остановлена")
     except Exception as e:
-        logger.error(f"💥 Application crash: {e}")
+        logger.error(f"Фатальная ошибка: {e}")
     finally:
-        logger.info("🏁 Application finished")
+        logger.info("Работа завершена")
