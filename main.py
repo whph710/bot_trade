@@ -64,7 +64,7 @@ def validate_candles_order(candles: List, symbol: str = "UNKNOWN") -> bool:
 
 @dataclass
 class TradingSignal:
-    """Упрощенный торговый сигнал"""
+    """Расширенный торговый сигнал с полными данными"""
     pair: str
     signal_type: str  # 'LONG', 'SHORT', 'NO_SIGNAL'
     confidence: int
@@ -76,14 +76,14 @@ class TradingSignal:
     volume_ratio: float
     timestamp: int
 
-    # Данные для ИИ (упрощенные)
+    # Полные данные для ИИ
     candles_5m: List = None
     candles_15m: List = None
     indicators: Dict = None
 
 
 class MarketAnalyzer:
-    """Упрощенный анализатор рынка"""
+    """Анализатор рынка с полными данными"""
 
     def __init__(self):
         self.session_start = time.time()
@@ -101,7 +101,7 @@ class MarketAnalyzer:
         return avg_hourly_volume > config.trading.MIN_LIQUIDITY_VOLUME
 
     async def scan_pair(self, symbol: str) -> Optional[TradingSignal]:
-        """Сканирование одной пары"""
+        """Сканирование одной пары с сохранением полных данных"""
         try:
             # Получаем данные
             candles_5m = await get_klines_async(symbol, config.timeframe.ENTRY_TF,
@@ -146,9 +146,9 @@ class MarketAnalyzer:
                 volume_ratio=signal_result.get('volume_ratio', 1.0),
                 timestamp=int(time.time()),
 
-                # Упрощенные данные для ИИ
-                candles_5m=candles_5m[-config.timeframe.CANDLES_FOR_AI_SELECTION:],
-                candles_15m=candles_15m[-config.timeframe.CANDLES_FOR_CONTEXT:],
+                # СОХРАНЯЕМ ПОЛНЫЕ ДАННЫЕ
+                candles_5m=candles_5m,
+                candles_15m=candles_15m,
                 indicators=clean_value(signal_result.get('indicators', {}))
             )
 
@@ -199,7 +199,7 @@ class MarketAnalyzer:
 
 
 class AISelector:
-    """Упрощенный ИИ селектор"""
+    """ИИ селектор с расширенными данными"""
 
     def __init__(self):
         self.selection_prompt = self._load_prompt(config.ai.SELECTION_PROMPT_FILE)
@@ -216,12 +216,26 @@ class AISelector:
             logger.error(f"Файл {filename} не найден")
             return "Ты эксперт-трейдер. Анализируй данные и давай рекомендации в JSON."
 
-    def prepare_signals_for_ai(self, signals: List[TradingSignal]) -> Dict[str, Any]:
-        """Подготовка данных для ИИ (упрощенная)"""
+    def prepare_signals_for_ai_selection(self, signals: List[TradingSignal]) -> Dict[str, Any]:
+        """Подготовка данных для ИИ отбора (ограниченные данные)"""
         prepared_signals = []
 
         for signal in signals:
-            # Берем только необходимые данные
+            # Обрезаем данные согласно конфигу для отбора
+            recent_5m = signal.candles_5m[-config.timeframe.CANDLES_FOR_AI_SELECTION_5M:] if signal.candles_5m else []
+            recent_15m = signal.candles_15m[
+                         -config.timeframe.CANDLES_FOR_AI_SELECTION_15M:] if signal.candles_15m else []
+
+            # Обрезаем индикаторы
+            indicators = signal.indicators or {}
+            trimmed_indicators = {}
+
+            for key, value in indicators.items():
+                if isinstance(value, list) and len(value) > config.timeframe.CANDLES_FOR_AI_SELECTION_INDICATORS:
+                    trimmed_indicators[key] = value[-config.timeframe.CANDLES_FOR_AI_SELECTION_INDICATORS:]
+                else:
+                    trimmed_indicators[key] = value
+
             signal_data = {
                 'pair': signal.pair,
                 'signal_type': signal.signal_type,
@@ -233,7 +247,7 @@ class AISelector:
                 'atr_current': signal.atr_current,
                 'volume_ratio': signal.volume_ratio,
 
-                # Упрощенные свечные данные (только последние)
+                # Ограниченные свечные данные
                 'recent_5m_candles': [
                     {
                         'timestamp': int(c[0]),
@@ -242,7 +256,7 @@ class AISelector:
                         'low': float(c[3]),
                         'close': float(c[4]),
                         'volume': float(c[5])
-                    } for c in signal.candles_5m[-20:] if signal.candles_5m
+                    } for c in recent_5m
                 ],
 
                 'context_15m_candles': [
@@ -253,14 +267,24 @@ class AISelector:
                         'low': float(c[3]),
                         'close': float(c[4]),
                         'volume': float(c[5])
-                    } for c in signal.candles_15m[-15:] if signal.candles_15m
+                    } for c in recent_15m
                 ],
 
-                # Основные индикаторы
+                # Расширенные индикаторы (последние 45 значений)
                 'indicators': {
-                    'rsi_current': signal.indicators.get('rsi_current', 50),
-                    'ema_alignment': self._get_ema_alignment(signal.indicators),
-                    'macd_signal': self._get_macd_status(signal.indicators),
+                    'rsi_current': trimmed_indicators.get('rsi', [])[-45:] if trimmed_indicators.get('rsi') else [],
+                    'ema_alignment': self._get_ema_alignment(trimmed_indicators),
+                    'ema5': trimmed_indicators.get('ema5', [])[-45:] if trimmed_indicators.get('ema5') else [],
+                    'ema8': trimmed_indicators.get('ema8', [])[-45:] if trimmed_indicators.get('ema8') else [],
+                    'ema20': trimmed_indicators.get('ema20', [])[-45:] if trimmed_indicators.get('ema20') else [],
+                    'macd_signal': self._get_macd_status(trimmed_indicators),
+                    'macd_line': trimmed_indicators.get('macd_line', [])[-45:] if trimmed_indicators.get(
+                        'macd_line') else [],
+                    'macd_histogram': trimmed_indicators.get('macd_histogram', [])[-45:] if trimmed_indicators.get(
+                        'macd_histogram') else [],
+                    'atr': trimmed_indicators.get('atr', [])[-45:] if trimmed_indicators.get('atr') else [],
+                    'volume_sma': trimmed_indicators.get('volume_sma', [])[-45:] if trimmed_indicators.get(
+                        'volume_sma') else [],
                     'volume_status': 'high' if signal.volume_ratio > 1.5 else 'normal'
                 }
             }
@@ -309,7 +333,7 @@ class AISelector:
             return 'neutral'
 
     async def select_best_pairs(self, signals: List[TradingSignal]) -> List[str]:
-        """ИИ отбор лучших пар"""
+        """ИИ отбор лучших пар с расширенными данными"""
         if not self.selection_prompt or not signals:
             return []
 
@@ -317,13 +341,16 @@ class AISelector:
 
         try:
             top_signals = signals[:config.ai.MAX_PAIRS_TO_AI]
-            ai_data = self.prepare_signals_for_ai(top_signals)
+            ai_data = self.prepare_signals_for_ai_selection(top_signals)
 
             message = f"""{self.selection_prompt}
 
 === ДАННЫЕ ДЛЯ АНАЛИЗА ===
 МЕТОД: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m вход
 КОЛИЧЕСТВО СИГНАЛОВ: {len(top_signals)}
+ДАННЫЕ ПО ИНДИКАТОРАМ: последние {config.timeframe.CANDLES_FOR_AI_SELECTION_INDICATORS} значений
+СВЕЧИ 5M: последние {config.timeframe.CANDLES_FOR_AI_SELECTION_5M} свечей
+СВЕЧИ 15M: последние {config.timeframe.CANDLES_FOR_AI_SELECTION_15M} свечей
 
 {json.dumps(ai_data, indent=2, ensure_ascii=False)}
 
@@ -356,14 +383,15 @@ class AISelector:
             return []
 
     async def detailed_analysis(self, pair: str) -> Optional[str]:
-        """Детальный анализ пары"""
+        """Детальный анализ пары с полными данными"""
         logger.info(f"ЭТАП 3: Детальный анализ {pair}")
 
         try:
-            # Получаем свежие данные для анализа
+            # Получаем свежие данные для анализа (МАКСИМАЛЬНЫЕ объемы)
             candles_5m = await get_klines_async(pair, config.timeframe.ENTRY_TF,
-                                                limit=config.timeframe.CANDLES_FOR_AI_ANALYSIS)
-            candles_15m = await get_klines_async(pair, config.timeframe.CONTEXT_TF, limit=80)
+                                                limit=config.timeframe.CANDLES_FOR_AI_ANALYSIS_5M + 50)
+            candles_15m = await get_klines_async(pair, config.timeframe.CONTEXT_TF,
+                                                 limit=config.timeframe.CANDLES_FOR_AI_ANALYSIS_15M + 30)
 
             if not candles_5m or not candles_15m:
                 return None
@@ -374,13 +402,25 @@ class AISelector:
             if not validate_candles_order(candles_15m, f"{pair}_15m_analysis"):
                 return None
 
-            # Полный анализ
+            # Полный анализ с большим количеством данных
             indicators = calculate_indicators_by_instruction(candles_5m)
             signal_analysis = detect_instruction_based_signals(candles_5m, candles_15m)
 
             current_price = float(candles_5m[-1][4])
 
-            # Подготавливаем упрощенные данные
+            # Обрезаем данные до нужного размера для анализа
+            analysis_candles_5m = candles_5m[-config.timeframe.CANDLES_FOR_AI_ANALYSIS_5M:]
+            analysis_candles_15m = candles_15m[-config.timeframe.CANDLES_FOR_AI_ANALYSIS_15M:]
+
+            # Обрезаем индикаторы до нужного размера
+            analysis_indicators = {}
+            for key, value in indicators.items():
+                if isinstance(value, list) and len(value) > config.timeframe.CANDLES_FOR_AI_ANALYSIS_INDICATORS:
+                    analysis_indicators[key] = value[-config.timeframe.CANDLES_FOR_AI_ANALYSIS_INDICATORS:]
+                else:
+                    analysis_indicators[key] = value
+
+            # Подготавливаем ПОЛНЫЕ данные для детального анализа
             analysis_data = {
                 'pair': pair,
                 'current_price': current_price,
@@ -394,6 +434,7 @@ class AISelector:
                     'higher_tf_trend': signal_analysis.get('higher_tf_trend', 'UNKNOWN')
                 },
 
+                # ПОЛНЫЕ свечные данные (200 и 100 свечей)
                 'recent_candles_5m': [
                     {
                         'timestamp': int(c[0]),
@@ -402,7 +443,7 @@ class AISelector:
                         'low': float(c[3]),
                         'close': float(c[4]),
                         'volume': float(c[5])
-                    } for c in candles_5m[-30:]
+                    } for c in analysis_candles_5m
                 ],
 
                 'context_candles_15m': [
@@ -413,19 +454,28 @@ class AISelector:
                         'low': float(c[3]),
                         'close': float(c[4]),
                         'volume': float(c[5])
-                    } for c in candles_15m[-20:]
+                    } for c in analysis_candles_15m
                 ],
 
+                # ПОЛНЫЕ массивы индикаторов (последние 200 значений)
                 'key_indicators': {
-                    'rsi_current': indicators.get('rsi_current', 50),
-                    'atr_current': indicators.get('atr_current', 0),
-                    'volume_ratio': indicators.get('volume_ratio', 1.0),
-                    'ema5': indicators.get('ema5', [])[-1] if indicators.get('ema5') else 0,
-                    'ema8': indicators.get('ema8', [])[-1] if indicators.get('ema8') else 0,
-                    'ema20': indicators.get('ema20', [])[-1] if indicators.get('ema20') else 0
+                    'rsi': analysis_indicators.get('rsi', []),
+                    'atr': analysis_indicators.get('atr', []),
+                    'volume_ratio': [analysis_indicators.get('volume_ratio', 1.0)] * len(
+                        analysis_indicators.get('rsi', [1])),
+                    'ema5': analysis_indicators.get('ema5', []),
+                    'ema8': analysis_indicators.get('ema8', []),
+                    'ema20': analysis_indicators.get('ema20', []),
+                    'macd_line': analysis_indicators.get('macd_line', []),
+                    'macd_signal_line': analysis_indicators.get('macd_signal', []),
+                    'macd_histogram': analysis_indicators.get('macd_histogram', []),
+                    'bb_upper': analysis_indicators.get('bb_upper', []),
+                    'bb_middle': analysis_indicators.get('bb_middle', []),
+                    'bb_lower': analysis_indicators.get('bb_lower', []),
+                    'volume_sma': analysis_indicators.get('volume_sma', [])
                 },
 
-                'levels': self._extract_key_levels(candles_5m, candles_15m, current_price)
+                'levels': self._extract_key_levels(analysis_candles_5m, analysis_candles_15m, current_price)
             }
 
             message = f"""{self.analysis_prompt}
@@ -434,17 +484,19 @@ class AISelector:
 ПАРА: {pair}
 ЦЕНА: {current_price}
 МЕТОД: {config.timeframe.CONTEXT_TF}m контекст + {config.timeframe.ENTRY_TF}m вход
+ДАННЫЕ: {len(analysis_candles_5m)} свечей 5m, {len(analysis_candles_15m)} свечей 15m
+ИНДИКАТОРЫ: {len(analysis_indicators.get('rsi', []))} значений по каждому индикатору
 
 {json.dumps(analysis_data, indent=2, ensure_ascii=False)}
 
-Проанализируй и дай торговые рекомендации в JSON формате.
-Определи точные уровни входа, стоп-лосса и тейк-профита."""
+Проанализируй ПОЛНЫЕ данные и дай точные торговые рекомендации в JSON формате.
+Определи точные уровни входа, стоп-лосса и тейк-профита на основе всех предоставленных данных."""
 
             analysis_result = await deep_seek_analysis(message)
 
             if analysis_result:
                 self._save_analysis(pair, analysis_result, analysis_data)
-                logger.info(f"Анализ {pair} завершен")
+                logger.info(f"Анализ {pair} завершен (обработано {len(analysis_candles_5m)} свечей 5m)")
                 return analysis_result
 
         except Exception as e:
@@ -452,41 +504,81 @@ class AISelector:
             return None
 
     def _extract_key_levels(self, candles_5m: List, candles_15m: List, current_price: float) -> Dict:
-        """Извлечение ключевых уровней (упрощенное)"""
+        """Извлечение ключевых уровней с расширенным анализом"""
         try:
-            # Последние 50 свечей 5m для локальных уровней
-            recent_5m = candles_5m[-50:] if len(candles_5m) >= 50 else candles_5m
-            recent_15m = candles_15m[-30:] if len(candles_15m) >= 30 else candles_15m
+            # Используем больше данных для анализа уровней
+            extended_5m = candles_5m[-100:] if len(candles_5m) >= 100 else candles_5m
+            extended_15m = candles_15m[-50:] if len(candles_15m) >= 50 else candles_15m
 
-            # Находим swing highs/lows
-            swing_highs = []
-            swing_lows = []
+            # Находим swing highs/lows на 5m
+            swing_highs_5m = []
+            swing_lows_5m = []
 
-            for i in range(2, len(recent_5m) - 2):
-                high = float(recent_5m[i][2])
-                low = float(recent_5m[i][3])
+            for i in range(3, len(extended_5m) - 3):
+                high = float(extended_5m[i][2])
+                low = float(extended_5m[i][3])
 
-                # Swing high
-                if (high >= float(recent_5m[i - 1][2]) and high >= float(recent_5m[i - 2][2]) and
-                        high >= float(recent_5m[i + 1][2]) and high >= float(recent_5m[i + 2][2])):
-                    swing_highs.append(high)
+                # Swing high (более строгие условия)
+                if (high >= float(extended_5m[i - 1][2]) and high >= float(extended_5m[i - 2][2]) and
+                        high >= float(extended_5m[i - 3][2]) and high >= float(extended_5m[i + 1][2]) and
+                        high >= float(extended_5m[i + 2][2]) and high >= float(extended_5m[i + 3][2])):
+                    swing_highs_5m.append(high)
 
-                # Swing low
-                if (low <= float(recent_5m[i - 1][3]) and low <= float(recent_5m[i - 2][3]) and
-                        low <= float(recent_5m[i + 1][3]) and low <= float(recent_5m[i + 2][3])):
-                    swing_lows.append(low)
+                # Swing low (более строгие условия)
+                if (low <= float(extended_5m[i - 1][3]) and low <= float(extended_5m[i - 2][3]) and
+                        low <= float(extended_5m[i - 3][3]) and low <= float(extended_5m[i + 1][3]) and
+                        low <= float(extended_5m[i + 2][3]) and low <= float(extended_5m[i + 3][3])):
+                    swing_lows_5m.append(low)
+
+            # Находим swing highs/lows на 15m (более сильные уровни)
+            swing_highs_15m = []
+            swing_lows_15m = []
+
+            for i in range(2, len(extended_15m) - 2):
+                high = float(extended_15m[i][2])
+                low = float(extended_15m[i][3])
+
+                # Swing high на 15m
+                if (high >= float(extended_15m[i - 1][2]) and high >= float(extended_15m[i - 2][2]) and
+                        high >= float(extended_15m[i + 1][2]) and high >= float(extended_15m[i + 2][2])):
+                    swing_highs_15m.append(high)
+
+                # Swing low на 15m
+                if (low <= float(extended_15m[i - 1][3]) and low <= float(extended_15m[i - 2][3]) and
+                        low <= float(extended_15m[i + 1][3]) and low <= float(extended_15m[i + 2][3])):
+                    swing_lows_15m.append(low)
+
+            # Объединяем уровни с разными весами
+            all_resistance = swing_highs_5m + [h * 1.1 for h in swing_highs_15m]  # 15m уровни важнее
+            all_support = swing_lows_5m + [l * 0.9 for l in swing_lows_15m]  # 15m уровни важнее
 
             # Фильтруем близкие к текущей цене
-            nearby_resistance = [level for level in swing_highs
-                                 if level > current_price and (level - current_price) / current_price < 0.03]
-            nearby_support = [level for level in swing_lows
-                              if level < current_price and (current_price - level) / current_price < 0.03]
+            nearby_resistance = [level for level in all_resistance
+                                 if level > current_price and (level - current_price) / current_price < 0.05]
+            nearby_support = [level for level in all_support
+                              if level < current_price and (current_price - level) / current_price < 0.05]
+
+            # Добавляем психологические уровни
+            price_str = str(int(current_price))
+            if len(price_str) >= 3:
+                # Круглые числа
+                round_levels = []
+                base = int(price_str[:-2]) * 100
+                for offset in [-200, -100, 0, 100, 200]:
+                    round_level = base + offset
+                    if abs(round_level - current_price) / current_price < 0.03:
+                        if round_level > current_price:
+                            nearby_resistance.append(float(round_level))
+                        else:
+                            nearby_support.append(float(round_level))
 
             return {
-                'resistance_levels': sorted(nearby_resistance)[:3],
-                'support_levels': sorted(nearby_support, reverse=True)[:3],
-                'range_high': max([float(c[2]) for c in recent_5m]),
-                'range_low': min([float(c[3]) for c in recent_5m])
+                'resistance_levels': sorted(set(nearby_resistance))[:5],  # Топ 5
+                'support_levels': sorted(set(nearby_support), reverse=True)[:5],  # Топ 5
+                'range_high': max([float(c[2]) for c in extended_5m]),
+                'range_low': min([float(c[3]) for c in extended_5m]),
+                'strong_resistance_15m': sorted(set(swing_highs_15m))[-3:] if swing_highs_15m else [],
+                'strong_support_15m': sorted(set(swing_lows_15m))[:3] if swing_lows_15m else []
             }
 
         except Exception as e:
@@ -494,7 +586,7 @@ class AISelector:
             return {}
 
     def _save_analysis(self, pair: str, analysis: str, data: Dict):
-        """Сохранение анализа"""
+        """Сохранение анализа с дополнительной информацией"""
         try:
             with open(config.system.ANALYSIS_LOG_FILE, 'a', encoding=config.system.ENCODING) as f:
                 f.write(f"\n{'=' * 80}\n")
@@ -502,6 +594,11 @@ class AISelector:
                 f.write(f"ВРЕМЯ: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"ЦЕНА: {data.get('current_price', 0)}\n")
                 f.write(f"СИГНАЛ: {data.get('signal_data', {}).get('signal', 'N/A')}\n")
+                f.write(f"ПАТТЕРН: {data.get('signal_data', {}).get('pattern_type', 'N/A')}\n")
+                f.write(f"УВЕРЕННОСТЬ: {data.get('signal_data', {}).get('confidence', 0)}%\n")
+                f.write(f"СВЕЧИ 5M: {len(data.get('recent_candles_5m', []))}\n")
+                f.write(f"СВЕЧИ 15M: {len(data.get('context_candles_15m', []))}\n")
+                f.write(f"ИНДИКАТОРЫ: {len(data.get('key_indicators', {}).get('rsi', []))} значений\n")
                 f.write(f"{'=' * 40}\n")
                 f.write(f"{analysis}\n")
                 f.write(f"{'=' * 80}\n")
@@ -511,14 +608,18 @@ class AISelector:
 
 async def main():
     """Главная функция"""
-    logger.info("🚀 СКАЛЬПИНГОВЫЙ БОТ ЗАПУЩЕН")
+    logger.info("🚀 СКАЛЬПИНГОВЫЙ БОТ ЗАПУЩЕН (РАСШИРЕННАЯ ВЕРСИЯ)")
     logger.info(f"📊 Метод: {config.timeframe.CONTEXT_TF}m + {config.timeframe.ENTRY_TF}m")
+    logger.info(
+        f"📈 Данные для отбора: {config.timeframe.CANDLES_FOR_AI_SELECTION_5M}+{config.timeframe.CANDLES_FOR_AI_SELECTION_15M} свечей")
+    logger.info(
+        f"📊 Данные для анализа: {config.timeframe.CANDLES_FOR_AI_ANALYSIS_5M}+{config.timeframe.CANDLES_FOR_AI_ANALYSIS_15M} свечей")
 
     analyzer = MarketAnalyzer()
     ai_selector = AISelector()
 
     try:
-        # ЭТАП 1: Сканирование
+        # ЭТАП 1: Сканирование с сохранением полных данных
         signals = await analyzer.mass_scan()
 
         if not signals:
@@ -529,7 +630,7 @@ async def main():
         for signal in signals[:5]:
             logger.info(f"   📈 {signal.pair}: {signal.pattern_type} ({signal.confidence}%)")
 
-        # ЭТАП 2: ИИ отбор
+        # ЭТАП 2: ИИ отбор с расширенными данными
         selected_pairs = await ai_selector.select_best_pairs(signals)
 
         if not selected_pairs:
@@ -538,14 +639,14 @@ async def main():
 
         logger.info(f"🎯 Выбрано: {selected_pairs}")
 
-        # ЭТАП 3: Детальный анализ
+        # ЭТАП 3: Детальный анализ с полными данными
         successful_analyses = 0
 
         for pair in selected_pairs:
             analysis = await ai_selector.detailed_analysis(pair)
             if analysis:
                 successful_analyses += 1
-                logger.info(f"✅ {pair} - анализ завершен")
+                logger.info(f"✅ {pair} - полный анализ завершен")
             else:
                 logger.error(f"❌ {pair} - ошибка анализа")
 
@@ -553,10 +654,12 @@ async def main():
 
         # ИТОГИ
         logger.info(f"\n{'=' * 60}")
-        logger.info(f"🏆 АНАЛИЗ ЗАВЕРШЕН")
+        logger.info(f"🏆 АНАЛИЗ ЗАВЕРШЕН (РАСШИРЕННАЯ ВЕРСИЯ)")
         logger.info(f"📈 Найдено сигналов: {len(signals)}")
         logger.info(f"🤖 ИИ отобрал: {len(selected_pairs)}")
         logger.info(f"✅ Успешных анализов: {successful_analyses}")
+        logger.info(f"📊 Данные отбора: {config.timeframe.CANDLES_FOR_AI_SELECTION_INDICATORS} индикаторов")
+        logger.info(f"📈 Данные анализа: {config.timeframe.CANDLES_FOR_AI_ANALYSIS_INDICATORS} индикаторов")
         logger.info(f"💾 Результаты: {config.system.ANALYSIS_LOG_FILE}")
         logger.info(f"{'=' * 60}")
 
@@ -570,9 +673,11 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("=" * 60)
-    logger.info("🚀 СКАЛЬПИНГОВЫЙ БОТ")
+    logger.info("🚀 СКАЛЬПИНГОВЫЙ БОТ (РАСШИРЕННАЯ ВЕРСИЯ)")
     logger.info(f"📊 {config.timeframe.CONTEXT_TF}m + {config.timeframe.ENTRY_TF}m")
     logger.info(f"🎯 R:R {config.trading.DEFAULT_RISK_REWARD}:1")
+    logger.info(f"📈 Отбор: {config.timeframe.CANDLES_FOR_AI_SELECTION_INDICATORS} значений")
+    logger.info(f"📊 Анализ: {config.timeframe.CANDLES_FOR_AI_ANALYSIS_INDICATORS} значений")
     logger.info("=" * 60)
 
     try:

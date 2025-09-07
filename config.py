@@ -25,8 +25,18 @@ class TimeframeConfig:
     ENTRY_TF: str = '5'
     CANDLES_15M: int = 120
     CANDLES_5M: int = 240
-    CANDLES_FOR_AI_SELECTION: int = 50
-    CANDLES_FOR_AI_ANALYSIS: int = 150
+
+    # Для этапа отбора (меньше данных)
+    CANDLES_FOR_AI_SELECTION_5M: int = 45
+    CANDLES_FOR_AI_SELECTION_15M: int = 15
+    CANDLES_FOR_AI_SELECTION_INDICATORS: int = 45
+
+    # Для детального анализа (максимум данных)
+    CANDLES_FOR_AI_ANALYSIS_5M: int = 200
+    CANDLES_FOR_AI_ANALYSIS_15M: int = 100
+    CANDLES_FOR_AI_ANALYSIS_INDICATORS: int = 200
+
+    # Контекстные окна
     CANDLES_FOR_CONTEXT: int = 30
     CANDLES_FOR_ENTRY: int = 60
 
@@ -108,12 +118,12 @@ class AIConfig:
     API_MODEL: str = 'deepseek-chat'
     DEFAULT_TIMEOUT: int = 60
     SELECTION_TIMEOUT: int = 60
-    ANALYSIS_TIMEOUT: int = 80
+    ANALYSIS_TIMEOUT: int = 120  # Увеличено для больших данных
     HEALTH_CHECK_TIMEOUT: int = 15
     MAX_RETRIES: int = 3
     RETRY_DELAY: float = 3
-    MAX_TOKENS_SELECTION: int = 1500
-    MAX_TOKENS_ANALYSIS: int = 4000
+    MAX_TOKENS_SELECTION: int = 3000  # Увеличено для больших данных
+    MAX_TOKENS_ANALYSIS: int = 8000   # Увеличено для детального анализа
     MAX_TOKENS_TEST: int = 5
     TEMPERATURE_SELECTION: float = 0.4
     TEMPERATURE_ANALYSIS: float = 0.6
