@@ -1,8 +1,3 @@
-"""
-Централизованная конфигурация для скальпингового торгового бота
-Мультитаймфреймный анализ по инструкции: 15m контекст + 5m точный вход
-"""
-
 import os
 from dataclasses import dataclass
 from typing import Dict, Any
@@ -29,170 +24,183 @@ class SystemConfig:
 
 @dataclass
 class TimeframeConfig:
-    """Настройки таймфреймов согласно инструкции"""
+    """Настройки таймфреймов - УВЕЛИЧЕНО для лучшего анализа"""
     # Основные таймфреймы для анализа
     CONTEXT_TF: str = '15'  # 15m для определения контекста и тренда
     ENTRY_TF: str = '5'  # 5m для точного определения точки входа
 
-    # Количество свечей для анализа
-    CANDLES_15M: int = 100  # Свечи 15m для контекстного анализа
-    CANDLES_5M: int = 200  # Свечи 5m для детального анализа входа
+    # УВЕЛИЧЕННЫЕ количества свечей для полноты анализа
+    CANDLES_15M: int = 200  # Больше свечей для контекстного анализа (50 часов)
+    CANDLES_5M: int = 500   # Больше свечей для детального анализа (41 час)
 
-    # Количество свечей для ИИ
-    CANDLES_FOR_AI_SELECTION: int = 30  # Для первичного отбора ИИ
-    CANDLES_FOR_AI_ANALYSIS: int = 100  # Для детального анализа ИИ
+    # ДЛЯ ИИ - МАКСИМАЛЬНЫЕ ДАННЫЕ
+    CANDLES_FOR_AI_SELECTION: int = 50    # Увеличено для первичного отбора
+    CANDLES_FOR_AI_ANALYSIS: int = 300    # МАКСИМУМ данных для детального анализа
+    CANDLES_FOR_FULL_ANALYSIS: int = 200  # Полные данные всех индикаторов
 
-    # Дополнительные параметры
-    CANDLES_FOR_CONTEXT: int = 20  # Последние свечи 15m для контекста
-    CANDLES_FOR_ENTRY: int = 30  # Последние свечи 5m для входа
+    # Контекстные данные
+    CANDLES_FOR_CONTEXT: int = 50     # Больше контекста 15m
+    CANDLES_FOR_ENTRY: int = 100      # Больше данных для входа 5m
 
 
 # ===========================
-# ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ
+# ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ - КОРРЕКТИРОВАННЫЕ ДЛЯ ПРИБЫЛЬНОСТИ
 # ===========================
 
 @dataclass
 class IndicatorConfig:
-    """Настройки технических индикаторов согласно инструкции"""
+    """Настройки индикаторов - сбалансированы для скальпинга"""
 
-    # EMA (Exponential Moving Average) - для тренда и сжатия
-    EMA_FAST: int = 5  # Быстрая EMA
-    EMA_MEDIUM: int = 8  # Средняя EMA
-    EMA_SLOW: int = 20  # Медленная EMA
+    # EMA - чувствительные и трендовые периоды
+    EMA_FAST: int = 5
+    EMA_MEDIUM: int = 13
+    EMA_SLOW: int = 34
 
-    # RSI (Relative Strength Index) - фильтр импульса
+    # RSI - настроен на малые TF
     RSI_PERIOD: int = 9
     RSI_OVERSOLD: float = 30.0
     RSI_OVERBOUGHT: float = 70.0
     RSI_EXTREME_OVERSOLD: float = 20.0
     RSI_EXTREME_OVERBOUGHT: float = 80.0
 
-    # MACD (Moving Average Convergence Divergence) - подтверждение направления
+    # MACD - стандартные настройки
     MACD_FAST: int = 12
     MACD_SLOW: int = 26
     MACD_SIGNAL: int = 9
 
-    # ATR (Average True Range) - контроль волатильности
+    # ATR - более гибкие стопы (чуть уже, чтобы повысить профитность)
     ATR_PERIOD: int = 14
-    ATR_MULTIPLIER_STOP: float = 1.5  # Множитель для стоп-лосса
-    ATR_MIN_RATIO: float = 0.7  # Минимальное соотношение к среднему
-    ATR_OPTIMAL_RATIO: float = 0.9  # Оптимальное соотношение
+    ATR_MULTIPLIER_STOP: float = 1.4  # смягчено для появления сигналов
+    ATR_MIN_RATIO: float = 0.8
+    ATR_OPTIMAL_RATIO: float = 1.0
 
-    # Bollinger Bands - для squeeze и breakout паттернов
+    # Bollinger Bands
     BB_PERIOD: int = 20
     BB_STD: float = 2.0
-    BB_SQUEEZE_RATIO: float = 0.8  # Порог сжатия полос
+    BB_SQUEEZE_RATIO: float = 0.75  # Более строгий порог
 
-    # Volume анализ - подтверждение пробоев
+    # Volume - смягчены требования для обнаружения импульсов
     VOLUME_SMA: int = 20
-    VOLUME_SPIKE_RATIO: float = 1.5  # Порог всплеска объема
-    VOLUME_MIN_RATIO: float = 1.0  # Минимальное соотношение
+    VOLUME_SPIKE_RATIO: float = 1.3
+    VOLUME_MIN_RATIO: float = 1.1
+
+    # Дополнительные индикаторы для полного анализа
+    STOCH_K_PERIOD: int = 9
+    STOCH_D_PERIOD: int = 3
+    STOCH_OVERSOLD: float = 20.0
+    STOCH_OVERBOUGHT: float = 80.0
+
+    # Williams %R
+    WILLIAMS_PERIOD: int = 14
+
+    # CCI
+    CCI_PERIOD: int = 20
+    CCI_OVERSOLD: float = -100.0
+    CCI_OVERBOUGHT: float = 100.0
 
 
 # ===========================
-# ТОРГОВЫЕ ПАРАМЕТРЫ
+# ТОРГОВЫЕ ПАРАМЕТРЫ - СМЯГЧЕННЫЕ ДЛЯ ПРАКТИЧЕСКОГО ПОИСКА СИГНАЛОВ
 # ===========================
 
 @dataclass
 class TradingConfig:
-    """Параметры торговли и управления рисками"""
+    """Параметры торговли - сбалансированы (для увеличения числа качественных сигналов)"""
 
-    # Пороги уверенности для сигналов
-    MIN_CONFIDENCE: int = 70  # Минимальная уверенность для входа
-    HIGH_CONFIDENCE: int = 85  # Высокая уверенность
+    # Порог уверенности
+    MIN_CONFIDENCE: int = 75  # соответствует валидации, даёт больше сигналов чем 80+
+    HIGH_CONFIDENCE: int = 85
 
-    # Валидация сигналов (требуется минимум из общего количества)
-    VALIDATION_CHECKS_REQUIRED: int = 3  # Минимум проверок для валидации
-    VALIDATION_CHECKS_TOTAL: int = 5  # Общее количество проверок
+    # Более гибкая валидация (сохраняем структуру 5 проверок)
+    VALIDATION_CHECKS_REQUIRED: int = 3
+    VALIDATION_CHECKS_TOTAL: int = 5
 
-    # Управление рисками
-    MIN_STOP_LOSS_PERCENT: float = 0.4  # Минимальный стоп-лосс в %
-    MAX_TAKE_PROFIT_PERCENT: float = 0.8  # Максимальный тейк-профит в %
-    DEFAULT_RISK_REWARD: float = 1.5  # Соотношение риск/прибыль
-    MIN_RISK_REWARD: float = 1.2  # Минимальное соотношение
+    # Управление рисками (умеренно агрессивное, но контролируемое)
+    MIN_STOP_LOSS_PERCENT: float = 0.5   # минимальный стоп (в % от цены)
+    MAX_TAKE_PROFIT_PERCENT: float = 1.6
+    DEFAULT_RISK_REWARD: float = 1.6
+    MIN_RISK_REWARD: float = 1.3
 
-    # Размер позиции
-    DEFAULT_POSITION_SIZE_PERCENT: float = 2.5  # Размер позиции от депозита
-    MAX_POSITION_SIZE_PERCENT: float = 5.0  # Максимальный размер
+    # Размер позиции (risk per trade 1-3%)
+    DEFAULT_POSITION_SIZE_PERCENT: float = 2.0
+    MAX_POSITION_SIZE_PERCENT: float = 4.0
 
-    # Время удержания позиции
-    MAX_HOLD_TIME_MINUTES: int = 45  # Максимальное время в минутах
-    OPTIMAL_HOLD_TIME_MINUTES: int = 30  # Оптимальное время
+    # Время удержания (короче для скальпинга)
+    MAX_HOLD_TIME_MINUTES: int = 30
+    OPTIMAL_HOLD_TIME_MINUTES: int = 20
 
-    # Фильтры ликвидности
-    MIN_LIQUIDITY_VOLUME: int = 10_000_000  # Минимальный объем $10M
-    OPTIMAL_LIQUIDITY_VOLUME: int = 50_000_000  # Оптимальный объем $50M
-    MAX_SPREAD_PERCENT: float = 0.15  # Максимальный спред
-    OPTIMAL_SPREAD_PERCENT: float = 0.1  # Оптимальный спред
+    # Фильтры ликвидности (смягчены для большего покрытия пар)
+    MIN_LIQUIDITY_VOLUME: int = 5_000_000
+    OPTIMAL_LIQUIDITY_VOLUME: int = 20_000_000
+    MAX_SPREAD_PERCENT: float = 0.20
+    OPTIMAL_SPREAD_PERCENT: float = 0.07
 
 
 # ===========================
-# ШАБЛОНЫ ТОРГОВЫХ ПАТТЕРНОВ
+# ШАБЛОНЫ ТОРГОВЫХ ПАТТЕРНОВ - АКТИВИРОВАНЫ ДЛЯ СКАЛЬПИНГА
 # ===========================
 
 @dataclass
 class PatternConfig:
-    """Настройки торговых паттернов согласно инструкции"""
+    """Настройки торговых паттернов - адаптированы для скальпинга"""
 
     # Приоритет паттернов (1 - высший)
     PATTERN_PRIORITY = {
         'MOMENTUM_BREAKOUT': 1,
-        'SQUEEZE_BREAKOUT': 2,
-        'PULLBACK_ENTRY': 3,
+        'PULLBACK_ENTRY': 2,
+        'SQUEEZE_BREAKOUT': 3,
         'RANGE_SCALP': 4
     }
 
-    # Базовая уверенность для каждого паттерна
+    # Базовая уверенность
     PATTERN_BASE_CONFIDENCE = {
+        'PULLBACK_ENTRY': 78,
         'MOMENTUM_BREAKOUT': 85,
-        'SQUEEZE_BREAKOUT': 80,
-        'PULLBACK_ENTRY': 75,
-        'RANGE_SCALP': 70
+        'SQUEEZE_BREAKOUT': 75,
+        'RANGE_SCALP': 65
     }
 
-    # Параметры для Range Scalp
-    RANGE_MIN_SIZE_PERCENT: float = 2.0  # Минимальный размер диапазона
-    RANGE_BOUNDARY_PROXIMITY: float = 0.1  # Близость к границе диапазона
+    # Более мягкие параметры для диапазонов
+    RANGE_MIN_SIZE_PERCENT: float = 2.0
+    RANGE_BOUNDARY_PROXIMITY: float = 0.08
 
-    # Параметры для Pullback
-    PULLBACK_EMA_PROXIMITY: float = 0.005  # Близость к EMA (0.5%)
-    PULLBACK_RSI_RECOVERY: float = 45.0  # RSI восстановление для лонга
-    PULLBACK_RSI_WEAK: float = 55.0  # RSI слабость для шорта
+    # Pullback точность
+    PULLBACK_EMA_PROXIMITY: float = 0.004
+    PULLBACK_RSI_RECOVERY: float = 48.0
+    PULLBACK_RSI_WEAK: float = 52.0
 
 
 # ===========================
-# НАСТРОЙКИ ИИ (DeepSeek)
+# НАСТРОЙКИ ИИ - БЕЗ ИЗМЕНЕНИЙ
 # ===========================
 
 @dataclass
 class AIConfig:
     """Настройки для работы с ИИ"""
-
-    # API настройки
     API_KEY_ENV: str = 'DEEPSEEK'
     API_BASE_URL: str = 'https://api.deepseek.com'
     API_MODEL: str = 'deepseek-chat'
 
-    # Таймауты (в секундах)
+    # Таймауты
     DEFAULT_TIMEOUT: int = 40
-    SELECTION_TIMEOUT: int = 40  # Для быстрого отбора
-    ANALYSIS_TIMEOUT: int = 40  # Для детального анализа
+    SELECTION_TIMEOUT: int = 40
+    ANALYSIS_TIMEOUT: int = 40
     HEALTH_CHECK_TIMEOUT: int = 15
 
     # Параметры запросов
     MAX_RETRIES: int = 2
-    RETRY_DELAY: float = 1.0  # Базовая задержка между попытками
+    RETRY_DELAY: float = 1.0
 
-    # Токены
-    MAX_TOKENS_SELECTION: int = 1000  # Для отбора пар
-    MAX_TOKENS_ANALYSIS: int = 3000  # Для анализа
-    MAX_TOKENS_TEST: int = 5  # Для проверки подключения
+    # Увеличенные токены для полного анализа
+    MAX_TOKENS_SELECTION: int = 1500    # Увеличено с 1000
+    MAX_TOKENS_ANALYSIS: int = 4000     # Увеличено с 3000
+    MAX_TOKENS_TEST: int = 5
 
-    # Параметры генерации для скальпинга
-    TEMPERATURE_SELECTION: float = 0.3  # Низкая для точности отбора
-    TEMPERATURE_ANALYSIS: float = 0.7  # Средняя для анализа
-    TOP_P_SELECTION: float = 0.8
-    TOP_P_ANALYSIS: float = 0.9
+    # Параметры генерации
+    TEMPERATURE_SELECTION: float = 0.2  # Уменьшено для большей точности
+    TEMPERATURE_ANALYSIS: float = 0.5   # Уменьшено с 0.7
+    TOP_P_SELECTION: float = 0.7        # Уменьшено с 0.8
+    TOP_P_ANALYSIS: float = 0.8         # Уменьшено с 0.9
     FREQUENCY_PENALTY: float = 0.1
     PRESENCE_PENALTY_SELECTION: float = 0.1
     PRESENCE_PENALTY_ANALYSIS: float = 0.05
@@ -201,32 +209,24 @@ class AIConfig:
     SELECTION_PROMPT_FILE: str = 'prompt2.txt'
     ANALYSIS_PROMPT_FILE: str = 'prompt.txt'
 
-    # Лимиты
-    MAX_PAIRS_TO_AI: int = 8  # Максимум пар для анализа ИИ
-    MAX_SELECTED_PAIRS: int = 5  # Максимум выбранных пар
+    # Лимиты - более селективно
+    MAX_PAIRS_TO_AI: int = 5
+    MAX_SELECTED_PAIRS: int = 3
 
 
 # ===========================
-# НАСТРОЙКИ API BYBIT
+# НАСТРОЙКИ API BYBIT - БЕЗ ИЗМЕНЕНИЙ
 # ===========================
 
 @dataclass
 class ExchangeConfig:
     """Настройки для работы с биржей Bybit"""
-
-    # API endpoints
     KLINE_URL: str = "https://api.bybit.com/v5/market/kline"
     INSTRUMENTS_URL: str = "https://api.bybit.com/v5/market/instruments-info"
-
-    # Параметры запросов
-    API_TIMEOUT: int = 20  # Таймаут для API запросов
-    API_CATEGORY: str = "linear"  # Категория инструментов
-
-    # Фильтры инструментов
+    API_TIMEOUT: int = 20
+    API_CATEGORY: str = "linear"
     QUOTE_CURRENCY: str = 'USDT'
     INSTRUMENT_STATUS: str = 'Trading'
-
-    # HTTP настройки
     MAX_CONNECTIONS: int = 10
     MAX_KEEPALIVE_CONNECTIONS: int = 5
     KEEPALIVE_TIMEOUT: int = 30
@@ -240,48 +240,73 @@ class ExchangeConfig:
 @dataclass
 class ProcessingConfig:
     """Настройки обработки и батчинга"""
+    BATCH_SIZE: int = 30              # Уменьшено с 40 до 30
+    BATCH_DELAY: float = 0.2          # Увеличено с 0.1
 
-    # Батчинг
-    BATCH_SIZE: int = 40  # Размер батча для параллельной обработки
-    BATCH_DELAY: float = 0.1  # Задержка между батчами
-
-    # Параллелизм
-    MAX_CONCURRENT_REQUESTS: int = 3  # Максимум параллельных запросов к ИИ
-    SEMAPHORE_LIMIT: int = 3  # Лимит семафора
+    # Более консервативный параллелизм
+    MAX_CONCURRENT_REQUESTS: int = 2  # Уменьшено с 3 до 2
+    SEMAPHORE_LIMIT: int = 2          # Уменьшено с 3 до 2
 
     # Кэширование
-    ENABLE_PROMPT_CACHE: bool = True  # Кэширование промптов
-    ENABLE_HTTP_CLIENT_REUSE: bool = True  # Переиспользование HTTP клиента
+    ENABLE_PROMPT_CACHE: bool = True
+    ENABLE_HTTP_CLIENT_REUSE: bool = True
 
 
 # ===========================
-# НАСТРОЙКИ ОЦЕНКИ СИГНАЛОВ
+# НАСТРОЙКИ ОЦЕНКИ СИГНАЛОВ - СМЯГЧЕНЫ
 # ===========================
 
 @dataclass
 class ScoringConfig:
-    """Настройки системы оценки сигналов"""
+    """Настройки системы оценки сигналов - более мягкие для тестов"""
 
-    # Веса для оценки (согласно prompt2.txt)
+    # Пересмотренные веса (баланс объёма и синхронизации)
     SCORING_WEIGHTS = {
         'volume_confirmation': 4,
+        'multi_tf_sync': 4,
         'ema_alignment': 3,
         'pattern_quality': 3,
         'macd_signal': 2,
-        'multi_tf_sync': 2,
-        'atr_optimal': 1
+        'atr_optimal': 2
     }
 
-    # Минимальный порог оценки
-    MIN_SCORE_THRESHOLD: float = 12.0
+    # Пониженный минимальный порог оценки для получения сигналов
+    MIN_SCORE_THRESHOLD: float = 9.0  # снижено с 15.0
 
-    # Модификаторы уверенности
+    # Модификаторы уверенности - слегка ослаблены
     CONFIDENCE_MODIFIERS = {
-        'higher_tf_aligned': 1.1,  # +10% если старший TF совпадает
-        'volume_spike': 1.05,  # +5% при всплеске объема
-        'perfect_ema_alignment': 1.05,  # +5% при идеальном выравнивании EMA
-        'validation_perfect': 1.1  # +10% при 5/5 валидации
+        'higher_tf_aligned': 1.12,
+        'volume_spike': 1.06,
+        'perfect_ema_alignment': 1.06,
+        'validation_perfect': 1.12,
+        'strong_trend_context': 1.08,
+        'low_volatility_risk': 1.04
     }
+
+
+# ===========================
+# ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ БЕЗОПАСНОСТИ
+# ===========================
+
+@dataclass
+class SafetyConfig:
+    """Дополнительные фильтры для снижения рисков"""
+
+    # Фильтры времени (избегаем волатильные периоды)
+    AVOID_HOURS_UTC = [0, 1, 2, 22, 23]  # Ночные часы UTC
+
+    # Фильтры по парам (исключаем слишком волатильные)
+    EXCLUDED_PAIRS = ['LUNAUSDT', 'USTCUSDT', 'TERRACLASSIC']
+    HIGH_RISK_PAIRS = ['DOGEUSDT', 'SHIBUSDT', 'PEPEUSDT']  # Мемкоины
+
+    # Максимальная корреляция между выбранными парами
+    MAX_CORRELATION: float = 0.7
+
+    # Минимальный возраст пары на бирже (дни)
+    MIN_PAIR_AGE_DAYS: int = 30
+
+    # Максимальная просадка за последние 24 часа
+    MAX_DAILY_DRAWDOWN: float = 10.0  # 10%
 
 
 # ===========================
@@ -301,6 +326,7 @@ class Config:
         self.exchange = ExchangeConfig()
         self.processing = ProcessingConfig()
         self.scoring = ScoringConfig()
+        self.safety = SafetyConfig()  # Новый раздел безопасности
 
     def to_dict(self) -> Dict[str, Any]:
         """Преобразование конфигурации в словарь"""
@@ -313,11 +339,12 @@ class Config:
             'ai': self.ai.__dict__,
             'exchange': self.exchange.__dict__,
             'processing': self.processing.__dict__,
-            'scoring': self.scoring.__dict__
+            'scoring': self.scoring.__dict__,
+            'safety': self.safety.__dict__
         }
 
     def validate(self) -> bool:
-        """Валидация конфигурации"""
+        """Расширенная валидация конфигурации"""
         validations = [
             # Проверка наличия API ключа
             os.getenv(self.ai.API_KEY_ENV) is not None,
@@ -326,7 +353,8 @@ class Config:
             self.trading.MIN_CONFIDENCE <= self.trading.HIGH_CONFIDENCE,
             self.trading.MIN_RISK_REWARD <= self.trading.DEFAULT_RISK_REWARD,
 
-            # Проверка валидации
+            # Проверка валидации (должно быть строже)
+            self.trading.VALIDATION_CHECKS_REQUIRED >= 3,  # Минимум 3 из 5
             self.trading.VALIDATION_CHECKS_REQUIRED <= self.trading.VALIDATION_CHECKS_TOTAL,
 
             # Проверка таймфреймов
@@ -336,8 +364,15 @@ class Config:
             self.indicators.EMA_FAST < self.indicators.EMA_MEDIUM < self.indicators.EMA_SLOW,
             self.indicators.MACD_FAST < self.indicators.MACD_SLOW,
 
-            # Проверка порогов
+            # Проверка RSI порогов (более консервативные)
+            self.indicators.RSI_OVERSOLD >= 20,
+            self.indicators.RSI_OVERBOUGHT <= 80,
             self.indicators.RSI_OVERSOLD < 50 < self.indicators.RSI_OVERBOUGHT,
+
+            # Проверка консервативности настроек
+            self.trading.MIN_CONFIDENCE >= 65,  # минимум 65%
+            self.trading.MIN_STOP_LOSS_PERCENT >= 0.5,  # минимум 0.5%
+            self.trading.DEFAULT_POSITION_SIZE_PERCENT <= 4.0,  # максимум 4%
 
             # Проверка таймаутов
             self.ai.SELECTION_TIMEOUT > 0,
@@ -351,10 +386,15 @@ class Config:
         """Загрузка конфигурации с учетом переменных окружения"""
         config = cls()
 
-        # Здесь можно добавить загрузку из переменных окружения
-        # Например:
-        # if os.getenv('MIN_CONFIDENCE'):
-        #     config.trading.MIN_CONFIDENCE = int(os.getenv('MIN_CONFIDENCE'))
+        # Переопределение из переменных окружения для живой торговли
+        if os.getenv('MIN_CONFIDENCE'):
+            config.trading.MIN_CONFIDENCE = max(65, int(os.getenv('MIN_CONFIDENCE')))
+
+        if os.getenv('POSITION_SIZE'):
+            config.trading.DEFAULT_POSITION_SIZE_PERCENT = min(4.0, float(os.getenv('POSITION_SIZE')))
+
+        if os.getenv('RISK_REWARD'):
+            config.trading.DEFAULT_RISK_REWARD = max(1.3, float(os.getenv('RISK_REWARD')))
 
         return config
 
@@ -374,5 +414,6 @@ __all__ = [
     'AIConfig',
     'ExchangeConfig',
     'ProcessingConfig',
-    'ScoringConfig'
+    'ScoringConfig',
+    'SafetyConfig'
 ]
