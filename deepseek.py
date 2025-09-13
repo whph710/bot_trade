@@ -6,10 +6,53 @@ import httpx
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import time
-import json
 
-# Импорт конфигурации
-from config import config
+# ИСПРАВЛЕННЫЙ импорт конфигурации
+try:
+    from config import config
+except ImportError:
+    # Если config не импортируется, создаем базовую конфигурацию
+    class BasicConfig:
+        class System:
+            ENCODING = 'utf-8'
+
+        class AI:
+            API_KEY_ENV = 'DEEPSEEK'
+            API_BASE_URL = 'https://api.deepseek.com'
+            API_MODEL = 'deepseek-chat'
+            DEFAULT_TIMEOUT = 40
+            SELECTION_TIMEOUT = 40
+            ANALYSIS_TIMEOUT = 60
+            HEALTH_CHECK_TIMEOUT = 15
+            MAX_RETRIES = 2
+            RETRY_DELAY = 1.0
+            MAX_TOKENS_SELECTION = 1000
+            MAX_TOKENS_ANALYSIS = 4000
+            MAX_TOKENS_TEST = 5
+            TEMPERATURE_SELECTION = 0.3
+            TEMPERATURE_ANALYSIS = 0.7
+            TOP_P_SELECTION = 0.8
+            TOP_P_ANALYSIS = 0.9
+            FREQUENCY_PENALTY = 0.1
+            PRESENCE_PENALTY_SELECTION = 0.1
+            PRESENCE_PENALTY_ANALYSIS = 0.05
+            SELECTION_PROMPT_FILE = 'prompt2.txt'
+            ANALYSIS_PROMPT_FILE = 'prompt.txt'
+
+        class Exchange:
+            MAX_CONNECTIONS = 10
+            MAX_KEEPALIVE_CONNECTIONS = 5
+            KEEPALIVE_TIMEOUT = 30
+            KEEPALIVE_MAX = 100
+
+        def __init__(self):
+            self.system = self.System()
+            self.ai = self.AI()
+            self.exchange = self.Exchange()
+
+
+    config = BasicConfig()
+    logging.warning("Используется базовая конфигурация из-за ошибки импорта")
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -31,14 +74,7 @@ def get_cached_prompt(filename: str = 'prompt.txt') -> str:
                 _cached_prompts[filename] = file.read()
                 logger.info(f"Промпт загружен из {filename}")
         except FileNotFoundError:
-            if filename == config.ai.SELECTION_PROMPT_FILE:
-                default_prompt = """Ты элитный аналитик. Отбери ТОП-3 пары для скальпинга.
-                Критерии: ликвидность, волатильность, четкие сигналы.
-                Ответ в формате: {"pairs": ["SYMBOL1", "SYMBOL2", "SYMBOL3"]}"""
-            else:
-                default_prompt = """Ты опытный трейдер-скальпер. Анализируй быстро и конкретно.
-                Дай точные рекомендации по входу в позицию с уровнями стоп-лосса и тейк-профита."""
-
+            default_prompt = "Ты опытный трейдер-скальпер. Анализируй быстро и конкретно."
             _cached_prompts[filename] = default_prompt
             logger.warning(f"Используется промпт по умолчанию для {filename}")
 
@@ -71,68 +107,14 @@ async def get_http_client(timeout: int = None) -> httpx.AsyncClient:
     return _global_http_client
 
 
-def optimize_data_for_ai(data: str, max_size: int = 50000) -> str:
-    """
-    НОВОЕ: Оптимизация данных для ИИ при превышении лимитов
-    Сжимает большие объемы данных, сохраняя ключевую информацию
-    """
-    if len(data) <= max_size:
-        return data
-
-    logger.warning(f"Данные превышают лимит ({len(data)} > {max_size}), применяется сжатие")
-
-    try:
-        # Парсим JSON данные
-        json_data = json.loads(data)
-
-        # Сжимаем массивы индикаторов (берем только последние значения)
-        if 'technical_analysis' in json_data:
-            for tf_key in ['indicators_5m', 'indicators_15m']:
-                if tf_key in json_data['technical_analysis']:
-                    indicators = json_data['technical_analysis'][tf_key]
-
-                    # Сжимаем исторические данные индикаторов
-                    for category in ['ema_system', 'momentum_indicators', 'volatility_indicators', 'volume_analysis']:
-                        if category in indicators:
-                            for indicator_name, values in indicators[category].items():
-                                if isinstance(values, list) and len(values) > 50:
-                                    # Берем только последние 50 значений
-                                    indicators[category][indicator_name] = values[-50:]
-
-        # Сжимаем данные свечей (берем только последние)
-        if 'market_data' in json_data:
-            for tf_key in ['timeframe_5m', 'timeframe_15m']:
-                if tf_key in json_data['market_data'] and 'candles' in json_data['market_data'][tf_key]:
-                    candles = json_data['market_data'][tf_key]['candles']
-                    if len(candles) > 200:
-                        json_data['market_data'][tf_key]['candles'] = candles[-200:]
-                        json_data['market_data'][tf_key]['candles_count'] = len(candles[-200:])
-
-        # Преобразуем обратно в JSON
-        optimized_data = json.dumps(json_data, ensure_ascii=False, separators=(',', ':'))
-
-        logger.info(f"Данные сжаты: {len(data)} -> {len(optimized_data)} символов")
-        return optimized_data
-
-    except json.JSONDecodeError:
-        # Если не JSON, применяем простое обрезание
-        logger.warning("Не удалось распарсить JSON, применяется простое обрезание")
-        return data[:max_size] + "... [ДАННЫЕ ОБРЕЗАНЫ ДЛЯ ЭКОНОМИИ ТОКЕНОВ]"
-    except Exception as e:
-        logger.error(f"Ошибка оптимизации данных: {e}")
-        return data[:max_size]
-
-
 async def deep_seek(data: str,
                     prompt: str = None,
                     request_type: str = 'analysis',  # 'selection' или 'analysis'
                     timeout: int = None,
                     max_tokens: int = None,
-                    max_retries: int = None,
-                    optimize_large_data: bool = True) -> str:
+                    max_retries: int = None) -> str:
     """
     Оптимизированная функция для скальпинга с адаптивными настройками.
-    ОБНОВЛЕНО: поддержка больших объемов данных для финального анализа
 
     Args:
         data: Данные для анализа
@@ -141,7 +123,6 @@ async def deep_seek(data: str,
         timeout: Таймаут (если None - берется из конфига по типу запроса)
         max_tokens: Максимум токенов (если None - берется из конфига)
         max_retries: Максимум попыток (если None - берется из конфига)
-        optimize_large_data: Оптимизировать большие данные для экономии токенов
     """
     start_time = time.time()
 
@@ -173,16 +154,6 @@ async def deep_seek(data: str,
     if prompt is None:
         prompt = get_cached_prompt(prompt_file)
 
-    # Оптимизируем данные для больших объемов (финальный анализ)
-    if optimize_large_data and len(data) > 30000:  # Если данные больше 30KB
-        logger.info(f"Обрабатываются большие данные ({len(data)} символов), применяется оптимизация")
-
-        # Для финального анализа используем более мягкую оптимизацию
-        if request_type == 'analysis':
-            data = optimize_data_for_ai(data, max_size=80000)  # Больший лимит для финального анализа
-        else:
-            data = optimize_data_for_ai(data, max_size=40000)  # Меньший лимит для отбора
-
     # Получаем переиспользуемый HTTP клиент
     http_client = await get_http_client(timeout)
 
@@ -194,8 +165,7 @@ async def deep_seek(data: str,
 
     for attempt in range(max_retries):
         try:
-            logger.info(f"DeepSeek {request_type} запрос {attempt + 1}/{max_retries} "
-                        f"(данные: {len(data)} символов)")
+            logger.info(f"DeepSeek {request_type} запрос {attempt + 1}/{max_retries}")
 
             # Оптимизированные параметры для скальпинга
             response = await client.chat.completions.create(
@@ -223,12 +193,6 @@ async def deep_seek(data: str,
             if execution_time > (timeout * 0.8):
                 logger.warning(f"Медленный ответ ИИ: {execution_time:.2f}сек (лимит {timeout}сек)")
 
-            # Валидация ответа для критически важных операций
-            if request_type == 'analysis' and not validate_ai_response(result):
-                logger.warning(f"Ответ ИИ не прошел валидацию на попытке {attempt + 1}")
-                if attempt < max_retries - 1:
-                    continue
-
             print(result)
             return result
 
@@ -241,16 +205,9 @@ async def deep_seek(data: str,
             error_msg = str(e)
             logger.warning(f"Попытка {attempt + 1} неудачна: {error_msg}")
 
-            # Специальная обработка для больших данных
-            if "token" in error_msg.lower() or "context" in error_msg.lower():
-                logger.warning("Возможна проблема с размером данных, применяется дополнительная оптимизация")
-                if len(data) > 20000:
-                    data = optimize_data_for_ai(data, max_size=20000)
-                    logger.info(f"Данные дополнительно сжаты до {len(data)} символов")
-
             if attempt < max_retries - 1:
-                # Прогрессивная задержка для скальпинга
-                wait_time = config.ai.RETRY_DELAY * (1.5 ** attempt)  # Экспоненциальная задержка
+                # Задержка для скальпинга
+                wait_time = config.ai.RETRY_DELAY + (attempt * 0.5)  # Максимум 2 секунды ожидания
                 logger.info(f"Ожидание {wait_time:.1f}с...")
                 await asyncio.sleep(wait_time)
             else:
@@ -262,64 +219,21 @@ async def deep_seek(data: str,
     return f"Критическая ошибка DeepSeek API после {max_retries} попыток"
 
 
-def validate_ai_response(response: str) -> bool:
-    """
-    НОВОЕ: Валидация ответа ИИ для критически важных операций
-    """
-    if not response or len(response) < 50:
-        return False
-
-    # Проверяем наличие ключевых элементов для торгового анализа
-    required_elements = ['signal', 'confidence', 'analysis']
-    found_elements = sum(1 for element in required_elements if element.lower() in response.lower())
-
-    # Должно быть найдено минимум 2 из 3 элементов
-    return found_elements >= 2
-
-
 async def deep_seek_selection(data: str, prompt: str = None) -> str:
     """Быстрая функция для первичного отбора пар (оптимизирована для скорости)."""
     return await deep_seek(
         data=data,
         prompt=prompt,
-        request_type='selection',
-        optimize_large_data=True
+        request_type='selection'
     )
 
 
 async def deep_seek_analysis(data: str, prompt: str = None) -> str:
-    """
-    Функция для детального анализа (баланс скорости и качества).
-    ОБНОВЛЕНО: поддержка больших объемов данных для финального анализа
-    """
+    """Функция для детального анализа (баланс скорости и качества)."""
     return await deep_seek(
         data=data,
         prompt=prompt,
-        request_type='analysis',
-        optimize_large_data=True  # Включаем оптимизацию для больших данных
-    )
-
-
-async def deep_seek_full_analysis(data: str, prompt: str = None,
-                                  preserve_data: bool = False) -> str:
-    """
-    НОВОЕ: Специальная функция для финального анализа с максимальным сохранением данных
-
-    Args:
-        data: Полные данные для анализа
-        prompt: Промпт
-        preserve_data: Если True, минимальная оптимизация данных
-    """
-    logger.info(f"Запуск полного анализа с данными {len(data)} символов")
-
-    # Используем увеличенные лимиты для финального анализа
-    return await deep_seek(
-        data=data,
-        prompt=prompt,
-        request_type='analysis',
-        timeout=config.ai.ANALYSIS_TIMEOUT + 30,  # Дополнительное время
-        max_tokens=config.ai.MAX_TOKENS_ANALYSIS,
-        optimize_large_data=not preserve_data  # Отключаем оптимизацию если нужно сохранить данные
+        request_type='analysis'
     )
 
 
@@ -353,58 +267,33 @@ async def test_deepseek_connection() -> bool:
         return False
 
 
-async def batch_deep_seek_with_optimization(requests: list,
-                                            request_type: str = 'selection',
-                                            max_concurrent: int = None) -> list:
+async def batch_deep_seek(requests: list, request_type: str = 'selection') -> list:
     """
-    НОВОЕ: Улучшенная батчевая обработка с оптимизацией для больших данных
+    Батчевая обработка запросов к ИИ для ускорения.
+    НЕ ИСПОЛЬЗУЕТСЯ в текущей версии, но готова для будущих оптимизаций.
     """
-    if not requests:
-        return []
-
-    if max_concurrent is None:
-        max_concurrent = config.processing.MAX_CONCURRENT_REQUESTS
-
-    logger.info(f"Батчевая обработка {len(requests)} запросов (макс. параллельно: {max_concurrent})")
-
     results = []
-    semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def process_single_request(req_data):
+    # Создаем задачи для параллельного выполнения
+    tasks = []
+    for req_data in requests:
+        task = deep_seek(
+            data=req_data.get('data', ''),
+            prompt=req_data.get('prompt'),
+            request_type=request_type
+        )
+        tasks.append(task)
+
+    # Выполняем параллельно с ограничением
+    semaphore = asyncio.Semaphore(3)  # Используем базовое значение
+
+    async def bounded_request(task):
         async with semaphore:
-            try:
-                # Оптимизируем данные для каждого запроса
-                data = req_data.get('data', '')
-                if len(data) > 40000:  # Большие данные
-                    data = optimize_data_for_ai(data, max_size=35000)
+            return await task
 
-                result = await deep_seek(
-                    data=data,
-                    prompt=req_data.get('prompt'),
-                    request_type=request_type,
-                    optimize_large_data=True
-                )
-                return result
-            except Exception as e:
-                logger.error(f"Ошибка в батчевой обработке: {e}")
-                return f"Ошибка обработки: {e}"
+    bounded_tasks = [bounded_request(task) for task in tasks]
+    results = await asyncio.gather(*bounded_tasks, return_exceptions=True)
 
-    # Создаем задачи
-    tasks = [process_single_request(req) for req in requests]
-
-    # Обрабатываем батчами для контроля нагрузки
-    batch_size = min(max_concurrent, len(tasks))
-
-    for i in range(0, len(tasks), batch_size):
-        batch = tasks[i:i + batch_size]
-        batch_results = await asyncio.gather(*batch, return_exceptions=True)
-        results.extend(batch_results)
-
-        # Небольшая пауза между батчами
-        if i + batch_size < len(tasks):
-            await asyncio.sleep(0.5)
-
-    logger.info(f"Батчевая обработка завершена: {len(results)} результатов")
     return results
 
 
@@ -416,8 +305,7 @@ async def check_api_health() -> dict:
         "api_key_exists": bool(os.getenv(config.ai.API_KEY_ENV)),
         "api_functional": False,
         "response_time": None,
-        "suitable_for_scalping": False,
-        "supports_large_data": False  # НОВОЕ: поддержка больших данных
+        "suitable_for_scalping": False
     }
 
     try:
@@ -428,10 +316,6 @@ async def check_api_health() -> dict:
 
         # Проверяем подходит ли для скальпинга (быстрые ответы)
         health_info["suitable_for_scalping"] = response_time < 10.0
-
-        # Тест с большими данными
-        if health_info["api_functional"]:
-            health_info["supports_large_data"] = await test_large_data_support()
 
         if response_time > 15.0:
             logger.warning(f"Медленное API ({response_time}сек) - не подходит для скальпинга")
@@ -444,35 +328,6 @@ async def check_api_health() -> dict:
     return health_info
 
 
-async def test_large_data_support() -> bool:
-    """
-    НОВОЕ: Тест поддержки больших объемов данных
-    """
-    try:
-        # Создаем тестовые данные среднего размера
-        test_data = {
-            "test": "large_data_support",
-            "data": ["test_value"] * 1000  # ~15KB данных
-        }
-
-        test_json = json.dumps(test_data)
-
-        # Тестируем отправку
-        result = await deep_seek(
-            data=test_json,
-            prompt="Кратко подтверди получение данных.",
-            request_type='selection',
-            timeout=15,
-            max_tokens=50
-        )
-
-        return "test" in result.lower() or "данн" in result.lower()
-
-    except Exception as e:
-        logger.warning(f"Тест больших данных не прошел: {e}")
-        return False
-
-
 async def cleanup_http_client():
     """Очистка глобального HTTP клиента при завершении работы."""
     global _global_http_client
@@ -480,33 +335,6 @@ async def cleanup_http_client():
         await _global_http_client.aclose()
         _global_http_client = None
         logger.info("HTTP клиент очищен")
-
-
-def clear_prompt_cache():
-    """
-    НОВОЕ: Очистка кэша промптов (полезно при обновлении файлов промптов)
-    """
-    global _cached_prompts
-    _cached_prompts.clear()
-    logger.info("Кэш промптов очищен")
-
-
-async def get_api_usage_stats() -> dict:
-    """
-    НОВОЕ: Получение статистики использования API (упрощенная версия)
-    """
-    return {
-        "cached_prompts": len(_cached_prompts),
-        "http_client_active": _global_http_client is not None and not _global_http_client.is_closed,
-        "config_timeouts": {
-            "selection": config.ai.SELECTION_TIMEOUT,
-            "analysis": config.ai.ANALYSIS_TIMEOUT
-        },
-        "config_tokens": {
-            "selection": config.ai.MAX_TOKENS_SELECTION,
-            "analysis": config.ai.MAX_TOKENS_ANALYSIS
-        }
-    }
 
 
 # Функция для совместимости со старым кодом
@@ -519,6 +347,24 @@ async def deep_seek_legacy(data: str, prompt: str = None, timeout: int = 60,
         request_type='analysis',
         timeout=timeout,
         max_tokens=max_tokens,
-        max_retries=max_retries,
-        optimize_large_data=True
+        max_retries=max_retries
     )
+
+
+# Функция для быстрой диагностики
+def diagnose_import_issues():
+    """Диагностика проблем с импортом"""
+    print("🔍 ДИАГНОСТИКА ИМПОРТА:")
+    print(f"   Config тип: {type(config)}")
+    print(f"   AI настройки доступны: {hasattr(config, 'ai')}")
+    print(f"   API ключ в окружении: {bool(os.getenv('DEEPSEEK'))}")
+
+    if hasattr(config, 'ai'):
+        print(f"   Таймауты: отбор={config.ai.SELECTION_TIMEOUT}с, анализ={config.ai.ANALYSIS_TIMEOUT}с")
+        print(f"   Токены: отбор={config.ai.MAX_TOKENS_SELECTION}, анализ={config.ai.MAX_TOKENS_ANALYSIS}")
+
+    print("✅ Диагностика завершена")
+
+
+if __name__ == "__main__":
+    diagnose_import_issues()

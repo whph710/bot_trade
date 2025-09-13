@@ -1,6 +1,7 @@
 """
 Централизованная конфигурация для скальпингового торгового бота
 Мультитаймфреймный анализ по инструкции: 15m контекст + 5m точный вход
+ИСПРАВЛЕННАЯ ВЕРСИЯ с правильным экспортом config
 """
 
 import os
@@ -45,7 +46,7 @@ class TimeframeConfig:
 
     # НОВЫЕ: Количество свечей для ДЕТАЛЬНОГО АНАЛИЗА
     DETAILED_CANDLES_15M: int = 200  # 200 свечей 15m = ~50 часов истории
-    DETAILED_CANDLES_5M: int = 500   # 500 свечей 5m = ~42 часа истории
+    DETAILED_CANDLES_5M: int = 500  # 500 свечей 5m = ~42 часа истории
 
     # Количество данных индикаторов для передачи в ИИ
     INDICATORS_HISTORY_POINTS: int = 100  # Последние 100 значений каждого индикатора
@@ -180,7 +181,7 @@ class AIConfig:
     # Таймауты (в секундах)
     DEFAULT_TIMEOUT: int = 40
     SELECTION_TIMEOUT: int = 40  # Для быстрого отбора
-    ANALYSIS_TIMEOUT: int = 60   # УВЕЛИЧЕН для детального анализа
+    ANALYSIS_TIMEOUT: int = 60  # УВЕЛИЧЕН для детального анализа
     HEALTH_CHECK_TIMEOUT: int = 15
 
     # Параметры запросов
@@ -189,7 +190,7 @@ class AIConfig:
 
     # Токены
     MAX_TOKENS_SELECTION: int = 1000  # Для отбора пар
-    MAX_TOKENS_ANALYSIS: int = 4000   # УВЕЛИЧЕН для детального анализа
+    MAX_TOKENS_ANALYSIS: int = 4000  # УВЕЛИЧЕН для детального анализа
     MAX_TOKENS_TEST: int = 5  # Для проверки подключения
 
     # Параметры генерации для скальпинга
@@ -353,22 +354,22 @@ class Config:
     @classmethod
     def load_from_env(cls) -> 'Config':
         """Загрузка конфигурации с учетом переменных окружения"""
-        config = cls()
+        config_instance = cls()
 
         # Здесь можно добавить загрузку из переменных окружения
         # Например:
         # if os.getenv('MIN_CONFIDENCE'):
-        #     config.trading.MIN_CONFIDENCE = int(os.getenv('MIN_CONFIDENCE'))
+        #     config_instance.trading.MIN_CONFIDENCE = int(os.getenv('MIN_CONFIDENCE'))
 
-        return config
+        return config_instance
 
 
-# Создание глобального экземпляра конфигурации
+# КРИТИЧЕСКИ ВАЖНО: Создание глобального экземпляра конфигурации
 config = Config()
 
-# Экспорт для удобства импорта
+# Экспорт для удобства импорта - ИСПРАВЛЕНО!
 __all__ = [
-    'config',
+    'config',  # Главный экспорт
     'Config',
     'SystemConfig',
     'TimeframeConfig',
@@ -380,3 +381,17 @@ __all__ = [
     'ProcessingConfig',
     'ScoringConfig'
 ]
+
+# Дополнительная проверка что config создан правильно
+if __name__ == "__main__":
+    print("✅ Конфигурация загружена успешно")
+    print(f"   Таймфреймы: {config.timeframe.CONTEXT_TF}m контекст, {config.timeframe.ENTRY_TF}m вход")
+    print(f"   ИИ таймауты: {config.ai.SELECTION_TIMEOUT}с отбор, {config.ai.ANALYSIS_TIMEOUT}с анализ")
+    print(f"   Торговля: мин.уверенность {config.trading.MIN_CONFIDENCE}%")
+    print(
+        f"   Обработка: батчи {config.processing.BATCH_SIZE}, параллелизм {config.processing.MAX_CONCURRENT_REQUESTS}")
+
+    if config.validate():
+        print("✅ Все настройки валидны")
+    else:
+        print("❌ Есть ошибки в настройках")
