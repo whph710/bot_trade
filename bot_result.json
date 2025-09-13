@@ -1,5 +1,5 @@
 {
   "result": "ERROR",
   "error": "The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()",
-  "total_time": 6.620135545730591
+  "total_time": 6.502439260482788
 }

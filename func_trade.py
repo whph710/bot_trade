@@ -1,6 +1,7 @@
 """
 Упрощенный модуль индикаторов - только необходимые функции
 Убраны дублирования и избыточные проверки
+ИСПРАВЛЕНО: устранена ошибка сравнения массивов numpy
 """
 
 import numpy as np
@@ -200,35 +201,41 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
 def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
     Быстрая проверка базового сигнала для первичного отбора
+    ИСПРАВЛЕНО: используются скалярные значения вместо массивов
     """
     if not indicators:
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-    price = indicators['price']
-    ema5 = indicators['ema5']
-    ema8 = indicators['ema8']
-    ema20 = indicators['ema20']
-    rsi = indicators['rsi']
-    macd_hist = indicators['macd_histogram']
-    volume_ratio = indicators['volume_ratio']
-    atr = indicators['atr']
+    # ИСПРАВЛЕНИЕ: получаем скалярные значения
+    price = safe_float(indicators.get('price', 0))
+    ema5 = safe_float(indicators.get('ema5', 0))
+    ema8 = safe_float(indicators.get('ema8', 0))
+    ema20 = safe_float(indicators.get('ema20', 0))
+    rsi = safe_float(indicators.get('rsi', 50))
+    macd_hist = safe_float(indicators.get('macd_histogram', 0))
+    volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
+    atr = safe_float(indicators.get('atr', 0))
+
+    # Дополнительные проверки на валидность
+    if price <= 0 or ema5 <= 0 or ema8 <= 0 or ema20 <= 0:
+        return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
     # Проверяем базовые условия
     conditions = []
 
-    # EMA выравнивание для лонга
-    if price > ema5 > ema8 > ema20:
+    # EMA выравнивание для лонга - все сравнения скалярных значений
+    if price > ema5 and ema5 > ema8 and ema8 > ema20:
         conditions.append(('LONG', 25))
 
-    # EMA выравнивание для шорта
-    if price < ema5 < ema8 < ema20:
+    # EMA выравнивание для шорта - все сравнения скалярных значений
+    if price < ema5 and ema5 < ema8 and ema8 < ema20:
         conditions.append(('SHORT', 25))
 
     # RSI в рабочем диапазоне
     if 30 < rsi < 70:
         conditions.append(('ANY', 15))
 
-    # MACD поддержка
+    # MACD поддержка - сравнение абсолютного значения скаляра
     if abs(macd_hist) > 0.001:  # Активный MACD
         conditions.append(('ANY', 15))
 
@@ -248,8 +255,8 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
     short_score = sum(score for direction, score in conditions if direction in ['SHORT', 'ANY'])
 
     if long_score > short_score and long_score >= config.MIN_CONFIDENCE:
-        return {'signal': True, 'confidence': long_score, 'direction': 'LONG'}
+        return {'signal': True, 'confidence': int(long_score), 'direction': 'LONG'}
     elif short_score > long_score and short_score >= config.MIN_CONFIDENCE:
-        return {'signal': True, 'confidence': short_score, 'direction': 'SHORT'}
+        return {'signal': True, 'confidence': int(short_score), 'direction': 'SHORT'}
     else:
-        return {'signal': False, 'confidence': max(long_score, short_score), 'direction': 'NONE'}
+        return {'signal': False, 'confidence': int(max(long_score, short_score)), 'direction': 'NONE'}
