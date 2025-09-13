@@ -139,9 +139,9 @@ class SimplifiedScalpingBot:
         if not ai_data:
             logger.warning("   Нет данных для ИИ отбора")
             return []
-
         # ИИ отбор
         selected_pairs = await ai_select_pairs(ai_data)
+        print(selected_pairs)
 
         elapsed = time.time() - start_time
         logger.info(f"   ✅ ИИ выбрал {len(selected_pairs)} пар за {elapsed:.1f}сек")

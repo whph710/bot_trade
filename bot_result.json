@@ -1,5 +1,24 @@
 {
-  "result": "ERROR",
-  "error": "The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()",
-  "total_time": 6.502439260482788
+  "result": "NO_FINAL_SIGNALS",
+  "timing": {
+    "stage1_scan": 6.31,
+    "stage2_ai_select": 0.62,
+    "stage3_analysis": 1.41,
+    "total": 8.34
+  },
+  "stats": {
+    "pairs_processed": 200,
+    "promising_found": 9,
+    "ai_selected": 5,
+    "final_signals": 0,
+    "processing_speed": 31.7
+  },
+  "selected_pairs": [
+    "BNBUSDT",
+    "ENSUSDT",
+    "1000000MOGUSDT",
+    "ACEUSDT",
+    "AGLDUSDT"
+  ],
+  "signals": []
 }

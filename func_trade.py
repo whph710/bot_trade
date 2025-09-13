@@ -1,7 +1,6 @@
 """
-Упрощенный модуль индикаторов - только необходимые функции
-Убраны дублирования и избыточные проверки
-ИСПРАВЛЕНО: устранена ошибка сравнения массивов numpy
+Исправленный модуль индикаторов - устранена ошибка сравнения массивов numpy
+Все сравнения теперь используют только скалярные значения
 """
 
 import numpy as np
@@ -12,6 +11,13 @@ from config import config
 def safe_float(value) -> float:
     """Безопасное преобразование в float"""
     try:
+        # Если это numpy array, берем последний элемент
+        if isinstance(value, np.ndarray):
+            if len(value) > 0:
+                value = value[-1]
+            else:
+                return 0.0
+
         result = float(value)
         return 0.0 if (np.isnan(result) or np.isinf(result)) else result
     except:
@@ -107,7 +113,7 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
 def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
     """
     Базовые индикаторы для быстрого сканирования
-    Возвращает только текущие значения
+    Возвращает только текущие значения как скаляры
     """
     if len(candles) < 20:
         return {}
@@ -133,6 +139,7 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
     avg_volume = np.mean(volumes[-20:])
     volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1.0
 
+    # КРИТИЧЕСКИ ВАЖНО: возвращаем только скалярные значения!
     return {
         'price': safe_float(closes[-1]),
         'ema5': safe_float(ema5[-1]),
@@ -142,7 +149,7 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
         'macd_line': safe_float(macd['line'][-1]),
         'macd_signal': safe_float(macd['signal'][-1]),
         'macd_histogram': safe_float(macd['histogram'][-1]),
-        'atr': atr,
+        'atr': safe_float(atr),
         'volume_ratio': safe_float(volume_ratio)
     }
 
@@ -183,7 +190,7 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
         'macd_histogram_history': [safe_float(x) for x in macd['histogram'][-history_length:]],
         'volume_ratio_history': [safe_float(x) for x in volume_ratios[-history_length:]] if len(volume_ratios) >= history_length else [],
 
-        # Текущие значения
+        # Текущие значения - ТОЛЬКО СКАЛЯРЫ!
         'current': {
             'price': safe_float(closes[-1]),
             'ema5': safe_float(ema5[-1]),
@@ -192,71 +199,89 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
             'rsi': safe_float(rsi[-1]),
             'macd_line': safe_float(macd['line'][-1]),
             'macd_histogram': safe_float(macd['histogram'][-1]),
-            'volume_ratio': safe_float(volume_ratios[-1]) if volume_ratios else 1.0,
-            'atr': calculate_atr(candles, config.ATR_PERIOD)
+            'volume_ratio': safe_float(volume_ratios[-1]) if len(volume_ratios) > 0 else 1.0,
+            'atr': safe_float(calculate_atr(candles, config.ATR_PERIOD))
         }
     }
 
 
 def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Быстрая проверка базового сигнала для первичного отбора
-    ИСПРАВЛЕНО: используются скалярные значения вместо массивов
+    ПОЛНОСТЬЮ ПЕРЕПИСАННАЯ функция проверки базового сигнала
+    Использует ТОЛЬКО скалярные значения, никаких массивов numpy!
     """
     if not indicators:
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-    # ИСПРАВЛЕНИЕ: получаем скалярные значения
-    price = safe_float(indicators.get('price', 0))
-    ema5 = safe_float(indicators.get('ema5', 0))
-    ema8 = safe_float(indicators.get('ema8', 0))
-    ema20 = safe_float(indicators.get('ema20', 0))
-    rsi = safe_float(indicators.get('rsi', 50))
-    macd_hist = safe_float(indicators.get('macd_histogram', 0))
-    volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
-    atr = safe_float(indicators.get('atr', 0))
+    # Извлекаем все значения как скаляры с дополнительной защитой
+    try:
+        price = safe_float(indicators.get('price', 0))
+        ema5 = safe_float(indicators.get('ema5', 0))
+        ema8 = safe_float(indicators.get('ema8', 0))
+        ema20 = safe_float(indicators.get('ema20', 0))
+        rsi = safe_float(indicators.get('rsi', 50))
+        macd_hist = safe_float(indicators.get('macd_histogram', 0))
+        volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
+        atr = safe_float(indicators.get('atr', 0))
 
-    # Дополнительные проверки на валидность
-    if price <= 0 or ema5 <= 0 or ema8 <= 0 or ema20 <= 0:
+        # Проверяем что все значения валидны
+        if any(val <= 0 for val in [price, ema5, ema8, ema20]) or any(np.isnan(val) or np.isinf(val) for val in [price, ema5, ema8, ema20, rsi, macd_hist, volume_ratio, atr]):
+            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+    except Exception as e:
+        print(f"Ошибка извлечения значений индикаторов: {e}")
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-    # Проверяем базовые условия
+    # Проверяем базовые условия - теперь ВСЕ сравнения скалярные
     conditions = []
 
-    # EMA выравнивание для лонга - все сравнения скалярных значений
+    # EMA выравнивание для лонга
     if price > ema5 and ema5 > ema8 and ema8 > ema20:
         conditions.append(('LONG', 25))
 
-    # EMA выравнивание для шорта - все сравнения скалярных значений
+    # EMA выравнивание для шорта
     if price < ema5 and ema5 < ema8 and ema8 < ema20:
         conditions.append(('SHORT', 25))
 
     # RSI в рабочем диапазоне
-    if 30 < rsi < 70:
+    if 30.0 < rsi < 70.0:
         conditions.append(('ANY', 15))
 
-    # MACD поддержка - сравнение абсолютного значения скаляра
-    if abs(macd_hist) > 0.001:  # Активный MACD
+    # MACD поддержка - активный сигнал
+    if abs(macd_hist) > 0.001:
         conditions.append(('ANY', 15))
 
     # Объем подтверждение
     if volume_ratio >= config.MIN_VOLUME_RATIO:
         conditions.append(('ANY', 20))
 
-    # ATR достаточный
-    if atr > 0.001:  # Минимальная волатильность
+    # ATR достаточный для торговли
+    if atr > 0.001:
         conditions.append(('ANY', 10))
 
     if not conditions:
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-    # Определяем направление
+    # Считаем очки для каждого направления
     long_score = sum(score for direction, score in conditions if direction in ['LONG', 'ANY'])
     short_score = sum(score for direction, score in conditions if direction in ['SHORT', 'ANY'])
 
+    # Определяем результат
     if long_score > short_score and long_score >= config.MIN_CONFIDENCE:
-        return {'signal': True, 'confidence': int(long_score), 'direction': 'LONG'}
+        return {
+            'signal': True,
+            'confidence': int(long_score),
+            'direction': 'LONG'
+        }
     elif short_score > long_score and short_score >= config.MIN_CONFIDENCE:
-        return {'signal': True, 'confidence': int(short_score), 'direction': 'SHORT'}
+        return {
+            'signal': True,
+            'confidence': int(short_score),
+            'direction': 'SHORT'
+        }
     else:
-        return {'signal': False, 'confidence': int(max(long_score, short_score)), 'direction': 'NONE'}
+        return {
+            'signal': False,
+            'confidence': int(max(long_score, short_score)),
+            'direction': 'NONE'
+        }
