@@ -1,5 +1,5 @@
 """
-Упрощенный скальпинговый бот - 3 четких этапа без избыточности
+Исправленный скальпинговый бот - 3 четких этапа без избыточности
 ЭТАП 1: Быстрое сканирование всех пар → базовые индикаторы
 ЭТАП 2: ИИ отбор лучших (15m данные + индикаторы) → 3-5 пар
 ЭТАП 3: Детальный анализ финалистов (полные 5m+15m данные) → сигналы
@@ -12,9 +12,10 @@ import json
 from typing import List, Dict, Any
 
 from config import config
-from deepseek import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ:
+from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal
-from func_async import ai_select_pairs, ai_analyze_pair
+from deepseek import ai_select_pairs, ai_analyze_pair
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')

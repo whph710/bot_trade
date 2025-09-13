@@ -1,11 +1,12 @@
 """
-Упрощенный ИИ клиент для DeepSeek
-Убрано дублирование, оставлены только 2 функции
+Исправленный ИИ клиент для DeepSeek
+Убрано дублирование, исправлены критические ошибки
 """
 
 import asyncio
 import json
 import logging
+import re
 from typing import List, Dict
 from openai import AsyncOpenAI
 from config import config
@@ -25,11 +26,31 @@ def load_prompt(filename: str) -> str:
         except FileNotFoundError:
             # Дефолтный промпт если файл не найден
             if 'select' in filename:
-                _prompts_cache[
-                    filename] = "Выбери 3-5 лучших торговых пар из предоставленных данных. Верни JSON: {\"pairs\": [\"PAIR1\", \"PAIR2\", \"PAIR3\"]}"
+                _prompts_cache[filename] = """Ты эксперт-селектор торговых возможностей. Выбери 3-5 лучших торговых пар из предоставленных данных.
+
+КРИТЕРИИ ОТБОРА:
+1. EMA выравнивание (ema5 > ema8 > ema20 для лонга, обратное для шорта)
+2. RSI в рабочем диапазоне 30-70
+3. MACD гистограмма активна (не близко к нулю)
+4. Объем выше среднего (volume_ratio > 1.2)
+5. Высокая базовая уверенность (confidence > 70)
+
+СТРОГО ВЕРНИ JSON: {"pairs": ["SYMBOL1", "SYMBOL2", "SYMBOL3"]}
+Если подходящих пар нет: {"pairs": []}"""
             else:
-                _prompts_cache[
-                    filename] = "Проанализируй торговые данные и дай рекомендацию LONG/SHORT/NO_SIGNAL с уверенностью 0-100."
+                _prompts_cache[filename] = """Ты профессиональный трейдер-скальпер. Анализируй предоставленные данные и давай точные торговые рекомендации.
+
+АНАЛИЗИРУЙ:
+1. ТРЕНД 15М: общее направление рынка
+2. СИГНАЛ 5М: точка входа, свечные паттерны
+3. ИНДИКАТОРЫ: EMA выравнивание, RSI, MACD подтверждение
+4. ОБЪЕМ: подтверждение движения
+5. СИНХРОНИЗАЦИЯ: совпадение трендов 5м и 15м
+
+ФОРМАТ ОТВЕТА:
+СИГНАЛ: LONG/SHORT/NO_SIGNAL
+УВЕРЕННОСТЬ: 85%
+ОБОСНОВАНИЕ: краткое объяснение решения (2-3 предложения)"""
 
     return _prompts_cache[filename]
 
@@ -69,6 +90,101 @@ async def ai_select_pairs(market_data: List[Dict]) -> List[str]:
             base_url=config.DEEPSEEK_URL
         )
 
+        prompt = load_prompt(config.SELECTION_PROMPT)
+
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=config.DEEPSEEK_MODEL,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json.dumps(top_data, separators=(',', ':'))}
+                ],
+                max_tokens=500,
+                temperature=0.3
+            ),
+            timeout=config.API_TIMEOUT
+        )
+
+        result = response.choices[0].message.content
+        logger.info(f"ИИ отбор ответ: {result[:100]}...")
+
+        # Парсим ответ
+        try:
+            # Ищем JSON в ответе
+            json_match = re.search(r'\{[^}]*"pairs"[^}]*\}', result)
+            if json_match:
+                json_data = json.loads(json_match.group(0))
+                pairs = json_data.get('pairs', [])
+                return pairs[:config.MAX_FINAL_PAIRS]
+        except:
+            pass
+
+        # Альтернативный парсинг - ищем символы
+        symbols = re.findall(r'[A-Z]{3,10}USDT', result)
+        return list(set(symbols))[:config.MAX_FINAL_PAIRS]
+
+    except Exception as e:
+        logger.error(f"Ошибка ИИ отбора: {e}")
+        # Фаллбек
+        sorted_pairs = sorted(market_data, key=lambda x: x.get('confidence', 0), reverse=True)
+        return [pair['symbol'] for pair in sorted_pairs[:3]]
+
+
+async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
+                          indicators_5m: Dict, indicators_15m: Dict) -> Dict:
+    """
+    Детальный ИИ анализ конкретной пары
+    Получает полные данные 5m + 15m + индикаторы, возвращает торговый сигнал
+    """
+    if not config.DEEPSEEK_API_KEY:
+        return {
+            'symbol': symbol,
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'analysis': 'ИИ недоступен'
+        }
+
+    try:
+        # Подготовка полных данных для детального анализа
+        analysis_data = {
+            'symbol': symbol,
+            'timeframes': {
+                '5m': {
+                    'recent_candles': data_5m[-20:] if len(data_5m) >= 20 else data_5m,
+                    'indicators': {
+                        'ema5': indicators_5m.get('ema5_history', [])[-20:],
+                        'ema8': indicators_5m.get('ema8_history', [])[-20:],
+                        'ema20': indicators_5m.get('ema20_history', [])[-20:],
+                        'rsi': indicators_5m.get('rsi_history', [])[-20:],
+                        'macd_histogram': indicators_5m.get('macd_histogram_history', [])[-20:],
+                        'volume_ratio': indicators_5m.get('volume_ratio_history', [])[-20:]
+                    }
+                },
+                '15m': {
+                    'recent_candles': data_15m[-10:] if len(data_15m) >= 10 else data_15m,
+                    'indicators': {
+                        'ema5': indicators_15m.get('ema5_history', [])[-10:],
+                        'ema8': indicators_15m.get('ema8_history', [])[-10:],
+                        'ema20': indicators_15m.get('ema20_history', [])[-10:],
+                        'rsi': indicators_15m.get('rsi_history', [])[-10:],
+                        'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-10:]
+                    }
+                }
+            },
+            'current': {
+                'price': indicators_5m.get('current', {}).get('price', 0),
+                'trend_5m': 'UP' if indicators_5m.get('current', {}).get('ema5', 0) > indicators_5m.get('current', {}).get('ema20', 0) else 'DOWN',
+                'trend_15m': 'UP' if indicators_15m.get('current', {}).get('ema5', 0) > indicators_15m.get('current', {}).get('ema20', 0) else 'DOWN',
+                'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0),
+                'atr': indicators_5m.get('current', {}).get('atr', 0)
+            }
+        }
+
+        client = AsyncOpenAI(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_URL
+        )
+
         prompt = load_prompt(config.ANALYSIS_PROMPT)
 
         response = await asyncio.wait_for(
@@ -97,7 +213,6 @@ async def ai_select_pairs(market_data: List[Dict]) -> List[str]:
             signal = 'SHORT'
 
         # Ищем числовую уверенность
-        import re
         confidence_match = re.search(r'(\d{1,3})%?', result)
         if confidence_match:
             confidence = int(confidence_match.group(1))
@@ -120,105 +235,3 @@ async def ai_select_pairs(market_data: List[Dict]) -> List[str]:
             'confidence': 0,
             'analysis': f'Ошибка анализа: {str(e)}'
         }
-        base_url = config.DEEPSEEK_URL
-    )
-
-    prompt = load_prompt(config.SELECTION_PROMPT)
-
-    response = await asyncio.wait_for(
-    client.chat.completions.create(
-        model=config.DEEPSEEK_MODEL,
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": json.dumps(top_data, separators=(',', ':'))}
-        ],
-        max_tokens=500,
-        temperature=0.3
-    ),
-    timeout = config.API_TIMEOUT
-
-)
-
-result = response.choices[0].message.content
-logger.info(f"ИИ отбор ответ: {result[:100]}...")
-
-# Парсим ответ
-try:
-    # Ищем JSON в ответе
-    import re
-
-    json_match = re.search(r'\{[^}]*"pairs"[^}]*\}', result)
-    if json_match:
-        json_data = json.loads(json_match.group(0))
-        pairs = json_data.get('pairs', [])
-        return pairs[:config.MAX_FINAL_PAIRS]
-except:
-    pass
-
-# Альтернативный парсинг - ищем символы
-symbols = re.findall(r'[A-Z]{3,10}USDT', result)
-return list(set(symbols))[:config.MAX_FINAL_PAIRS]
-
-except Exception as e:
-logger.error(f"Ошибка ИИ отбора: {e}")
-# Фаллбек
-sorted_pairs = sorted(market_data, key=lambda x: x.get('confidence', 0), reverse=True)
-return [pair['symbol'] for pair in sorted_pairs[:3]]
-
-
-async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
-                          indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-    """
-    Детальный ИИ анализ конкретной пары
-    Получает полные данные 5m + 15m + индикаторы, возвращает торговый сигнал
-    """
-    if not config.DEEPSEEK_API_KEY:
-        return {
-            'symbol': symbol,
-            'signal': 'NO_SIGNAL',
-            'confidence': 0,
-            'analysis': 'ИИ недоступен'
-        }
-
-    try:
-        # Подготовка полных данных для детального анализа
-        analysis_data = {
-            'symbol': symbol,
-            'timeframes': {
-                '5m': {
-                    'recent_candles': data_5m[-20:] if len(data_5m) >= 20 else data_5m,  # Последние 20 свечей
-                    'indicators': {
-                        'ema5': indicators_5m.get('ema5_history', [])[-20:],
-                        'ema8': indicators_5m.get('ema8_history', [])[-20:],
-                        'ema20': indicators_5m.get('ema20_history', [])[-20:],
-                        'rsi': indicators_5m.get('rsi_history', [])[-20:],
-                        'macd_histogram': indicators_5m.get('macd_histogram_history', [])[-20:],
-                        'volume_ratio': indicators_5m.get('volume_ratio_history', [])[-20:]
-                    }
-                },
-                '15m': {
-                    'recent_candles': data_15m[-10:] if len(data_15m) >= 10 else data_15m,  # Последние 10 свечей  
-                    'indicators': {
-                        'ema5': indicators_15m.get('ema5_history', [])[-10:],
-                        'ema8': indicators_15m.get('ema8_history', [])[-10:],
-                        'ema20': indicators_15m.get('ema20_history', [])[-10:],
-                        'rsi': indicators_15m.get('rsi_history', [])[-10:],
-                        'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-10:]
-                    }
-                }
-            },
-            'current': {
-                'price': indicators_5m.get('current', {}).get('price', 0),
-                'trend_5m': 'UP' if indicators_5m.get('current', {}).get('ema5', 0) > indicators_5m.get('current',
-                                                                                                        {}).get('ema20',
-                                                                                                                0) else 'DOWN',
-                'trend_15m': 'UP' if indicators_15m.get('current', {}).get('ema5', 0) > indicators_15m.get('current',
-                                                                                                           {}).get(
-                    'ema20', 0) else 'DOWN',
-                'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0),
-                'atr': indicators_5m.get('current', {}).get('atr', 0)
-            }
-        }
-
-        client = AsyncOpenAI(
-            api_key=config.DEEPSEEK_API_KEY,
