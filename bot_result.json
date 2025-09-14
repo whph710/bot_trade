@@ -1,8 +1,8 @@
 {
   "result": "NO_AI_SELECTION",
-  "stage1_time": 11.949384689331055,
-  "stage2_time": 0.8545458316802979,
-  "signal_pairs": 21,
-  "total_time": 12.803930521011353,
+  "stage1_time": 12.699175834655762,
+  "stage2_time": 0.699714183807373,
+  "signal_pairs": 24,
+  "total_time": 13.398890018463135,
   "message": "ИИ не выбрал подходящих пар"
 }

@@ -4,7 +4,7 @@
 - Правильный API URL с /v1
 - Принудительный JSON режим
 - Надежный парсинг JSON
-- Детальное логирование
+- Детальное логирование с временными метками
 - Умный fallback
 - Сохранен полный объем данных для анализа
 """
@@ -12,11 +12,16 @@
 import asyncio
 import json
 import logging
-import re
 from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 from config import config
 
+# Настройка логирования с временными метками
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Кэш промптов
@@ -111,10 +116,10 @@ def load_prompt(filename: str) -> str:
 def extract_json_from_text(text: str) -> Optional[Dict]:
     """
     ИСПРАВЛЕННАЯ функция извлечения JSON из текста ИИ
-    Более надежная чем регексы
     """
     try:
         # Убираем возможные markdown блоки
+        import re
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*', '', text)
 
@@ -212,7 +217,7 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
     - Детальное логирование
     - Умный fallback
     """
-    logger.info(f"🤖 ИИ отбор: анализируем {len(pairs_data)} пар с сигналами")
+    logger.info(f"ИИ отбор: анализируем {len(pairs_data)} пар с сигналами")
 
     if not config.DEEPSEEK_API_KEY:
         logger.warning("DeepSeek API ключ отсутствует, используется fallback")
@@ -223,10 +228,9 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
         return []
 
     try:
-        # Ограничиваем количество пар для одного запроса (но сохраняем все данные!)
+        # Ограничиваем количество пар для одного запроса
         if len(pairs_data) > config.MAX_BULK_PAIRS:
             logger.info(f"Ограничиваем до {config.MAX_BULK_PAIRS} пар для ИИ анализа")
-            # Берем топ по уверенности
             pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
 
         # Подготавливаем ПОЛНЫЕ данные для ИИ
@@ -237,15 +241,15 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
             candles_15m = item.get('candles_15m', [])
             indicators_15m = item.get('indicators_15m', {})
 
-            # СОХРАНЯЕМ ПОЛНЫЙ ОБЪЕМ ДАННЫХ - КРИТИЧНО ДЛЯ АНАЛИЗА!
+            # СОХРАНЯЕМ ПОЛНЫЙ ОБЪЕМ ДАННЫХ
             full_market_data[symbol] = {
                 'base_signal': {
                     'direction': item.get('direction', 'NONE'),
                     'confidence': item.get('confidence', 0)
                 },
-                'candles_15m': candles_15m[-32:],  # Полные 32 свечи
+                'candles_15m': candles_15m[-32:],
                 'indicators': {
-                    'ema5': indicators_15m.get('ema5_history', [])[-32:],      # Полная история
+                    'ema5': indicators_15m.get('ema5_history', [])[-32:],
                     'ema8': indicators_15m.get('ema8_history', [])[-32:],
                     'ema20': indicators_15m.get('ema20_history', [])[-32:],
                     'rsi': indicators_15m.get('rsi_history', [])[-32:],
@@ -260,16 +264,21 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
         data_size = len(json_data)
         logger.info(f"Размер данных для ИИ: {data_size:,} байт ({data_size/1024:.1f} KB)")
 
-        # ✅ ИСПРАВЛЕННЫЙ клиент с правильным URL
+        # Проверяем что есть данные для передачи
+        if not full_market_data:
+            logger.error("Нет подготовленных данных для ИИ")
+            return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+
+        # ИСПРАВЛЕННЫЙ клиент с правильным URL
         client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_URL  # Уже исправлен в config.py
+            base_url=config.DEEPSEEK_URL
         )
 
         prompt = load_prompt(config.SELECTION_PROMPT)
-        logger.info(f"Отправляем запрос к ИИ: {len(pairs_data)} пар, промпт {len(prompt)} символов")
+        logger.info(f"Отправляем запрос к ИИ: {len(pairs_data)} пар")
 
-        # ✅ ИСПРАВЛЕННЫЙ запрос с принудительным JSON
+        # ИСПРАВЛЕННЫЙ запрос с принудительным JSON
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=config.DEEPSEEK_MODEL,
@@ -277,7 +286,7 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": json_data}
                 ],
-                response_format={"type": "json_object"},  # ✅ ПРИНУДИТЕЛЬНЫЙ JSON
+                response_format={"type": "json_object"},
                 max_tokens=config.AI_MAX_TOKENS_SELECT,
                 temperature=config.AI_TEMPERATURE_SELECT
             ),
@@ -286,17 +295,16 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
 
         result_text = response.choices[0].message.content
         logger.info(f"ИИ ответ получен: {len(result_text)} символов")
-        logger.debug(f"Полный ответ ИИ: {result_text}")
 
-        # ✅ ИСПРАВЛЕННЫЙ парсинг JSON
-        json_data = extract_json_from_text(result_text)
+        # ИСПРАВЛЕННЫЙ парсинг JSON
+        json_result = extract_json_from_text(result_text)
 
-        if json_data:
-            selected_pairs = json_data.get('selected_pairs', [])
-            reasoning = json_data.get('reasoning', 'Нет обоснования')
+        if json_result:
+            selected_pairs = json_result.get('selected_pairs', [])
+            reasoning = json_result.get('reasoning', 'Нет обоснования')
 
             if selected_pairs:
-                logger.info(f"✅ ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
+                logger.info(f"ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
                 logger.info(f"Обоснование ИИ: {reasoning}")
                 return selected_pairs[:config.MAX_FINAL_PAIRS]
             else:
@@ -320,9 +328,8 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                           indicators_5m: Dict, indicators_15m: Dict) -> Dict:
     """
     ИСПРАВЛЕННЫЙ детальный ИИ анализ конкретной пары
-    Сохранены полные данные для качественного анализа
     """
-    logger.info(f"🔍 ИИ анализ {symbol}: {len(data_5m)} свечей 5м, {len(data_15m)} свечей 15м")
+    logger.info(f"ИИ анализ {symbol}: {len(data_5m)} свечей 5м, {len(data_15m)} свечей 15м")
 
     if not config.DEEPSEEK_API_KEY:
         logger.warning(f"DeepSeek API недоступен для анализа {symbol}")
@@ -340,13 +347,13 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
         current_price = indicators_5m.get('current', {}).get('price', 0)
         atr_5m = indicators_5m.get('current', {}).get('atr', 0)
 
-        # ПОЛНЫЕ данные для детального анализа - НЕ УРЕЗАЕМ!
+        # ПОЛНЫЕ данные для детального анализа
         analysis_data = {
             'symbol': symbol,
             'current_price': current_price,
             'timeframes': {
                 '5m': {
-                    'candles': data_5m[-100:],  # Последние 100 свечей (было 50)
+                    'candles': data_5m[-100:],
                     'indicators': {
                         'ema5': indicators_5m.get('ema5_history', [])[-100:],
                         'ema8': indicators_5m.get('ema8_history', [])[-100:],
@@ -357,7 +364,7 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                     }
                 },
                 '15m': {
-                    'candles': data_15m[-50:],  # Последние 50 свечей (было 30)
+                    'candles': data_15m[-50:],
                     'indicators': {
                         'ema5': indicators_15m.get('ema5_history', [])[-50:],
                         'ema8': indicators_15m.get('ema8_history', [])[-50:],
@@ -379,9 +386,6 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
             }
         }
 
-        data_size = len(json.dumps(analysis_data, separators=(',', ':')))
-        logger.debug(f"Размер данных анализа {symbol}: {data_size:,} байт")
-
         client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_URL
@@ -389,7 +393,7 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
 
         prompt = load_prompt(config.ANALYSIS_PROMPT)
 
-        # ✅ ИСПРАВЛЕННЫЙ запрос с принудительным JSON
+        # ИСПРАВЛЕННЫЙ запрос с принудительным JSON
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=config.DEEPSEEK_MODEL,
@@ -397,7 +401,7 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": json.dumps(analysis_data, separators=(',', ':'))}
                 ],
-                response_format={"type": "json_object"},  # ✅ ПРИНУДИТЕЛЬНЫЙ JSON
+                response_format={"type": "json_object"},
                 max_tokens=config.AI_MAX_TOKENS_ANALYZE,
                 temperature=config.AI_TEMPERATURE_ANALYZE
             ),
@@ -406,23 +410,21 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
 
         result_text = response.choices[0].message.content
         logger.info(f"ИИ анализ {symbol}: получен ответ {len(result_text)} символов")
-        logger.debug(f"Ответ ИИ для {symbol}: {result_text}")
 
-        # ✅ ИСПРАВЛЕННЫЙ парсинг JSON
-        json_data = extract_json_from_text(result_text)
+        # ИСПРАВЛЕННЫЙ парсинг JSON
+        json_result = extract_json_from_text(result_text)
 
-        if json_data:
+        if json_result:
             # Валидация и обработка ответа
-            signal = json_data.get('signal', 'NO_SIGNAL').upper()
-            confidence = max(0, min(100, int(json_data.get('confidence', 0))))
-            entry_price = float(json_data.get('entry_price', current_price))
-            stop_loss = float(json_data.get('stop_loss', 0))
-            take_profit = float(json_data.get('take_profit', 0))
-            analysis = json_data.get('analysis', 'Анализ от ИИ')
+            signal = json_result.get('signal', 'NO_SIGNAL').upper()
+            confidence = max(0, min(100, int(json_result.get('confidence', 0))))
+            entry_price = float(json_result.get('entry_price', current_price))
+            stop_loss = float(json_result.get('stop_loss', 0))
+            take_profit = float(json_result.get('take_profit', 0))
+            analysis = json_result.get('analysis', 'Анализ от ИИ')
 
             # Дополнительная валидация уровней
             if signal in ['LONG', 'SHORT'] and entry_price > 0:
-                # Проверяем разумность уровней
                 if stop_loss <= 0:
                     stop_loss = entry_price * 0.98 if signal == 'LONG' else entry_price * 1.02
                 if take_profit <= 0:
@@ -442,11 +444,10 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                 'ai_generated': True
             }
 
-            logger.info(f"✅ {symbol}: {signal} ({confidence}%) Вход: {entry_price:.4f}")
+            logger.info(f"{symbol}: {signal} ({confidence}%) Вход: {entry_price:.4f}")
             return result
         else:
             logger.error(f"Не удалось извлечь JSON из анализа {symbol}")
-            logger.error(f"Проблемный ответ: {result_text[:300]}...")
 
     except asyncio.TimeoutError:
         logger.error(f"Таймаут анализа {symbol} ({config.API_TIMEOUT}с)")
@@ -458,7 +459,7 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
         'symbol': symbol,
         'signal': 'NO_SIGNAL',
         'confidence': 0,
-        'entry_price': current_price,
+        'entry_price': current_price if 'current_price' in locals() else 0,
         'stop_loss': 0,
         'take_profit': 0,
         'analysis': f'Ошибка ИИ анализа: {str(e) if "e" in locals() else "неизвестная ошибка"}',
