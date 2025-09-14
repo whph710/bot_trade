@@ -12,7 +12,8 @@ class Config:
     """Конфигурация переписанного бота"""
 
     # === API НАСТРОЙКИ ===
-    DEEPSEEK_API_KEY = os.getenv('DEEPSEEK')  # Исправлено: ищем DEEPSEEK
+    # ИСПРАВЛЕНО: правильная переменная окружения
+    DEEPSEEK_API_KEY ="sk-dda4182a1cea4a55b9f7a537f0f500b9" #os.getenv('DEEPSEEK_API_KEY') or os.getenv('DEEPSEEK')
     DEEPSEEK_URL = 'https://api.deepseek.com/v1'
     DEEPSEEK_MODEL = 'deepseek-chat'
 
@@ -66,15 +67,47 @@ class Config:
 # Глобальный экземпляр
 config = Config()
 
-# Проверка критических настроек
-if not config.DEEPSEEK_API_KEY:
-    print("WARNING: DEEPSEEK API ключ не найден!")
-    print("Установите переменную окружения: export DEEPSEEK=your_api_key")
-else:
-    print("INFO: DeepSeek API ключ найден")
+# ИСПРАВЛЕННАЯ проверка критических настроек
+def check_config():
+    """Проверка и отображение конфигурации"""
+    print("=" * 50)
+    print("ПРОВЕРКА КОНФИГУРАЦИИ БОТА")
+    print("=" * 50)
 
-print(f"INFO: Конфигурация бота загружена")
-print(f"API URL: {config.DEEPSEEK_URL}")
-print(f"Этапы: {config.QUICK_SCAN_15M}→{config.AI_BULK_15M}→{config.FINAL_5M}/{config.FINAL_15M} свечей")
-print(f"ИИ таймаут: {config.API_TIMEOUT}сек")
-print(f"Финальных пар: максимум {config.MAX_FINAL_PAIRS}")
+    # Проверка API ключа
+    if config.DEEPSEEK_API_KEY:
+        print(f"✅ DeepSeek API ключ: найден (длина: {len(config.DEEPSEEK_API_KEY)} символов)")
+        # Показываем первые и последние символы для проверки
+        masked_key = config.DEEPSEEK_API_KEY[:8] + "..." + config.DEEPSEEK_API_KEY[-8:]
+        print(f"   Ключ: {masked_key}")
+    else:
+        print("❌ DeepSeek API ключ: НЕ НАЙДЕН!")
+        print("   Установите переменную окружения:")
+        print("   export DEEPSEEK_API_KEY=your_api_key")
+        print("   или")
+        print("   export DEEPSEEK=your_api_key")
+
+    print(f"📡 API URL: {config.DEEPSEEK_URL}")
+    print(f"🤖 Модель: {config.DEEPSEEK_MODEL}")
+
+    print(f"\n⚙️ ЭТАПЫ ОБРАБОТКИ:")
+    print(f"   Этап 1 (фильтр): {config.QUICK_SCAN_15M} свечей 15м")
+    print(f"   Этап 2 (ИИ отбор): {config.AI_BULK_15M} свечей")
+    print(f"   Этап 3 (анализ): {config.FINAL_5M}/15м и {config.FINAL_15M}/15м свечей")
+
+    print(f"\n🎯 ТОРГОВЫЕ ЛИМИТЫ:")
+    print(f"   Минимальная уверенность: {config.MIN_CONFIDENCE}%")
+    print(f"   Минимальный volume ratio: {config.MIN_VOLUME_RATIO}")
+    print(f"   Максимум финальных пар: {config.MAX_FINAL_PAIRS}")
+    print(f"   Максимум пар для ИИ: {config.MAX_BULK_PAIRS}")
+
+    print(f"\n⚡ ПРОИЗВОДИТЕЛЬНОСТЬ:")
+    print(f"   Таймаут ИИ: {config.API_TIMEOUT}сек")
+    print(f"   Максимум параллельных запросов: {config.MAX_CONCURRENT}")
+
+    print("=" * 50)
+
+    return bool(config.DEEPSEEK_API_KEY)
+
+# Запуск проверки при импорте
+has_api_key = check_config()

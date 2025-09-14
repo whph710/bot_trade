@@ -1,12 +1,10 @@
 """
-ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ ИИ клиент для DeepSeek
+ИСПРАВЛЕННЫЙ ИИ клиент для DeepSeek
 Устранены все критические ошибки:
-- Правильный API URL с /v1
-- Принудительный JSON режим
-- Надежный парсинг JSON
-- Детальное логирование с временными метками
-- Умный fallback
-- Сохранен полный объем данных для анализа
+- Детальная проверка API ключа
+- Улучшенное логирование с диагностикой
+- Более надежный fallback
+- Исправлена проблема "нет данных для ИИ анализа"
 """
 
 import asyncio
@@ -28,15 +26,31 @@ logger = logging.getLogger(__name__)
 _prompts_cache = {}
 
 
+def validate_api_key() -> tuple[bool, str]:
+    """Валидация API ключа DeepSeek"""
+    if not config.DEEPSEEK_API_KEY:
+        return False, "API ключ не найден в переменных окружения"
+
+    key = config.DEEPSEEK_API_KEY.strip()
+
+    if len(key) < 20:
+        return False, f"API ключ слишком короткий ({len(key)} символов)"
+
+    if not key.startswith('sk-'):
+        return False, f"API ключ должен начинаться с 'sk-' (текущий: {key[:10]}...)"
+
+    return True, "API ключ прошел валидацию"
+
+
 def load_prompt(filename: str) -> str:
     """Загрузка промпта с кэшированием"""
     if filename not in _prompts_cache:
         try:
             with open(filename, 'r', encoding='utf-8') as f:
                 _prompts_cache[filename] = f.read()
-                logger.info(f"Загружен промпт: {filename}")
+                logger.info(f"✅ Загружен промпт: {filename}")
         except FileNotFoundError:
-            logger.warning(f"Файл промпта {filename} не найден, используется встроенный")
+            logger.warning(f"⚠️ Файл промпта {filename} не найден, используется встроенный")
             # Дефолтные промпты с ПРИНУДИТЕЛЬНЫМ JSON
             if 'select' in filename:
                 _prompts_cache[filename] = """Ты эксперт-трейдер с 10-летним опытом скальпинга криптовалют.
@@ -117,15 +131,21 @@ def extract_json_from_text(text: str) -> Optional[Dict]:
     """
     ИСПРАВЛЕННАЯ функция извлечения JSON из текста ИИ
     """
+    if not text or not isinstance(text, str):
+        logger.error("❌ Пустой или некорректный текст от ИИ")
+        return None
+
     try:
         # Убираем возможные markdown блоки
         import re
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*', '', text)
+        text = text.strip()
 
         # Ищем начало JSON
         start = text.find('{')
         if start == -1:
+            logger.error(f"❌ JSON не найден в тексте: {text[:100]}...")
             return None
 
         # Считаем скобки для нахождения конца JSON
@@ -138,29 +158,37 @@ def extract_json_from_text(text: str) -> Optional[Dict]:
                 if brace_count == 0:
                     json_str = text[start:i+1]
                     try:
-                        return json.loads(json_str)
+                        result = json.loads(json_str)
+                        logger.debug(f"✅ JSON успешно извлечен и распарсен")
+                        return result
                     except json.JSONDecodeError as e:
-                        logger.error(f"JSON decode error: {e}")
+                        logger.error(f"❌ JSON decode error: {e}")
                         logger.debug(f"Проблемный JSON: {json_str[:200]}...")
                         return None
 
         # Если не нашли закрывающую скобку, пробуем парсить как есть
         try:
-            return json.loads(text[start:])
+            result = json.loads(text[start:])
+            logger.debug(f"✅ JSON распарсен после обрезки")
+            return result
         except:
+            logger.error(f"❌ Не удалось распарсить JSON: {text[start:100]}...")
             return None
 
     except Exception as e:
-        logger.error(f"Ошибка извлечения JSON: {e}")
+        logger.error(f"❌ Ошибка извлечения JSON: {e}")
         return None
 
 
 def smart_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List[str]:
     """
     УЛУЧШЕННАЯ fallback логика без ИИ
-    Мультикритериальная оценка пар
     """
-    logger.info("Используется умный fallback отбор пар")
+    logger.info("🔄 Используется умный fallback отбор пар (без ИИ)")
+
+    if not pairs_data:
+        logger.warning("⚠️ Нет данных для fallback отбора")
+        return []
 
     def calculate_comprehensive_score(pair_data: Dict) -> float:
         """Комплексная оценка пары"""
@@ -198,48 +226,72 @@ def smart_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List
         return score
 
     # Сортируем по комплексной оценке
-    scored_pairs = [(pair, calculate_comprehensive_score(pair)) for pair in pairs_data]
+    scored_pairs = []
+    for pair in pairs_data:
+        score = calculate_comprehensive_score(pair)
+        scored_pairs.append((pair, score))
+        logger.debug(f"   {pair['symbol']}: оценка {score:.1f}")
+
     sorted_pairs = sorted(scored_pairs, key=lambda x: x[1], reverse=True)
 
     # Берем топ пары
-    selected = [pair[0]['symbol'] for pair in sorted_pairs[:max_pairs] if pair[1] >= config.MIN_CONFIDENCE]
+    selected = []
+    for pair, score in sorted_pairs[:max_pairs]:
+        if score >= config.MIN_CONFIDENCE:
+            selected.append(pair['symbol'])
+            logger.info(f"✅ Fallback выбрал {pair['symbol']} (оценка: {score:.1f})")
 
-    logger.info(f"Fallback отобрал {len(selected)} пар: {selected}")
+    logger.info(f"📊 Fallback отобрал {len(selected)} из {len(pairs_data)} пар")
     return selected
 
 
 async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
     """
-    ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ ИИ отбор пар
-    - Правильный API URL
-    - Принудительный JSON режим
-    - Надежный парсинг
-    - Детальное логирование
-    - Умный fallback
+    ИСПРАВЛЕННЫЙ ИИ отбор пар с детальной диагностикой
     """
-    logger.info(f"ИИ отбор: анализируем {len(pairs_data)} пар с сигналами")
+    logger.info(f"🤖 ИИ отбор: начинаем анализ {len(pairs_data)} пар")
 
-    if not config.DEEPSEEK_API_KEY:
-        logger.warning("DeepSeek API ключ отсутствует, используется fallback")
+    # Валидация API ключа
+    api_valid, api_message = validate_api_key()
+    if not api_valid:
+        logger.warning(f"⚠️ {api_message}")
+        logger.info("🔄 Переключаемся на fallback режим")
         return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
+    logger.info(f"✅ {api_message}")
+
     if not pairs_data:
-        logger.warning("Нет данных для ИИ анализа")
+        logger.warning("⚠️ Нет данных для ИИ анализа")
         return []
 
     try:
         # Ограничиваем количество пар для одного запроса
         if len(pairs_data) > config.MAX_BULK_PAIRS:
-            logger.info(f"Ограничиваем до {config.MAX_BULK_PAIRS} пар для ИИ анализа")
+            logger.info(f"📊 Ограничиваем до {config.MAX_BULK_PAIRS} пар для ИИ анализа")
             pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
 
         # Подготавливаем ПОЛНЫЕ данные для ИИ
+        logger.info("🔄 Подготавливаем данные для ИИ...")
         full_market_data = {}
 
         for item in pairs_data:
             symbol = item['symbol']
+
+            # Проверяем наличие необходимых данных
+            if 'indicators_15m' not in item:
+                logger.warning(f"⚠️ {symbol}: отсутствуют индикаторы 15м")
+                continue
+
             candles_15m = item.get('candles_15m', [])
             indicators_15m = item.get('indicators_15m', {})
+
+            if not candles_15m:
+                logger.warning(f"⚠️ {symbol}: отсутствуют свечи 15м")
+                continue
+
+            if not indicators_15m:
+                logger.warning(f"⚠️ {symbol}: отсутствуют индикаторы")
+                continue
 
             # СОХРАНЯЕМ ПОЛНЫЙ ОБЪЕМ ДАННЫХ
             full_market_data[symbol] = {
@@ -259,24 +311,34 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
                 'current_state': indicators_15m.get('current', {})
             }
 
+            logger.debug(f"✅ {symbol}: данные подготовлены для ИИ")
+
+        if not full_market_data:
+            logger.error("❌ НЕТ ПОДГОТОВЛЕННЫХ ДАННЫХ ДЛЯ ИИ!")
+            logger.error("Возможные причины:")
+            logger.error("1. Данные pairs_data не содержат indicators_15m")
+            logger.error("2. Данные pairs_data не содержат candles_15m")
+            logger.error("3. Ошибка в stage2_ai_bulk_select при передаче данных")
+            logger.error("Переключаемся на fallback...")
+            return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+
         # Подсчитываем размер данных
         json_data = json.dumps(full_market_data, separators=(',', ':'))
         data_size = len(json_data)
-        logger.info(f"Размер данных для ИИ: {data_size:,} байт ({data_size/1024:.1f} KB)")
+        logger.info(f"📊 Размер данных для ИИ: {data_size:,} байт ({data_size/1024:.1f} KB)")
 
-        # Проверяем что есть данные для передачи
-        if not full_market_data:
-            logger.error("Нет подготовленных данных для ИИ")
-            return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+        if data_size > 500000:  # Больше 500KB
+            logger.warning(f"⚠️ Большой объем данных: {data_size/1024:.0f}KB")
 
         # ИСПРАВЛЕННЫЙ клиент с правильным URL
+        logger.info(f"🔗 Подключаемся к DeepSeek API: {config.DEEPSEEK_URL}")
         client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_URL
         )
 
         prompt = load_prompt(config.SELECTION_PROMPT)
-        logger.info(f"Отправляем запрос к ИИ: {len(pairs_data)} пар")
+        logger.info(f"🤖 Отправляем запрос к ИИ: {len(full_market_data)} пар")
 
         # ИСПРАВЛЕННЫЙ запрос с принудительным JSON
         response = await asyncio.wait_for(
@@ -294,7 +356,8 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
         )
 
         result_text = response.choices[0].message.content
-        logger.info(f"ИИ ответ получен: {len(result_text)} символов")
+        logger.info(f"📨 ИИ ответ получен: {len(result_text)} символов")
+        logger.debug(f"Начало ответа ИИ: {result_text[:200]}...")
 
         # ИСПРАВЛЕННЫЙ парсинг JSON
         json_result = extract_json_from_text(result_text)
@@ -304,23 +367,38 @@ async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
             reasoning = json_result.get('reasoning', 'Нет обоснования')
 
             if selected_pairs:
-                logger.info(f"ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
-                logger.info(f"Обоснование ИИ: {reasoning}")
+                logger.info(f"✅ ИИ выбрал {len(selected_pairs)} пар: {selected_pairs}")
+                logger.info(f"💭 Обоснование ИИ: {reasoning}")
                 return selected_pairs[:config.MAX_FINAL_PAIRS]
             else:
-                logger.info(f"ИИ не выбрал пары. Причина: {reasoning}")
+                logger.info(f"⚠️ ИИ не выбрал пары. Причина: {reasoning}")
                 return []
         else:
-            logger.error("Не удалось извлечь JSON из ответа ИИ")
-            logger.error(f"Проблемный ответ: {result_text[:500]}...")
+            logger.error("❌ Не удалось извлечь JSON из ответа ИИ")
+            logger.error(f"🔍 Полный ответ ИИ: {result_text}")
+            logger.info("🔄 Переключаемся на fallback...")
             return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
     except asyncio.TimeoutError:
-        logger.error(f"Таймаут ИИ запроса ({config.API_TIMEOUT}с)")
+        logger.error(f"⏰ Таймаут ИИ запроса ({config.API_TIMEOUT}с)")
+        logger.info("🔄 Переключаемся на fallback...")
         return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+
     except Exception as e:
-        logger.error(f"Критическая ошибка ИИ отбора: {e}")
-        logger.error(f"Тип ошибки: {type(e).__name__}")
+        logger.error(f"💥 Критическая ошибка ИИ отбора: {e}")
+        logger.error(f"🔍 Тип ошибки: {type(e).__name__}")
+
+        # Детальная диагностика ошибки
+        if "401" in str(e) or "authentication" in str(e).lower():
+            logger.error("🔑 Ошибка аутентификации - проверьте API ключ")
+        elif "403" in str(e) or "forbidden" in str(e).lower():
+            logger.error("🚫 Доступ запрещен - проверьте права API ключа")
+        elif "429" in str(e) or "rate limit" in str(e).lower():
+            logger.error("🚦 Превышен лимит запросов - попробуйте позже")
+        elif "connection" in str(e).lower():
+            logger.error("🌐 Проблема с подключением к API")
+
+        logger.info("🔄 Переключаемся на fallback...")
         return smart_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
 
@@ -329,23 +407,21 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
     """
     ИСПРАВЛЕННЫЙ детальный ИИ анализ конкретной пары
     """
-    logger.info(f"ИИ анализ {symbol}: {len(data_5m)} свечей 5м, {len(data_15m)} свечей 15м")
+    logger.info(f"🔍 ИИ анализ {symbol}: {len(data_5m)} свечей 5м, {len(data_15m)} свечей 15м")
 
-    if not config.DEEPSEEK_API_KEY:
-        logger.warning(f"DeepSeek API недоступен для анализа {symbol}")
-        return {
-            'symbol': symbol,
-            'signal': 'NO_SIGNAL',
-            'confidence': 0,
-            'entry_price': 0,
-            'stop_loss': 0,
-            'take_profit': 0,
-            'analysis': 'ИИ недоступен'
-        }
+    # Валидация API ключа
+    api_valid, api_message = validate_api_key()
+    if not api_valid:
+        logger.warning(f"⚠️ DeepSeek API недоступен для анализа {symbol}: {api_message}")
+        return create_fallback_analysis(symbol, indicators_5m)
 
     try:
         current_price = indicators_5m.get('current', {}).get('price', 0)
         atr_5m = indicators_5m.get('current', {}).get('atr', 0)
+
+        if current_price <= 0:
+            logger.error(f"❌ {symbol}: некорректная текущая цена ({current_price})")
+            return create_fallback_analysis(symbol, indicators_5m)
 
         # ПОЛНЫЕ данные для детального анализа
         analysis_data = {
@@ -409,7 +485,7 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
         )
 
         result_text = response.choices[0].message.content
-        logger.info(f"ИИ анализ {symbol}: получен ответ {len(result_text)} символов")
+        logger.debug(f"📨 ИИ анализ {symbol}: получен ответ {len(result_text)} символов")
 
         # ИСПРАВЛЕННЫЙ парсинг JSON
         json_result = extract_json_from_text(result_text)
@@ -444,24 +520,34 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                 'ai_generated': True
             }
 
-            logger.info(f"{symbol}: {signal} ({confidence}%) Вход: {entry_price:.4f}")
+            logger.info(f"✅ {symbol}: {signal} ({confidence}%) Вход: {entry_price:.4f}")
             return result
         else:
-            logger.error(f"Не удалось извлечь JSON из анализа {symbol}")
+            logger.error(f"❌ Не удалось извлечь JSON из анализа {symbol}")
+            logger.debug(f"🔍 Ответ ИИ: {result_text}")
+            return create_fallback_analysis(symbol, indicators_5m)
 
     except asyncio.TimeoutError:
-        logger.error(f"Таймаут анализа {symbol} ({config.API_TIMEOUT}с)")
+        logger.error(f"⏰ Таймаут анализа {symbol} ({config.API_TIMEOUT}с)")
+        return create_fallback_analysis(symbol, indicators_5m)
     except Exception as e:
-        logger.error(f"Ошибка ИИ анализа {symbol}: {e}")
+        logger.error(f"💥 Ошибка ИИ анализа {symbol}: {e}")
+        return create_fallback_analysis(symbol, indicators_5m)
 
-    # Fallback результат
+
+def create_fallback_analysis(symbol: str, indicators_5m: Dict) -> Dict:
+    """Создание fallback анализа без ИИ"""
+    current_price = indicators_5m.get('current', {}).get('price', 0)
+
     return {
         'symbol': symbol,
         'signal': 'NO_SIGNAL',
         'confidence': 0,
-        'entry_price': current_price if 'current_price' in locals() else 0,
+        'entry_price': current_price,
         'stop_loss': 0,
         'take_profit': 0,
-        'analysis': f'Ошибка ИИ анализа: {str(e) if "e" in locals() else "неизвестная ошибка"}',
+        'analysis': 'ИИ анализ недоступен - используется fallback режим',
+        'trend_alignment': False,
+        'volume_confirmation': False,
         'ai_generated': False
     }
