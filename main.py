@@ -1,5 +1,5 @@
 """
-Исправленный скальпинговый бот
+Исправленный скальпинговый бот с диагностикой
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, clea
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal
 from deepseek import ai_select_pairs, ai_analyze_pair
 
-# Настройка логирования без эмоджи
+# Настройка логирования с диагностикой
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class ScalpingBot:
-    """Исправленный скальпинговый бот"""
+    """Исправленный скальпинговый бот с диагностикой"""
 
     def __init__(self):
         self.processed_pairs = 0
@@ -55,6 +55,7 @@ class ScalpingBot:
         logger.info(f"Получено данных по {len(results)} парам")
 
         pairs_with_signals = []
+        error_count = 0
 
         # Обрабатываем результаты
         for i, result in enumerate(results):
@@ -68,8 +69,28 @@ class ScalpingBot:
                 logger.info(f"Обработано {i}/{len(results)} пар")
 
             try:
+                # ДИАГНОСТИКА: проверяем данные свечей
+                if len(klines) < 20:
+                    logger.debug(f"{symbol}: мало свечей ({len(klines)})")
+                    continue
+
+                # Проверим формат свечей
+                first_candle = klines[0]
+                if len(first_candle) < 6:
+                    logger.debug(f"{symbol}: неправильный формат свечи")
+                    continue
+
                 indicators = calculate_basic_indicators(klines)
                 if not indicators:
+                    error_count += 1
+                    logger.debug(f"{symbol}: не удалось рассчитать индикаторы")
+                    continue
+
+                # ДИАГНОСТИКА: проверяем индикаторы
+                price = indicators.get('price', 0)
+                ema5 = indicators.get('ema5', 0)
+                if price <= 0 or ema5 <= 0:
+                    logger.debug(f"{symbol}: некорректные индикаторы (price: {price}, ema5: {ema5})")
                     continue
 
                 signal_check = check_basic_signal(indicators)
@@ -86,6 +107,7 @@ class ScalpingBot:
                     logger.info(f"{symbol}: {signal_check['direction']} ({signal_check['confidence']}%)")
 
             except Exception as e:
+                error_count += 1
                 logger.error(f"Ошибка обработки {symbol}: {e}")
                 continue
 
@@ -97,6 +119,7 @@ class ScalpingBot:
 
         logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 1:")
         logger.info(f"Обработано: {len(results)} пар")
+        logger.info(f"Ошибок обработки: {error_count}")
         logger.info(f"С сигналами: {len(pairs_with_signals)} пар")
         logger.info(f"Время: {elapsed:.1f}сек")
 
@@ -115,27 +138,41 @@ class ScalpingBot:
         logger.info("Подготовка данных для ИИ анализа")
 
         ai_input_data = []
+        preparation_errors = 0
 
         for i, pair_data in enumerate(signal_pairs):
             symbol = pair_data['symbol']
 
             logger.info(f"Подготовка {symbol} ({i+1}/{len(signal_pairs)})")
 
-            # Используем свечи из этапа 1 или получаем новые
-            if 'stage1_klines' in pair_data:
-                candles_15m = pair_data['stage1_klines']
-            else:
-                candles_15m = await fetch_klines(symbol, '15', config.AI_BULK_15M)
-
-            if not candles_15m or len(candles_15m) < 20:
-                logger.warning(f"{symbol}: недостаточно данных ({len(candles_15m) if candles_15m else 0} свечей)")
-                continue
-
-            # Рассчитываем индикаторы с историей
             try:
+                # Используем свечи из этапа 1 или получаем новые
+                if 'stage1_klines' in pair_data and len(pair_data['stage1_klines']) >= 20:
+                    candles_15m = pair_data['stage1_klines']
+                else:
+                    candles_15m = await fetch_klines(symbol, '15', config.AI_BULK_15M)
+
+                if not candles_15m or len(candles_15m) < 20:
+                    logger.warning(f"{symbol}: недостаточно данных ({len(candles_15m) if candles_15m else 0} свечей)")
+                    preparation_errors += 1
+                    continue
+
+                # ДИАГНОСТИКА: проверим данные перед расчетом
+                logger.debug(f"{symbol}: данные OK, свечей: {len(candles_15m)}")
+
+                # Рассчитываем индикаторы с историей
                 indicators_15m = calculate_ai_indicators(candles_15m, config.AI_INDICATORS_HISTORY)
                 if not indicators_15m:
                     logger.warning(f"{symbol}: ошибка расчета индикаторов")
+                    preparation_errors += 1
+                    continue
+
+                # ДИАГНОСТИКА: проверим структуру индикаторов
+                required_keys = ['ema5_history', 'ema8_history', 'current']
+                missing_keys = [key for key in required_keys if key not in indicators_15m]
+                if missing_keys:
+                    logger.warning(f"{symbol}: отсутствуют ключи: {missing_keys}")
+                    preparation_errors += 1
                     continue
 
                 # Структура данных для ИИ
@@ -148,16 +185,19 @@ class ScalpingBot:
                 }
 
                 ai_input_data.append(pair_ai_data)
+                logger.debug(f"{symbol}: подготовлено для ИИ")
 
             except Exception as e:
+                preparation_errors += 1
                 logger.error(f"Ошибка подготовки данных для ИИ {symbol}: {e}")
                 continue
 
         if not ai_input_data:
             logger.error("НЕТ ДАННЫХ ДЛЯ ИИ АНАЛИЗА!")
+            logger.error(f"Ошибок подготовки: {preparation_errors}")
             return []
 
-        logger.info(f"Подготовлено {len(ai_input_data)} пар для ИИ из {len(signal_pairs)}")
+        logger.info(f"Подготовлено {len(ai_input_data)} пар для ИИ из {len(signal_pairs)} (ошибок: {preparation_errors})")
 
         # Размер данных
         try:
@@ -176,6 +216,7 @@ class ScalpingBot:
 
         logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 2:")
         logger.info(f"Отправлено в ИИ: {len(ai_input_data)} пар")
+        logger.info(f"Ошибок подготовки: {preparation_errors}")
         logger.info(f"Выбрано ИИ: {len(selected_pairs)} пар")
         logger.info(f"Время: {elapsed:.1f}сек")
 
@@ -351,7 +392,7 @@ class ScalpingBot:
 
 
 async def main():
-    """Главная функция"""
+    """Главная функция с диагностикой"""
     print("СКАЛЬПИНГОВЫЙ БОТ")
     print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
@@ -366,6 +407,10 @@ async def main():
     if not has_api_key:
         print("ВНИМАНИЕ: DeepSeek API недоступен, будет использован fallback режим")
         print()
+
+    # Включаем DEBUG логирование для диагностики
+    logging.getLogger('__main__').setLevel(logging.DEBUG)
+    logging.getLogger('func_trade').setLevel(logging.DEBUG)
 
     bot = ScalpingBot()
 

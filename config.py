@@ -27,9 +27,9 @@ class Config:
     DEEPSEEK_MODEL = 'deepseek-chat'
 
     # ЭТАПЫ ОБРАБОТКИ
-    QUICK_SCAN_15M = 32
-    AI_BULK_15M = 32
-    AI_INDICATORS_HISTORY = 32
+    QUICK_SCAN_15M = 35
+    AI_BULK_15M = 35
+    AI_INDICATORS_HISTORY = 30
     FINAL_5M = 200
     FINAL_15M = 100
     FINAL_INDICATORS = 50
