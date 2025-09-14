@@ -1,9 +1,5 @@
 """
-Переписанный скальпинговый бот - ИСПРАВЛЕННАЯ ВЕРСИЯ
-Устранены критические ошибки:
-- Правильная передача данных между этапами
-- Исправлена обработка индикаторов
-- Добавлено детальное логирование каждого шага
+Исправленный скальпинговый бот
 """
 
 import asyncio
@@ -18,55 +14,49 @@ from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, clea
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal
 from deepseek import ai_select_pairs, ai_analyze_pair
 
-# Настройка логирования с временными метками
+# Настройка логирования без эмоджи
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
 
-class RewrittenScalpingBot:
-    """Переписанный скальпинговый бот по новой логике - ИСПРАВЛЕН"""
+class ScalpingBot:
+    """Исправленный скальпинговый бот"""
 
     def __init__(self):
         self.processed_pairs = 0
         self.session_start = time.time()
 
     async def stage1_filter_signals(self) -> List[Dict]:
-        """
-        ЭТАП 1: Отсеиваем пары БЕЗ торговых сигналов (15М данные)
-        """
+        """ЭТАП 1: Фильтрация пар с сигналами"""
         start_time = time.time()
-        logger.info("=" * 50)
-        logger.info("ЭТАП 1: Фильтрация пар с сигналами...")
-        logger.info("=" * 50)
+        logger.info("ЭТАП 1: Фильтрация пар с сигналами")
 
-        # Получаем список торговых пар
-        logger.info("Получение списка торговых пар...")
+        # Получаем пары
         pairs = await get_trading_pairs()
         if not pairs:
-            logger.error("❌ Пары не получены")
+            logger.error("Не удалось получить торговые пары")
             return []
 
-        logger.info(f"✅ Получено {len(pairs)} торговых пар")
-        logger.info(f"📊 Проверяем каждую пару на наличие сигналов...")
+        logger.info(f"Получено {len(pairs)} торговых пар")
 
-        # Подготавливаем запросы для сканирования 15М данных
+        # Подготавливаем запросы
         requests = [
             {'symbol': pair, 'interval': '15', 'limit': config.QUICK_SCAN_15M}
             for pair in pairs
         ]
 
         # Массовое получение данных
-        logger.info(f"🔄 Загружаем 15м данные для {len(requests)} пар...")
+        logger.info(f"Загружаем данные для {len(requests)} пар")
         results = await batch_fetch_klines(requests)
-        logger.info(f"📥 Получено данных по {len(results)} парам")
+        logger.info(f"Получено данных по {len(results)} парам")
 
         pairs_with_signals = []
 
-        # Обрабатываем результаты - ОСТАВЛЯЕМ ТОЛЬКО С СИГНАЛАМИ
+        # Обрабатываем результаты
         for i, result in enumerate(results):
             if not result.get('success') or len(result['klines']) < 20:
                 continue
@@ -74,36 +64,29 @@ class RewrittenScalpingBot:
             symbol = result['symbol']
             klines = result['klines']
 
-            # Логируем прогресс каждые 50 пар
             if i % 50 == 0:
-                logger.info(f"📈 Обработано {i}/{len(results)} пар...")
+                logger.info(f"Обработано {i}/{len(results)} пар")
 
-            # Рассчитываем базовые индикаторы
             try:
                 indicators = calculate_basic_indicators(klines)
                 if not indicators:
-                    logger.debug(f"⚠️ {symbol}: не удалось рассчитать индикаторы")
                     continue
 
-                # Проверяем базовый сигнал - СТРОГАЯ ФИЛЬТРАЦИЯ
                 signal_check = check_basic_signal(indicators)
 
-                # ОСТАВЛЯЕМ ТОЛЬКО пары с четкими сигналами
                 if signal_check['signal'] and signal_check['confidence'] >= config.MIN_CONFIDENCE:
                     pair_data = {
                         'symbol': symbol,
                         'confidence': signal_check['confidence'],
                         'direction': signal_check['direction'],
                         'base_indicators': indicators,
-                        # ИСПРАВЛЕНО: сохраняем свечи для следующего этапа
                         'stage1_klines': klines
                     }
                     pairs_with_signals.append(pair_data)
-
-                    logger.info(f"✅ {symbol}: {signal_check['direction']} ({signal_check['confidence']}%)")
+                    logger.info(f"{symbol}: {signal_check['direction']} ({signal_check['confidence']}%)")
 
             except Exception as e:
-                logger.error(f"❌ Ошибка обработки {symbol}: {e}")
+                logger.error(f"Ошибка обработки {symbol}: {e}")
                 continue
 
         # Сортируем по уверенности
@@ -112,157 +95,114 @@ class RewrittenScalpingBot:
         elapsed = time.time() - start_time
         self.processed_pairs = len(results)
 
-        logger.info("=" * 50)
-        logger.info(f"📊 РЕЗУЛЬТАТЫ ЭТАПА 1:")
-        logger.info(f"   Обработано: {len(results)} пар")
-        logger.info(f"   С сигналами: {len(pairs_with_signals)} пар")
-        logger.info(f"   Время: {elapsed:.1f}сек")
-        logger.info(f"   Скорость: {len(pairs) / elapsed:.0f} пар/сек")
-
-        if pairs_with_signals:
-            top_pairs = [(p['symbol'], p['confidence'], p['direction']) for p in pairs_with_signals[:10]]
-            logger.info(f"🏆 Топ-10 пар с сигналами:")
-            for symbol, conf, direction in top_pairs:
-                logger.info(f"   {symbol}: {direction} ({conf}%)")
-
-        logger.info("=" * 50)
+        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 1:")
+        logger.info(f"Обработано: {len(results)} пар")
+        logger.info(f"С сигналами: {len(pairs_with_signals)} пар")
+        logger.info(f"Время: {elapsed:.1f}сек")
 
         return pairs_with_signals
 
     async def stage2_ai_bulk_select(self, signal_pairs: List[Dict]) -> List[str]:
-        """
-        ЭТАП 2: ИИ отбор - передаем ВСЕ пары с сигналами одним запросом
-        ИСПРАВЛЕНО: правильная передача данных
-        """
+        """ЭТАП 2: ИИ отбор пар"""
         start_time = time.time()
-        logger.info("=" * 50)
-        logger.info(f"ЭТАП 2: ИИ анализ {len(signal_pairs)} пар с сигналами...")
-        logger.info("=" * 50)
+        logger.info(f"ЭТАП 2: ИИ анализ {len(signal_pairs)} пар с сигналами")
 
         if not signal_pairs:
-            logger.warning("❌ Нет пар для ИИ анализа")
+            logger.warning("Нет пар для ИИ анализа")
             return []
 
-        # ИСПРАВЛЕНО: подготавливаем данные для ИИ правильно
-        logger.info("🔄 Подготовка данных для ИИ анализа...")
+        # Подготавливаем данные для ИИ
+        logger.info("Подготовка данных для ИИ анализа")
 
         ai_input_data = []
 
         for i, pair_data in enumerate(signal_pairs):
             symbol = pair_data['symbol']
 
-            logger.info(f"📊 Подготовка {symbol} ({i+1}/{len(signal_pairs)})...")
+            logger.info(f"Подготовка {symbol} ({i+1}/{len(signal_pairs)})")
 
-            # ИСПРАВЛЕНО: используем уже полученные свечи из этапа 1
+            # Используем свечи из этапа 1 или получаем новые
             if 'stage1_klines' in pair_data:
                 candles_15m = pair_data['stage1_klines']
-                logger.debug(f"   Используются свечи из этапа 1: {len(candles_15m)} штук")
             else:
-                # Fallback - получаем новые данные
-                logger.debug(f"   Получение новых 15м данных для {symbol}...")
                 candles_15m = await fetch_klines(symbol, '15', config.AI_BULK_15M)
 
             if not candles_15m or len(candles_15m) < 20:
-                logger.warning(f"⚠️ {symbol}: недостаточно 15м данных ({len(candles_15m) if candles_15m else 0} свечей)")
+                logger.warning(f"{symbol}: недостаточно данных ({len(candles_15m) if candles_15m else 0} свечей)")
                 continue
 
-            # Рассчитываем индикаторы с историей для ИИ
+            # Рассчитываем индикаторы с историей
             try:
                 indicators_15m = calculate_ai_indicators(candles_15m, config.AI_INDICATORS_HISTORY)
                 if not indicators_15m:
-                    logger.warning(f"⚠️ {symbol}: ошибка расчета индикаторов для ИИ")
+                    logger.warning(f"{symbol}: ошибка расчета индикаторов")
                     continue
 
-                # ИСПРАВЛЕНО: правильная структура данных для ИИ
+                # Структура данных для ИИ
                 pair_ai_data = {
                     'symbol': symbol,
                     'confidence': pair_data['confidence'],
                     'direction': pair_data['direction'],
-                    'candles_15m': candles_15m[-config.AI_BULK_15M:],  # Ограничиваем размер
+                    'candles_15m': candles_15m[-config.AI_BULK_15M:],
                     'indicators_15m': indicators_15m
                 }
 
                 ai_input_data.append(pair_ai_data)
-                logger.debug(f"✅ {symbol}: данные для ИИ подготовлены")
 
             except Exception as e:
-                logger.error(f"❌ Ошибка подготовки данных для ИИ {symbol}: {e}")
+                logger.error(f"Ошибка подготовки данных для ИИ {symbol}: {e}")
                 continue
 
         if not ai_input_data:
-            logger.error("❌ Нет подготовленных данных для ИИ анализа!")
-            logger.error("Проверьте:")
-            logger.error("1. Получены ли свечи на этапе 1")
-            logger.error("2. Рассчитываются ли индикаторы")
-            logger.error("3. Нет ли ошибок в calculate_ai_indicators")
+            logger.error("НЕТ ДАННЫХ ДЛЯ ИИ АНАЛИЗА!")
             return []
 
-        logger.info(f"✅ Подготовлено {len(ai_input_data)} пар для ИИ из {len(signal_pairs)}")
+        logger.info(f"Подготовлено {len(ai_input_data)} пар для ИИ из {len(signal_pairs)}")
 
-        # Размер данных для ИИ
+        # Размер данных
         try:
             json_data = json.dumps(ai_input_data, separators=(',', ':'))
             data_size = len(json_data)
-            logger.info(f"📊 Размер данных для ИИ: {data_size:,} байт ({data_size/1024:.1f} KB)")
-
-            if data_size > 1024 * 1024:  # > 1MB
-                logger.warning(f"⚠️ Большой размер данных для ИИ: {data_size/1024/1024:.1f} MB")
-
+            logger.info(f"Размер данных для ИИ: {data_size/1024:.1f} KB")
         except Exception as e:
-            logger.error(f"❌ Ошибка сериализации данных для ИИ: {e}")
+            logger.error(f"Ошибка сериализации данных для ИИ: {e}")
             return []
 
-        # Проверяем доступность ИИ
-        if not has_api_key:
-            logger.error("❌ DeepSeek API ключ недоступен!")
-            logger.error("Установите переменную окружения DEEPSEEK_API_KEY")
-            return []
-
-        # ИИ анализ ВСЕХ пар одним запросом
-        logger.info("🤖 Отправляем данные в ИИ для анализа...")
+        # ИИ анализ
+        logger.info("Отправляем данные в ИИ для анализа")
         selected_pairs = await ai_select_pairs(ai_input_data)
 
         elapsed = time.time() - start_time
 
-        logger.info("=" * 50)
-        logger.info(f"📊 РЕЗУЛЬТАТЫ ЭТАПА 2:")
-        logger.info(f"   Отправлено в ИИ: {len(ai_input_data)} пар")
-        logger.info(f"   Выбрано ИИ: {len(selected_pairs)} пар")
-        logger.info(f"   Время: {elapsed:.1f}сек")
+        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 2:")
+        logger.info(f"Отправлено в ИИ: {len(ai_input_data)} пар")
+        logger.info(f"Выбрано ИИ: {len(selected_pairs)} пар")
+        logger.info(f"Время: {elapsed:.1f}сек")
 
         if selected_pairs:
-            logger.info(f"🎯 Пары для детального анализа: {', '.join(selected_pairs)}")
+            logger.info(f"Пары для детального анализа: {', '.join(selected_pairs)}")
         else:
-            logger.warning("⚠️ ИИ не выбрал ни одной пары для детального анализа")
-
-        logger.info("=" * 50)
+            logger.warning("ИИ не выбрал пары для детального анализа")
 
         return selected_pairs
 
     async def stage3_detailed_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """
-        ЭТАП 3: Детальный анализ каждой пары отдельно
-        """
+        """ЭТАП 3: Детальный анализ каждой пары"""
         start_time = time.time()
-        logger.info("=" * 50)
-        logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар...")
-        logger.info("=" * 50)
+        logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар")
 
         if not selected_pairs:
-            logger.warning("❌ Нет пар для детального анализа")
+            logger.warning("Нет пар для детального анализа")
             return []
 
         final_signals = []
 
-        # Анализируем каждую пару отдельно
+        # Анализируем каждую пару
         for i, symbol in enumerate(selected_pairs):
-            logger.info(f"🔍 Анализ {symbol} ({i+1}/{len(selected_pairs)})...")
+            logger.info(f"Анализ {symbol} ({i+1}/{len(selected_pairs)})")
 
             try:
-                # Получаем ПОЛНЫЕ данные для обоих таймфреймов
-                logger.debug(f"   Загрузка 5м данных ({config.FINAL_5M} свечей)...")
-                logger.debug(f"   Загрузка 15м данных ({config.FINAL_15M} свечей)...")
-
+                # Получаем полные данные
                 klines_5m_task = fetch_klines(symbol, '5', config.FINAL_5M)
                 klines_15m_task = fetch_klines(symbol, '15', config.FINAL_15M)
 
@@ -270,22 +210,18 @@ class RewrittenScalpingBot:
 
                 if (not klines_5m or len(klines_5m) < 100 or
                         not klines_15m or len(klines_15m) < 50):
-                    logger.warning(f"❌ {symbol}: недостаточно данных (5м: {len(klines_5m) if klines_5m else 0}, 15м: {len(klines_15m) if klines_15m else 0})")
+                    logger.warning(f"{symbol}: недостаточно данных (5м: {len(klines_5m) if klines_5m else 0}, 15м: {len(klines_15m) if klines_15m else 0})")
                     continue
 
-                logger.debug(f"✅ {symbol}: данные получены (5м: {len(klines_5m)}, 15м: {len(klines_15m)})")
-
-                # Рассчитываем полные индикаторы
-                logger.debug(f"   Расчет индикаторов...")
+                # Рассчитываем индикаторы
                 indicators_5m = calculate_ai_indicators(klines_5m, config.FINAL_INDICATORS)
                 indicators_15m = calculate_ai_indicators(klines_15m, config.FINAL_INDICATORS)
 
                 if not indicators_5m or not indicators_15m:
-                    logger.warning(f"❌ {symbol}: ошибка расчета индикаторов")
+                    logger.warning(f"{symbol}: ошибка расчета индикаторов")
                     continue
 
-                # Детальный ИИ анализ
-                logger.debug(f"   ИИ анализ с полными данными...")
+                # ИИ анализ
                 analysis = await ai_analyze_pair(
                     symbol, klines_5m, klines_15m, indicators_5m, indicators_15m
                 )
@@ -299,44 +235,41 @@ class RewrittenScalpingBot:
                     stop = analysis.get('stop_loss', 0)
                     profit = analysis.get('take_profit', 0)
 
-                    logger.info(f"✅ {symbol}: {analysis['signal']} ({analysis['confidence']}%)")
+                    logger.info(f"{symbol}: {analysis['signal']} ({analysis['confidence']}%)")
                     if entry and stop and profit:
                         risk_reward = round(abs(profit - entry) / abs(entry - stop), 2) if entry != stop else 0
-                        logger.info(f"   📊 Вход: {entry:.4f} | Стоп: {stop:.4f} | Профит: {profit:.4f} | R/R: 1:{risk_reward}")
+                        logger.info(f"Вход: {entry:.4f} | Стоп: {stop:.4f} | Профит: {profit:.4f} | R/R: 1:{risk_reward}")
                 else:
-                    logger.info(f"⚠️ {symbol}: {analysis['signal']} ({analysis['confidence']}%) - не прошел фильтр")
+                    logger.info(f"{symbol}: {analysis['signal']} ({analysis['confidence']}%) - не прошел фильтр")
 
             except Exception as e:
-                logger.error(f"❌ Ошибка анализа {symbol}: {e}")
+                logger.error(f"Ошибка анализа {symbol}: {e}")
                 continue
 
         elapsed = time.time() - start_time
 
-        logger.info("=" * 50)
-        logger.info(f"📊 РЕЗУЛЬТАТЫ ЭТАПА 3:")
-        logger.info(f"   Анализировано: {len(selected_pairs)} пар")
-        logger.info(f"   Финальных сигналов: {len(final_signals)}")
-        logger.info(f"   Время: {elapsed:.1f}сек")
+        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 3:")
+        logger.info(f"Анализировано: {len(selected_pairs)} пар")
+        logger.info(f"Финальных сигналов: {len(final_signals)}")
+        logger.info(f"Время: {elapsed:.1f}сек")
 
         if final_signals:
-            logger.info(f"🎯 Торговые сигналы:")
+            logger.info("Торговые сигналы:")
             for signal in final_signals:
-                logger.info(f"   {signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
-
-        logger.info("=" * 50)
+                logger.info(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
 
         return final_signals
 
     async def run_full_cycle(self) -> Dict[str, Any]:
-        """Полный цикл работы переписанного бота - ИСПРАВЛЕН"""
+        """Полный цикл работы бота"""
         cycle_start = time.time()
 
-        logger.info("🚀 ЗАПУСК ПЕРЕПИСАННОГО ЦИКЛА АНАЛИЗА")
-        logger.info(f"⏰ Время запуска: {datetime.now().strftime('%H:%M:%S')}")
-        logger.info(f"🔑 DeepSeek API: {'✅ Доступен' if has_api_key else '❌ Недоступен'}")
+        logger.info("ЗАПУСК ЦИКЛА АНАЛИЗА")
+        logger.info(f"Время запуска: {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"DeepSeek API: {'Доступен' if has_api_key else 'Недоступен'}")
 
         try:
-            # ЭТАП 1: Фильтрация пар с сигналами (15М)
+            # ЭТАП 1
             stage1_start = time.time()
             signal_pairs = await self.stage1_filter_signals()
             stage1_time = time.time() - stage1_start
@@ -350,7 +283,7 @@ class RewrittenScalpingBot:
                     'message': 'Нет пар с торговыми сигналами'
                 }
 
-            # ЭТАП 2: ИИ отбор всех пар одним запросом
+            # ЭТАП 2
             stage2_start = time.time()
             selected_pairs = await self.stage2_ai_bulk_select(signal_pairs)
             stage2_time = time.time() - stage2_start
@@ -366,14 +299,14 @@ class RewrittenScalpingBot:
                     'message': 'ИИ не выбрал подходящих пар'
                 }
 
-            # ЭТАП 3: Детальный анализ с уровнями
+            # ЭТАП 3
             stage3_start = time.time()
             final_signals = await self.stage3_detailed_analysis(selected_pairs)
             stage3_time = time.time() - stage3_start
 
             total_time = time.time() - cycle_start
 
-            # Формируем результат
+            # Результат
             result = {
                 'result': 'SUCCESS' if final_signals else 'NO_FINAL_SIGNALS',
                 'timing': {
@@ -389,25 +322,20 @@ class RewrittenScalpingBot:
                     'final_signals': len(final_signals),
                     'processing_speed': round(self.processed_pairs / stage1_time, 1) if stage1_time > 0 else 0
                 },
-                'pipeline': {
-                    'stage1_pairs': [p['symbol'] for p in signal_pairs[:10]],
-                    'stage2_selected': selected_pairs,
-                    'stage3_signals': [s['symbol'] for s in final_signals]
-                },
                 'signals': final_signals,
                 'api_available': has_api_key
             }
 
             # Финальное логирование
-            logger.info("🎉 ЗАВЕРШЕНИЕ ЦИКЛА АНАЛИЗА")
-            logger.info(f"📊 Пайплайн: {self.processed_pairs} → {len(signal_pairs)} → {len(selected_pairs)} → {len(final_signals)}")
-            logger.info(f"⏱️ Время: общее {total_time:.1f}с (фильтр: {stage1_time:.1f}с | ИИ: {stage2_time:.1f}с | анализ: {stage3_time:.1f}с)")
-            logger.info(f"⚡ Скорость: {self.processed_pairs / stage1_time:.0f} пар/сек")
+            logger.info("ЗАВЕРШЕНИЕ ЦИКЛА АНАЛИЗА")
+            logger.info(f"Пайплайн: {self.processed_pairs} -> {len(signal_pairs)} -> {len(selected_pairs)} -> {len(final_signals)}")
+            logger.info(f"Время: общее {total_time:.1f}с (фильтр: {stage1_time:.1f}с | ИИ: {stage2_time:.1f}с | анализ: {stage3_time:.1f}с)")
+            logger.info(f"Скорость: {self.processed_pairs / stage1_time:.0f} пар/сек")
 
             return result
 
         except Exception as e:
-            logger.error(f"💥 Критическая ошибка цикла: {e}")
+            logger.error(f"Критическая ошибка цикла: {e}")
             import traceback
             logger.error(f"Стек ошибки: {traceback.format_exc()}")
             return {
@@ -418,51 +346,77 @@ class RewrittenScalpingBot:
 
     async def cleanup(self):
         """Очистка ресурсов"""
-        logger.info("🧹 Очистка ресурсов...")
+        logger.info("Очистка ресурсов")
         await cleanup_api()
 
 
 async def main():
-    """Главная функция переписанного бота - ИСПРАВЛЕНА"""
-    print("🤖 ПЕРЕПИСАННЫЙ СКАЛЬПИНГОВЫЙ БОТ - ИСПРАВЛЕННАЯ ВЕРСИЯ")
-    print(f"⏰ Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    """Главная функция"""
+    print("СКАЛЬПИНГОВЫЙ БОТ")
+    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
-    print("📋 ЛОГИКА РАБОТЫ:")
-    print("   ЭТАП 1: Фильтр пар с сигналами (15м данные)")
-    print("   ЭТАП 2: ИИ отбор (все пары + индикаторы одним запросом)")
-    print("   ЭТАП 3: Детальный анализ (полные данные 5м+15м, уровни)")
+    print("ЛОГИКА РАБОТЫ:")
+    print("ЭТАП 1: Фильтр пар с сигналами (15м данные)")
+    print("ЭТАП 2: ИИ отбор (все пары + индикаторы одним запросом)")
+    print("ЭТАП 3: Детальный анализ (полные данные 5м+15м, уровни)")
     print()
-    print(f"🔑 DeepSeek ИИ: {'✅ Доступен' if has_api_key else '❌ Недоступен (fallback режим)'}")
+    print(f"DeepSeek ИИ: {'Доступен' if has_api_key else 'Недоступен (fallback режим)'}")
     print("=" * 70)
 
-    bot = RewrittenScalpingBot()
+    if not has_api_key:
+        print("ВНИМАНИЕ: DeepSeek API недоступен, будет использован fallback режим")
+        print()
+
+    bot = ScalpingBot()
 
     try:
-        # Запуск полного цикла
+        # Запуск цикла
         result = await bot.run_full_cycle()
 
-        # Красивый вывод результата
-        print(f"\n📊 ИТОГОВЫЙ РЕЗУЛЬТАТ:")
-        print(f"   Статус: {result['result']}")
-        print(f"   ИИ доступность: {'✅' if result.get('api_available') else '❌'}")
+        # Вывод результата
+        print(f"\nИТОГОВЫЙ РЕЗУЛЬТАТ:")
+        print(f"Статус: {result['result']}")
+        print(f"ИИ доступность: {'Да' if result.get('api_available') else 'Нет'}")
 
         if 'timing' in result:
             t = result['timing']
-            print(f"   ⏱️ Время: {t['total']}сек")
-            print(f"      ├─ Фильтрация: {t['stage1_filter']}сек")
-            print(f"      ├─ ИИ отбор: {t['stage2_ai_bulk']}сек")
-            print(f"      └─ Детальный анализ: {t['stage3_detailed']}сек")
+            print(f"Время: {t['total']}сек")
+            print(f"├─ Фильтрация: {t['stage1_filter']}сек")
+            print(f"├─ ИИ отбор: {t['stage2_ai_bulk']}сек")
+            print(f"└─ Детальный анализ: {t['stage3_detailed']}сек")
 
         if 'stats' in result:
             s = result['stats']
-            print(f"   📈 Статистика: {s['pairs_scanned']} → {s['signal_pairs_found']} → {s['ai_selected']} → {s['final_signals']}")
-            print(f"   ⚡ Производительность: {s['processing_speed']} пар/сек")
+            print(f"Статистика: {s['pairs_scanned']} -> {s['signal_pairs_found']} -> {s['ai_selected']} -> {s['final_signals']}")
+            print(f"Производительность: {s['processing_speed']} пар/сек")
 
-        if 'pipeline' in result and result['pipeline']:
-            p = result['pipeline']
-            if p.get('stage1_pairs'):
-                print(f"\n🔍 ЭТАП 1 - Пары с сигналами (топ-10):")
-                print(f"   {', '.join(p['stage1_pairs'])}")
+        if result.get('signals'):
+            print(f"\nТОРГОВЫЕ СИГНАЛЫ:")
+            for signal in result['signals']:
+                print(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
+                if signal.get('entry_price'):
+                    print(f"  Вход: {signal['entry_price']:.4f} | Стоп: {signal.get('stop_loss', 0):.4f} | Профит: {signal.get('take_profit', 0):.4f}")
 
-            if p.get('stage2_selected'):
-                print(f"\n🤖 ЭТАП 2 - ИИ отбор:")
+        # Сохраняем результат
+        with open('bot_result.json', 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+
+        print(f"\nРезультат сохранен в bot_result.json")
+
+    except KeyboardInterrupt:
+        print("\nОстановлено пользователем")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка: {e}")
+    finally:
+        await bot.cleanup()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nПрограмма остановлена")
+    except Exception as e:
+        print(f"Критическая ошибка: {e}")
+        import traceback
+        print(traceback.format_exc())
