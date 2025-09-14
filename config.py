@@ -1,5 +1,5 @@
 """
-Исправленная конфигурация для бота
+Исправленная конфигурация для бота + настройки валидации
 """
 
 import os
@@ -61,12 +61,21 @@ class Config:
     # ПРОМПТЫ
     SELECTION_PROMPT = 'prompt_select.txt'
     ANALYSIS_PROMPT = 'prompt_analyze.txt'
+    VALIDATION_PROMPT = 'prompt_validate.txt'  # НОВЫЙ промпт для валидации
 
     # ИИ НАСТРОЙКИ
     AI_TEMPERATURE_SELECT = 0.3
     AI_TEMPERATURE_ANALYZE = 0.7
+    AI_TEMPERATURE_VALIDATE = 0.3  # НОВОЕ: низкая температура для точности валидации
     AI_MAX_TOKENS_SELECT = 1000
     AI_MAX_TOKENS_ANALYZE = 2000
+    AI_MAX_TOKENS_VALIDATE = 3000  # НОВОЕ: больше токенов для детального ответа валидации
+
+    # ВАЛИДАЦИЯ НАСТРОЙКИ - НОВЫЕ
+    MIN_RISK_REWARD_RATIO = 1.5  # Минимальное соотношение риск/доходность
+    MAX_HOLD_DURATION_MINUTES = 120  # Максимальное время удержания позиции (2 часа)
+    MIN_HOLD_DURATION_MINUTES = 15   # Минимальное время удержания позиции
+    VALIDATION_CONFIDENCE_BOOST = 5  # Бонус к уверенности после валидации
 
 
 config = Config()
@@ -84,6 +93,27 @@ def check_config():
     print(f"DeepSeek API ключ найден (длина: {len(config.DEEPSEEK_API_KEY)})")
     print(f"API URL: {config.DEEPSEEK_URL}")
     print(f"Модель: {config.DEEPSEEK_MODEL}")
+
+    # Проверка файлов промптов
+    prompt_files = [
+        config.SELECTION_PROMPT,
+        config.ANALYSIS_PROMPT,
+        config.VALIDATION_PROMPT
+    ]
+
+    missing_prompts = []
+    for prompt_file in prompt_files:
+        if not os.path.exists(prompt_file):
+            missing_prompts.append(prompt_file)
+
+    if missing_prompts:
+        print(f"ВНИМАНИЕ: Отсутствуют файлы промптов: {missing_prompts}")
+        print("Этапы с отсутствующими промптами будут работать в fallback режиме")
+
+    print(f"Настройки валидации:")
+    print(f"├─ Минимальное R/R: 1:{config.MIN_RISK_REWARD_RATIO}")
+    print(f"├─ Время удержания: {config.MIN_HOLD_DURATION_MINUTES}-{config.MAX_HOLD_DURATION_MINUTES} мин")
+    print(f"└─ Бонус валидации: +{config.VALIDATION_CONFIDENCE_BOOST}%")
 
     return True
 

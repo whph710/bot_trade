@@ -1,5 +1,5 @@
 """
-Исправленный ИИ клиент для DeepSeek
+Исправленный ИИ клиент для DeepSeek + функция финальной валидации
 """
 
 import asyncio
@@ -115,6 +115,48 @@ def smart_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List
             logger.info(f"Fallback выбрал {pair['symbol']} (оценка: {score:.1f})")
 
     return selected
+
+
+def create_fallback_validation(preliminary_signals: List[Dict]) -> List[Dict]:
+    """Fallback валидация без ИИ - простая проверка R/R"""
+    logger.info("Используется fallback валидация (без ИИ)")
+
+    validated_signals = []
+
+    for signal in preliminary_signals:
+        entry = signal.get('entry_price', 0)
+        stop = signal.get('stop_loss', 0)
+        profit = signal.get('take_profit', 0)
+
+        if entry > 0 and stop > 0 and profit > 0:
+            # Рассчитываем R/R
+            risk = abs(entry - stop)
+            reward = abs(profit - entry)
+
+            if risk > 0:
+                rr_ratio = round(reward / risk, 2)
+
+                # Принимаем сигналы с R/R >= 1.5
+                if rr_ratio >= 1.5:
+                    # Добавляем дополнительные поля
+                    validated_signal = signal.copy()
+                    validated_signal['risk_reward_ratio'] = rr_ratio
+                    validated_signal['hold_duration_minutes'] = 30  # Стандартное время
+                    validated_signal['validation_notes'] = f'Fallback валидация: R/R {rr_ratio}'
+                    validated_signal['action'] = 'APPROVED'
+                    validated_signal['market_conditions'] = 'Автоматическая оценка'
+                    validated_signal['key_levels'] = f'Вход: {entry}, Стоп: {stop}, Профит: {profit}'
+
+                    validated_signals.append(validated_signal)
+                    logger.info(f"Fallback подтвердил {signal['symbol']} (R/R: {rr_ratio})")
+                else:
+                    logger.info(f"Fallback отклонил {signal['symbol']} (R/R: {rr_ratio} < 1.5)")
+            else:
+                logger.info(f"Fallback отклонил {signal['symbol']} (некорректный риск)")
+        else:
+            logger.info(f"Fallback отклонил {signal['symbol']} (некорректные уровни)")
+
+    return validated_signals
 
 
 async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
@@ -348,6 +390,88 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
     except Exception as e:
         logger.error(f"Ошибка ИИ анализа {symbol}: {e}")
         return create_fallback_analysis(symbol, indicators_5m)
+
+
+async def ai_final_validation(preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
+    """НОВАЯ ФУНКЦИЯ: Финальная валидация сигналов с ИИ"""
+    logger.info(f"ИИ валидация {len(preliminary_signals)} сигналов")
+
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("DeepSeek API недоступен для валидации")
+        return create_fallback_validation(preliminary_signals)
+
+    if not preliminary_signals:
+        logger.warning("Нет сигналов для валидации")
+        return []
+
+    try:
+        # Подготавливаем данные для валидации
+        validation_data = {
+            'preliminary_signals': preliminary_signals,
+            'market_data': market_data
+        }
+
+        # Размер данных
+        json_data = json.dumps(validation_data, separators=(',', ':'))
+        data_size = len(json_data)
+        logger.info(f"Размер данных для валидации: {data_size/1024:.1f} KB")
+
+        # ИИ клиент
+        client = AsyncOpenAI(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_URL
+        )
+
+        prompt = load_prompt('prompt_validate.txt')
+        logger.info("Отправляем данные на финальную валидацию")
+
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=config.DEEPSEEK_MODEL,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json_data}
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=3000,  # Больше токенов для детального ответа
+                temperature=0.3   # Низкая температура для точности
+            ),
+            timeout=config.API_TIMEOUT
+        )
+
+        result_text = response.choices[0].message.content
+        logger.info(f"Получен ответ валидации: {len(result_text)} символов")
+
+        # Парсим JSON
+        validation_result = extract_json_from_text(result_text)
+
+        if validation_result:
+            final_signals = validation_result.get('final_signals', [])
+            rejected_signals = validation_result.get('rejected_signals', [])
+
+            logger.info(f"Валидация завершена: подтверждено {len(final_signals)}, отклонено {len(rejected_signals)}")
+
+            # Логируем результаты
+            for signal in final_signals:
+                action = signal.get('action', 'UNKNOWN')
+                duration = signal.get('hold_duration_minutes', 'N/A')
+                rr_ratio = signal.get('risk_reward_ratio', 'N/A')
+                logger.info(f"{signal['symbol']}: {action} R/R:{rr_ratio} Время:{duration}мин")
+
+            for rejected in rejected_signals:
+                logger.info(f"{rejected['symbol']}: ОТКЛОНЕН - {rejected['reason']}")
+
+            return final_signals
+        else:
+            logger.error("Не удалось извлечь результат валидации")
+            return create_fallback_validation(preliminary_signals)
+
+    except asyncio.TimeoutError:
+        logger.error(f"Таймаут валидации ({config.API_TIMEOUT}с)")
+        return create_fallback_validation(preliminary_signals)
+    except Exception as e:
+        logger.error(f"Ошибка ИИ валидации: {e}")
+        return create_fallback_validation(preliminary_signals)
 
 
 def create_fallback_analysis(symbol: str, indicators_5m: Dict) -> Dict:
