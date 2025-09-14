@@ -95,7 +95,7 @@ async def get_trading_pairs() -> List[str]:
                         "-" not in symbol):
                     symbols.append(symbol)
 
-            return symbols[:200]  # Ограничиваем для скорости
+            return symbols  # Ограничиваем для скорости
 
     except Exception as e:
         logger.error(f"Ошибка получения торговых пар: {e}")
