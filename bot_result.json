@@ -1,24 +1,8 @@
 {
-  "result": "NO_FINAL_SIGNALS",
-  "timing": {
-    "stage1_scan": 6.31,
-    "stage2_ai_select": 0.62,
-    "stage3_analysis": 1.41,
-    "total": 8.34
-  },
-  "stats": {
-    "pairs_processed": 200,
-    "promising_found": 9,
-    "ai_selected": 5,
-    "final_signals": 0,
-    "processing_speed": 31.7
-  },
-  "selected_pairs": [
-    "BNBUSDT",
-    "ENSUSDT",
-    "1000000MOGUSDT",
-    "ACEUSDT",
-    "AGLDUSDT"
-  ],
-  "signals": []
+  "result": "NO_AI_SELECTION",
+  "stage1_time": 5.82859468460083,
+  "stage2_time": 0.26453137397766113,
+  "signal_pairs": 8,
+  "total_time": 6.093126058578491,
+  "message": "ИИ не выбрал подходящих пар"
 }

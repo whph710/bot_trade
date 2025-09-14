@@ -1,6 +1,6 @@
 """
 Исправленный ИИ клиент для DeepSeek
-Убрано дублирование, исправлены критические ошибки
+Передача полных данных на этапе 2, структурированные ответы
 """
 
 import asyncio
@@ -26,64 +26,99 @@ def load_prompt(filename: str) -> str:
         except FileNotFoundError:
             # Дефолтный промпт если файл не найден
             if 'select' in filename:
-                _prompts_cache[filename] = """Ты эксперт-селектор торговых возможностей. Выбери 3-5 лучших торговых пар из предоставленных данных.
+                _prompts_cache[filename] = """Ты эксперт-трейдер. Анализируешь данные по нескольким торговым парам одновременно.
+
+Получаешь для каждой пары:
+- 32 свечи 15-минутного таймфрейма
+- 32 значения каждого индикатора
+- Текущие показатели
+
+ТВОЯ ЗАДАЧА: Выбрать 3-5 лучших пар для детального анализа.
 
 КРИТЕРИИ ОТБОРА:
-1. EMA выравнивание (ema5 > ema8 > ema20 для лонга, обратное для шорта)
-2. RSI в рабочем диапазоне 30-70
-3. MACD гистограмма активна (не близко к нулю)
-4. Объем выше среднего (volume_ratio > 1.2)
-5. Высокая базовая уверенность (confidence > 70)
+1. Четкий тренд (EMA выравнивание)
+2. Momentum (RSI + MACD активность) 
+3. Объем подтверждает движение
+4. Свечные паттерны поддерживают направление
+5. Синхронизация индикаторов
 
-СТРОГО ВЕРНИ JSON: {"pairs": ["SYMBOL1", "SYMBOL2", "SYMBOL3"]}
-Если подходящих пар нет: {"pairs": []}"""
+СТРОГО ВЕРНИ JSON:
+{"selected_pairs": ["SYMBOL1", "SYMBOL2", "SYMBOL3"]}
+
+Если нет подходящих пар: {"selected_pairs": []}"""
             else:
-                _prompts_cache[filename] = """Ты профессиональный трейдер-скальпер. Анализируй предоставленные данные и давай точные торговые рекомендации.
+                _prompts_cache[filename] = """Ты профессиональный трейдер-скальпер. 
+
+Получаешь ПОЛНЫЕ данные по одной торговой паре:
+- Свечи 5м и 15м
+- Все индикаторы с историей
+- Текущую рыночную ситуацию
+
+ТВОЯ ЗАДАЧА: Дать точный торговый сигнал с уровнями.
 
 АНАЛИЗИРУЙ:
-1. ТРЕНД 15М: общее направление рынка
-2. СИГНАЛ 5М: точка входа, свечные паттерны
-3. ИНДИКАТОРЫ: EMA выравнивание, RSI, MACD подтверждение
-4. ОБЪЕМ: подтверждение движения
-5. СИНХРОНИЗАЦИЯ: совпадение трендов 5м и 15м
+1. Тренд 15м (общее направление)
+2. Сигнал 5м (точка входа)
+3. Индикаторы (подтверждение)
+4. Уровни поддержки/сопротивления
+5. Волатильность (ATR)
 
-ФОРМАТ ОТВЕТА:
-СИГНАЛ: LONG/SHORT/NO_SIGNAL
-УВЕРЕННОСТЬ: 85%
-ОБОСНОВАНИЕ: краткое объяснение решения (2-3 предложения)"""
+РАСЧЕТ УРОВНЕЙ:
+- Вход: текущая цена + коррекция
+- Стоп-лосс: ATR * 1.5 или ключевой уровень
+- Тейк-профит: риск/доходность 1:2
+
+СТРОГО ВЕРНИ JSON:
+{
+  "signal": "LONG/SHORT/NO_SIGNAL",
+  "confidence": 85,
+  "entry_price": 43250.5,
+  "stop_loss": 43100.0,
+  "take_profit": 43550.0,
+  "analysis": "краткое обоснование"
+}"""
 
     return _prompts_cache[filename]
 
 
-async def ai_select_pairs(market_data: List[Dict]) -> List[str]:
+async def ai_select_pairs(pairs_data: List[Dict]) -> List[str]:
     """
-    ИИ отбор лучших пар для торговли
-    Получает данные 15m + индикаторы, возвращает 3-5 пар
+    ИИ отбор лучших пар - передаем ВСЕ данные одним запросом
+    Получает полные данные по всем парам с сигналами
     """
-    if not config.DEEPSEEK_API_KEY or not market_data:
+    if not config.DEEPSEEK_API_KEY or not pairs_data:
         # Фаллбек - берем топ по базовой уверенности
-        sorted_pairs = sorted(market_data, key=lambda x: x.get('confidence', 0), reverse=True)
+        sorted_pairs = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)
         return [pair['symbol'] for pair in sorted_pairs[:5]]
 
     try:
-        # Компактная подготовка данных для ИИ
-        compact_data = []
-        for item in market_data:
+        # Подготавливаем ПОЛНЫЕ данные для ИИ - все пары одним запросом
+        full_market_data = {}
+
+        for item in pairs_data:
             symbol = item['symbol']
-            indicators = item.get('indicators', {}).get('current', {})
 
-            compact_data.append({
-                'symbol': symbol,
-                'price': indicators.get('price', 0),
-                'ema_alignment': 'UP' if indicators.get('ema5', 0) > indicators.get('ema20', 0) else 'DOWN',
-                'rsi': indicators.get('rsi', 50),
-                'macd': indicators.get('macd_histogram', 0),
-                'volume_ratio': indicators.get('volume_ratio', 1.0),
-                'confidence': item.get('confidence', 0)
-            })
+            # Берем полные данные 15м + индикаторы
+            candles_15m = item.get('candles_15m', [])
+            indicators_15m = item.get('indicators_15m', {})
 
-        # Берем только топ для экономии токенов
-        top_data = compact_data[:config.MAX_PAIRS_TO_AI]
+            # Подготавливаем структурированные данные
+            full_market_data[symbol] = {
+                'base_signal': {
+                    'direction': item.get('direction', 'NONE'),
+                    'confidence': item.get('confidence', 0)
+                },
+                'candles_15m': candles_15m[-32:],  # Последние 32 свечи
+                'indicators': {
+                    'ema5': indicators_15m.get('ema5_history', [])[-32:],
+                    'ema8': indicators_15m.get('ema8_history', [])[-32:],
+                    'ema20': indicators_15m.get('ema20_history', [])[-32:],
+                    'rsi': indicators_15m.get('rsi_history', [])[-32:],
+                    'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-32:],
+                    'volume_ratio': indicators_15m.get('volume_ratio_history', [])[-32:]
+                },
+                'current': indicators_15m.get('current', {})
+            }
 
         client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
@@ -92,41 +127,50 @@ async def ai_select_pairs(market_data: List[Dict]) -> List[str]:
 
         prompt = load_prompt(config.SELECTION_PROMPT)
 
+        # Отправляем все данные одним запросом
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=config.DEEPSEEK_MODEL,
                 messages=[
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": json.dumps(top_data, separators=(',', ':'))}
+                    {"role": "user", "content": json.dumps(full_market_data, separators=(',', ':'))}
                 ],
-                max_tokens=500,
+                max_tokens=1000,
                 temperature=0.3
             ),
             timeout=config.API_TIMEOUT
         )
 
         result = response.choices[0].message.content
-        logger.info(f"ИИ отбор ответ: {result[:100]}...")
+        logger.info(f"ИИ отбор получил {len(pairs_data)} пар, ответ: {len(result)} символов")
 
-        # Парсим ответ
+        # Парсим JSON ответ
         try:
             # Ищем JSON в ответе
+            json_match = re.search(r'\{[^}]*"selected_pairs"[^}]*\}', result)
+            if json_match:
+                json_data = json.loads(json_match.group(0))
+                pairs = json_data.get('selected_pairs', [])
+                return pairs[:config.MAX_FINAL_PAIRS]
+
+            # Альтернативный парсинг
             json_match = re.search(r'\{[^}]*"pairs"[^}]*\}', result)
             if json_match:
                 json_data = json.loads(json_match.group(0))
                 pairs = json_data.get('pairs', [])
                 return pairs[:config.MAX_FINAL_PAIRS]
-        except:
-            pass
 
-        # Альтернативный парсинг - ищем символы
+        except Exception as parse_error:
+            logger.error(f"Ошибка парсинга JSON: {parse_error}")
+
+        # Фаллбек - ищем символы в тексте
         symbols = re.findall(r'[A-Z]{3,10}USDT', result)
         return list(set(symbols))[:config.MAX_FINAL_PAIRS]
 
     except Exception as e:
         logger.error(f"Ошибка ИИ отбора: {e}")
         # Фаллбек
-        sorted_pairs = sorted(market_data, key=lambda x: x.get('confidence', 0), reverse=True)
+        sorted_pairs = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)
         return [pair['symbol'] for pair in sorted_pairs[:3]]
 
 
@@ -134,49 +178,56 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
                           indicators_5m: Dict, indicators_15m: Dict) -> Dict:
     """
     Детальный ИИ анализ конкретной пары
-    Получает полные данные 5m + 15m + индикаторы, возвращает торговый сигнал
+    Возвращает структурированный JSON с торговым сигналом и уровнями
     """
     if not config.DEEPSEEK_API_KEY:
         return {
             'symbol': symbol,
             'signal': 'NO_SIGNAL',
             'confidence': 0,
+            'entry_price': 0,
+            'stop_loss': 0,
+            'take_profit': 0,
             'analysis': 'ИИ недоступен'
         }
 
     try:
-        # Подготовка полных данных для детального анализа
+        # Подготовка ПОЛНЫХ данных для детального анализа
+        current_price = indicators_5m.get('current', {}).get('price', 0)
+        atr_5m = indicators_5m.get('current', {}).get('atr', 0)
+
         analysis_data = {
             'symbol': symbol,
+            'current_price': current_price,
             'timeframes': {
                 '5m': {
-                    'recent_candles': data_5m[-20:] if len(data_5m) >= 20 else data_5m,
+                    'candles': data_5m[-50:],  # Больше данных для анализа
                     'indicators': {
-                        'ema5': indicators_5m.get('ema5_history', [])[-20:],
-                        'ema8': indicators_5m.get('ema8_history', [])[-20:],
-                        'ema20': indicators_5m.get('ema20_history', [])[-20:],
-                        'rsi': indicators_5m.get('rsi_history', [])[-20:],
-                        'macd_histogram': indicators_5m.get('macd_histogram_history', [])[-20:],
-                        'volume_ratio': indicators_5m.get('volume_ratio_history', [])[-20:]
+                        'ema5': indicators_5m.get('ema5_history', [])[-50:],
+                        'ema8': indicators_5m.get('ema8_history', [])[-50:],
+                        'ema20': indicators_5m.get('ema20_history', [])[-50:],
+                        'rsi': indicators_5m.get('rsi_history', [])[-50:],
+                        'macd_histogram': indicators_5m.get('macd_histogram_history', [])[-50:],
+                        'volume_ratio': indicators_5m.get('volume_ratio_history', [])[-50:]
                     }
                 },
                 '15m': {
-                    'recent_candles': data_15m[-10:] if len(data_15m) >= 10 else data_15m,
+                    'candles': data_15m[-30:],  # 15м для контекста
                     'indicators': {
-                        'ema5': indicators_15m.get('ema5_history', [])[-10:],
-                        'ema8': indicators_15m.get('ema8_history', [])[-10:],
-                        'ema20': indicators_15m.get('ema20_history', [])[-10:],
-                        'rsi': indicators_15m.get('rsi_history', [])[-10:],
-                        'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-10:]
+                        'ema5': indicators_15m.get('ema5_history', [])[-30:],
+                        'ema8': indicators_15m.get('ema8_history', [])[-30:],
+                        'ema20': indicators_15m.get('ema20_history', [])[-30:],
+                        'rsi': indicators_15m.get('rsi_history', [])[-30:],
+                        'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-30:]
                     }
                 }
             },
-            'current': {
-                'price': indicators_5m.get('current', {}).get('price', 0),
+            'current_state': {
+                'price': current_price,
+                'atr': atr_5m,
                 'trend_5m': 'UP' if indicators_5m.get('current', {}).get('ema5', 0) > indicators_5m.get('current', {}).get('ema20', 0) else 'DOWN',
                 'trend_15m': 'UP' if indicators_15m.get('current', {}).get('ema5', 0) > indicators_15m.get('current', {}).get('ema20', 0) else 'DOWN',
-                'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0),
-                'atr': indicators_5m.get('current', {}).get('atr', 0)
+                'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0)
             }
         }
 
@@ -201,9 +252,36 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
         )
 
         result = response.choices[0].message.content
-        logger.info(f"ИИ анализ {symbol}: {len(result)} символов")
+        logger.info(f"ИИ анализ {symbol}: получен ответ {len(result)} символов")
 
-        # Парсим сигнал из ответа
+        # Парсим JSON ответ
+        try:
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', result)
+            if json_match:
+                json_data = json.loads(json_match.group(0))
+
+                # Проверяем обязательные поля
+                signal = json_data.get('signal', 'NO_SIGNAL')
+                confidence = int(json_data.get('confidence', 0))
+                entry_price = float(json_data.get('entry_price', current_price))
+                stop_loss = float(json_data.get('stop_loss', 0))
+                take_profit = float(json_data.get('take_profit', 0))
+
+                return {
+                    'symbol': symbol,
+                    'signal': signal,
+                    'confidence': confidence,
+                    'entry_price': entry_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'analysis': json_data.get('analysis', result),
+                    'trend_alignment': analysis_data['current_state']['trend_5m'] == analysis_data['current_state']['trend_15m'],
+                    'volume_confirmation': analysis_data['current_state']['volume_ratio'] > 1.2
+                }
+        except Exception as parse_error:
+            logger.error(f"Ошибка парсинга JSON анализа {symbol}: {parse_error}")
+
+        # Фаллбек парсинг
         signal = 'NO_SIGNAL'
         confidence = 0
 
@@ -222,9 +300,12 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
             'symbol': symbol,
             'signal': signal,
             'confidence': confidence,
+            'entry_price': current_price,
+            'stop_loss': 0,
+            'take_profit': 0,
             'analysis': result,
-            'trend_alignment': analysis_data['current']['trend_5m'] == analysis_data['current']['trend_15m'],
-            'volume_confirmation': analysis_data['current']['volume_ratio'] > 1.2
+            'trend_alignment': analysis_data['current_state']['trend_5m'] == analysis_data['current_state']['trend_15m'],
+            'volume_confirmation': analysis_data['current_state']['volume_ratio'] > 1.2
         }
 
     except Exception as e:
@@ -233,5 +314,8 @@ async def ai_analyze_pair(symbol: str, data_5m: List, data_15m: List,
             'symbol': symbol,
             'signal': 'NO_SIGNAL',
             'confidence': 0,
+            'entry_price': 0,
+            'stop_loss': 0,
+            'take_profit': 0,
             'analysis': f'Ошибка анализа: {str(e)}'
         }
