@@ -1,5 +1,5 @@
 """
-Исправленный скальпинговый бот с диагностикой + 4-й этап финальной валидации
+Оптимизированный скальпинговый бот с кешированием данных и улучшенным логированием
 """
 
 import asyncio
@@ -7,33 +7,123 @@ import logging
 import time
 import json
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from config import config, has_api_key
 from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal
 from deepseek import ai_select_pairs, ai_analyze_pair
 
-# Настройка логирования с диагностикой
+# Упрощенное логирование без избыточной детализации
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
 
-class ScalpingBot:
-    """Исправленный скальпинговый бот с диагностикой + финальная валидация"""
+class DataCache:
+    """Кеш для хранения и переиспользования рыночных данных"""
+
+    def __init__(self):
+        self.klines_cache = {}  # {symbol: {interval: klines}}
+        self.indicators_cache = {}  # {symbol: {interval: indicators}}
+
+    def cache_klines(self, symbol: str, interval: str, klines: List):
+        """Кеширование свечных данных"""
+        if symbol not in self.klines_cache:
+            self.klines_cache[symbol] = {}
+        self.klines_cache[symbol][interval] = klines
+
+    def get_klines(self, symbol: str, interval: str, limit: int) -> Optional[List]:
+        """Получение кешированных данных с обрезкой по лимиту"""
+        cached = self.klines_cache.get(symbol, {}).get(interval)
+        if cached and len(cached) >= limit:
+            return cached[-limit:]
+        return None
+
+    def cache_indicators(self, symbol: str, interval: str, indicators: Dict):
+        """Кеширование индикаторов"""
+        if symbol not in self.indicators_cache:
+            self.indicators_cache[symbol] = {}
+        self.indicators_cache[symbol][interval] = indicators
+
+    def get_indicators(self, symbol: str, interval: str) -> Optional[Dict]:
+        """Получение кешированных индикаторов"""
+        return self.indicators_cache.get(symbol, {}).get(interval)
+
+    def clear(self):
+        """Очистка кеша"""
+        self.klines_cache.clear()
+        self.indicators_cache.clear()
+
+
+class OptimizedScalpingBot:
+    """Оптимизированный скальпинговый бот с кешированием и улучшенной производительностью"""
 
     def __init__(self):
         self.processed_pairs = 0
         self.session_start = time.time()
-        # Хранилище данных для финальной валидации
-        self.detailed_data = {}
+        self.cache = DataCache()
+        # Данные для финальной валидации (сохраняем только необходимое)
+        self.validation_data = {}
+
+    async def load_initial_data(self, pairs: List[str]) -> Dict[str, Dict]:
+        """Предзагрузка всех необходимых данных одним батчем"""
+        logger.info(f"Предзагрузка данных для {len(pairs)} пар...")
+
+        # Подготавливаем все запросы сразу
+        requests = []
+        for pair in pairs:
+            requests.extend([
+                {'symbol': pair, 'interval': '15', 'limit': max(config.AI_BULK_15M, config.FINAL_15M)},
+                {'symbol': pair, 'interval': '5', 'limit': config.FINAL_5M}
+            ])
+
+        # Массовая загрузка
+        results = await batch_fetch_klines(requests)
+
+        # Кешируем все данные
+        loaded_pairs = set()
+        for result in results:
+            if result.get('success'):
+                symbol = result['symbol']
+                # Определяем интервал из запроса
+                klines = result['klines']
+                if len(klines) >= 100:  # Это 5м данные
+                    self.cache.cache_klines(symbol, '5', klines)
+                    loaded_pairs.add(symbol)
+                else:  # Это 15м данные
+                    self.cache.cache_klines(symbol, '15', klines)
+                    loaded_pairs.add(symbol)
+
+        logger.info(f"Загружены данные по {len(loaded_pairs)} парам")
+        return {pair: True for pair in loaded_pairs}
+
+    def calculate_and_cache_indicators(self, symbol: str, interval: str, klines: List, history_length: int) -> Optional[Dict]:
+        """Расчет и кеширование индикаторов"""
+        # Проверяем кеш
+        cached = self.cache.get_indicators(symbol, interval)
+        if cached:
+            return cached
+
+        # Рассчитываем индикаторы
+        if interval == '5' and history_length > 20:
+            indicators = calculate_ai_indicators(klines, history_length)
+        elif interval == '15' and history_length > 20:
+            indicators = calculate_ai_indicators(klines, history_length)
+        else:
+            indicators = calculate_basic_indicators(klines)
+
+        # Кешируем результат
+        if indicators:
+            self.cache.cache_indicators(symbol, interval, indicators)
+
+        return indicators
 
     async def stage1_filter_signals(self) -> List[Dict]:
-        """ЭТАП 1: Фильтрация пар с сигналами"""
+        """ЭТАП 1: Оптимизированная фильтрация пар"""
         start_time = time.time()
         logger.info("ЭТАП 1: Фильтрация пар с сигналами")
 
@@ -43,486 +133,320 @@ class ScalpingBot:
             logger.error("Не удалось получить торговые пары")
             return []
 
-        logger.info(f"Получено {len(pairs)} торговых пар")
-
-        # Подготавливаем запросы
-        requests = [
-            {'symbol': pair, 'interval': '15', 'limit': config.QUICK_SCAN_15M}
-            for pair in pairs
-        ]
-
-        # Массовое получение данных
-        logger.info(f"Загружаем данные для {len(requests)} пар")
-        results = await batch_fetch_klines(requests)
-        logger.info(f"Получено данных по {len(results)} парам")
+        # Предзагружаем все данные
+        await self.load_initial_data(pairs)
 
         pairs_with_signals = []
-        error_count = 0
+        processed = 0
+        errors = 0
 
-        # Обрабатываем результаты
-        for i, result in enumerate(results):
-            if not result.get('success') or len(result['klines']) < 20:
+        logger.info(f"Обработка {len(pairs)} пар...")
+
+        # Обрабатываем кешированные данные
+        for symbol in pairs:
+            klines_15m = self.cache.get_klines(symbol, '15', config.QUICK_SCAN_15M)
+            if not klines_15m or len(klines_15m) < 20:
+                errors += 1
                 continue
 
-            symbol = result['symbol']
-            klines = result['klines']
-
-            if i % 50 == 0:
-                logger.info(f"Обработано {i}/{len(results)} пар")
-
             try:
-                # ДИАГНОСТИКА: проверяем данные свечей
-                if len(klines) < 20:
-                    logger.debug(f"{symbol}: мало свечей ({len(klines)})")
-                    continue
-
-                # Проверим формат свечей
-                first_candle = klines[0]
-                if len(first_candle) < 6:
-                    logger.debug(f"{symbol}: неправильный формат свечи")
-                    continue
-
-                indicators = calculate_basic_indicators(klines)
+                indicators = self.calculate_and_cache_indicators(symbol, '15', klines_15m, 20)
                 if not indicators:
-                    error_count += 1
-                    logger.debug(f"{symbol}: не удалось рассчитать индикаторы")
-                    continue
-
-                # ДИАГНОСТИКА: проверяем индикаторы
-                price = indicators.get('price', 0)
-                ema5 = indicators.get('ema5', 0)
-                if price <= 0 or ema5 <= 0:
-                    logger.debug(f"{symbol}: некорректные индикаторы (price: {price}, ema5: {ema5})")
+                    errors += 1
                     continue
 
                 signal_check = check_basic_signal(indicators)
-
                 if signal_check['signal'] and signal_check['confidence'] >= config.MIN_CONFIDENCE:
                     pair_data = {
                         'symbol': symbol,
                         'confidence': signal_check['confidence'],
                         'direction': signal_check['direction'],
-                        'base_indicators': indicators,
-                        'stage1_klines': klines
+                        'base_indicators': indicators
                     }
                     pairs_with_signals.append(pair_data)
-                    logger.info(f"{symbol}: {signal_check['direction']} ({signal_check['confidence']}%)")
+
+                processed += 1
 
             except Exception as e:
-                error_count += 1
-                logger.error(f"Ошибка обработки {symbol}: {e}")
+                errors += 1
                 continue
 
         # Сортируем по уверенности
         pairs_with_signals.sort(key=lambda x: x['confidence'], reverse=True)
 
         elapsed = time.time() - start_time
-        self.processed_pairs = len(results)
+        self.processed_pairs = processed
 
-        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 1:")
-        logger.info(f"Обработано: {len(results)} пар")
-        logger.info(f"Ошибок обработки: {error_count}")
-        logger.info(f"С сигналами: {len(pairs_with_signals)} пар")
-        logger.info(f"Время: {elapsed:.1f}сек")
-
+        logger.info(f"ЭТАП 1 завершен: обработано {processed} пар, найдено {len(pairs_with_signals)} сигналов, ошибок {errors}, время {elapsed:.1f}с")
         return pairs_with_signals
 
     async def stage2_ai_bulk_select(self, signal_pairs: List[Dict]) -> List[str]:
-        """ЭТАП 2: ИИ отбор пар"""
+        """ЭТАП 2: Оптимизированный ИИ отбор"""
         start_time = time.time()
-        logger.info(f"ЭТАП 2: ИИ анализ {len(signal_pairs)} пар с сигналами")
+        logger.info(f"ЭТАП 2: ИИ анализ {len(signal_pairs)} пар")
 
         if not signal_pairs:
-            logger.warning("Нет пар для ИИ анализа")
             return []
-
-        # Подготавливаем данные для ИИ
-        logger.info("Подготовка данных для ИИ анализа")
 
         ai_input_data = []
         preparation_errors = 0
 
-        for i, pair_data in enumerate(signal_pairs):
+        logger.info("Подготовка данных для ИИ...")
+
+        for pair_data in signal_pairs:
             symbol = pair_data['symbol']
 
-            logger.info(f"Подготовка {symbol} ({i+1}/{len(signal_pairs)})")
-
             try:
-                # Используем свечи из этапа 1 или получаем новые
-                if 'stage1_klines' in pair_data and len(pair_data['stage1_klines']) >= 20:
-                    candles_15m = pair_data['stage1_klines']
-                else:
-                    candles_15m = await fetch_klines(symbol, '15', config.AI_BULK_15M)
-
+                # Используем кешированные данные
+                candles_15m = self.cache.get_klines(symbol, '15', config.AI_BULK_15M)
                 if not candles_15m or len(candles_15m) < 20:
-                    logger.warning(f"{symbol}: недостаточно данных ({len(candles_15m) if candles_15m else 0} свечей)")
                     preparation_errors += 1
                     continue
 
-                # ДИАГНОСТИКА: проверим данные перед расчетом
-                logger.debug(f"{symbol}: данные OK, свечей: {len(candles_15m)}")
-
-                # Рассчитываем индикаторы с историей
-                indicators_15m = calculate_ai_indicators(candles_15m, config.AI_INDICATORS_HISTORY)
+                # Используем кешированные индикаторы или рассчитываем новые
+                indicators_15m = self.calculate_and_cache_indicators(
+                    symbol, '15', candles_15m, config.AI_INDICATORS_HISTORY
+                )
                 if not indicators_15m:
-                    logger.warning(f"{symbol}: ошибка расчета индикаторов")
                     preparation_errors += 1
                     continue
 
-                # ДИАГНОСТИКА: проверим структуру индикаторов
-                required_keys = ['ema5_history', 'ema8_history', 'current']
-                missing_keys = [key for key in required_keys if key not in indicators_15m]
-                if missing_keys:
-                    logger.warning(f"{symbol}: отсутствуют ключи: {missing_keys}")
-                    preparation_errors += 1
-                    continue
-
-                # Структура данных для ИИ
                 pair_ai_data = {
                     'symbol': symbol,
                     'confidence': pair_data['confidence'],
                     'direction': pair_data['direction'],
-                    'candles_15m': candles_15m[-config.AI_BULK_15M:],
+                    'candles_15m': candles_15m,
                     'indicators_15m': indicators_15m
                 }
-
                 ai_input_data.append(pair_ai_data)
-                logger.debug(f"{symbol}: подготовлено для ИИ")
 
             except Exception as e:
                 preparation_errors += 1
-                logger.error(f"Ошибка подготовки данных для ИИ {symbol}: {e}")
                 continue
 
         if not ai_input_data:
-            logger.error("НЕТ ДАННЫХ ДЛЯ ИИ АНАЛИЗА!")
-            logger.error(f"Ошибок подготовки: {preparation_errors}")
+            logger.error("Нет данных для ИИ анализа")
             return []
 
-        logger.info(f"Подготовлено {len(ai_input_data)} пар для ИИ из {len(signal_pairs)} (ошибок: {preparation_errors})")
-
-        # Размер данных
-        try:
-            json_data = json.dumps(ai_input_data, separators=(',', ':'))
-            data_size = len(json_data)
-            logger.info(f"Размер данных для ИИ: {data_size/1024:.1f} KB")
-        except Exception as e:
-            logger.error(f"Ошибка сериализации данных для ИИ: {e}")
-            return []
+        logger.info(f"Отправка {len(ai_input_data)} пар в ИИ (ошибок подготовки: {preparation_errors})")
 
         # ИИ анализ
-        logger.info("Отправляем данные в ИИ для анализа")
         selected_pairs = await ai_select_pairs(ai_input_data)
 
         elapsed = time.time() - start_time
-
-        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 2:")
-        logger.info(f"Отправлено в ИИ: {len(ai_input_data)} пар")
-        logger.info(f"Ошибок подготовки: {preparation_errors}")
-        logger.info(f"Выбрано ИИ: {len(selected_pairs)} пар")
-        logger.info(f"Время: {elapsed:.1f}сек")
-
-        if selected_pairs:
-            logger.info(f"Пары для детального анализа: {', '.join(selected_pairs)}")
-        else:
-            logger.warning("ИИ не выбрал пары для детального анализа")
+        logger.info(f"ЭТАП 2 завершен: выбрано {len(selected_pairs)} пар, время {elapsed:.1f}с")
 
         return selected_pairs
 
     async def stage3_detailed_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """ЭТАП 3: Детальный анализ каждой пары"""
+        """ЭТАП 3: Оптимизированный детальный анализ"""
         start_time = time.time()
         logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар")
 
         if not selected_pairs:
-            logger.warning("Нет пар для детального анализа")
             return []
 
         final_signals = []
 
-        # Анализируем каждую пару
-        for i, symbol in enumerate(selected_pairs):
-            logger.info(f"Анализ {symbol} ({i+1}/{len(selected_pairs)})")
+        logger.info("Анализ финальных пар...")
 
+        for symbol in selected_pairs:
             try:
-                # Получаем полные данные
-                klines_5m_task = fetch_klines(symbol, '5', config.FINAL_5M)
-                klines_15m_task = fetch_klines(symbol, '15', config.FINAL_15M)
+                # Используем кешированные данные
+                klines_5m = self.cache.get_klines(symbol, '5', config.FINAL_5M)
+                klines_15m = self.cache.get_klines(symbol, '15', config.FINAL_15M)
 
-                klines_5m, klines_15m = await asyncio.gather(klines_5m_task, klines_15m_task)
+                if not klines_5m or not klines_15m:
+                    # Загружаем недостающие данные
+                    if not klines_5m:
+                        klines_5m = await fetch_klines(symbol, '5', config.FINAL_5M)
+                        if klines_5m:
+                            self.cache.cache_klines(symbol, '5', klines_5m)
+                    if not klines_15m:
+                        klines_15m = await fetch_klines(symbol, '15', config.FINAL_15M)
+                        if klines_15m:
+                            self.cache.cache_klines(symbol, '15', klines_15m)
 
-                if (not klines_5m or len(klines_5m) < 100 or
-                        not klines_15m or len(klines_15m) < 50):
-                    logger.warning(f"{symbol}: недостаточно данных (5м: {len(klines_5m) if klines_5m else 0}, 15м: {len(klines_15m) if klines_15m else 0})")
+                if not klines_5m or not klines_15m:
                     continue
 
-                # Рассчитываем индикаторы
-                indicators_5m = calculate_ai_indicators(klines_5m, config.FINAL_INDICATORS)
-                indicators_15m = calculate_ai_indicators(klines_15m, config.FINAL_INDICATORS)
+                # Используем кешированные индикаторы
+                indicators_5m = self.calculate_and_cache_indicators(symbol, '5', klines_5m, config.FINAL_INDICATORS)
+                indicators_15m = self.calculate_and_cache_indicators(symbol, '15', klines_15m, config.FINAL_INDICATORS)
 
                 if not indicators_5m or not indicators_15m:
-                    logger.warning(f"{symbol}: ошибка расчета индикаторов")
                     continue
 
-                # СОХРАНЯЕМ ДАННЫЕ ДЛЯ ВАЛИДАЦИИ
-                self.detailed_data[symbol] = {
-                    'klines_5m': klines_5m,
-                    'klines_15m': klines_15m,
+                # Сохраняем данные для валидации (минимальный набор)
+                self.validation_data[symbol] = {
+                    'klines_5m': klines_5m[-100:],
+                    'klines_15m': klines_15m[-50:],
                     'indicators_5m': indicators_5m,
                     'indicators_15m': indicators_15m
                 }
 
                 # ИИ анализ
-                analysis = await ai_analyze_pair(
-                    symbol, klines_5m, klines_15m, indicators_5m, indicators_15m
-                )
+                analysis = await ai_analyze_pair(symbol, klines_5m, klines_15m, indicators_5m, indicators_15m)
 
-                # Проверяем результат
-                if (analysis['signal'] != 'NO_SIGNAL' and
-                    analysis['confidence'] >= config.MIN_CONFIDENCE):
-
+                if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
                     final_signals.append(analysis)
-                    entry = analysis.get('entry_price', 0)
-                    stop = analysis.get('stop_loss', 0)
-                    profit = analysis.get('take_profit', 0)
-
-                    logger.info(f"{symbol}: {analysis['signal']} ({analysis['confidence']}%)")
-                    if entry and stop and profit:
-                        risk_reward = round(abs(profit - entry) / abs(entry - stop), 2) if entry != stop else 0
-                        logger.info(f"Вход: {entry:.4f} | Стоп: {stop:.4f} | Профит: {profit:.4f} | R/R: 1:{risk_reward}")
-                else:
-                    logger.info(f"{symbol}: {analysis['signal']} ({analysis['confidence']}%) - не прошел фильтр")
 
             except Exception as e:
                 logger.error(f"Ошибка анализа {symbol}: {e}")
                 continue
 
         elapsed = time.time() - start_time
-
-        logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 3:")
-        logger.info(f"Анализировано: {len(selected_pairs)} пар")
-        logger.info(f"Финальных сигналов: {len(final_signals)}")
-        logger.info(f"Время: {elapsed:.1f}сек")
-
-        if final_signals:
-            logger.info("Торговые сигналы:")
-            for signal in final_signals:
-                logger.info(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
+        logger.info(f"ЭТАП 3 завершен: получено {len(final_signals)} сигналов, время {elapsed:.1f}с")
 
         return final_signals
 
     async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> List[Dict]:
-        """ЭТАП 4: Финальная валидация с ИИ"""
+        """ЭТАП 4: Оптимизированная финальная валидация"""
         start_time = time.time()
         logger.info(f"ЭТАП 4: Финальная валидация {len(preliminary_signals)} сигналов")
 
-        if not preliminary_signals:
-            logger.warning("Нет сигналов для валидации")
-            return []
-
-        if not config.DEEPSEEK_API_KEY:
-            logger.warning("DeepSeek API недоступен для валидации, возвращаем исходные сигналы")
+        if not preliminary_signals or not config.DEEPSEEK_API_KEY:
+            if not config.DEEPSEEK_API_KEY:
+                logger.warning("DeepSeek API недоступен для валидации")
             return preliminary_signals
 
         try:
             from deepseek import load_prompt, extract_json_from_text
             from openai import AsyncOpenAI
 
-            # Подготавливаем полные данные для валидации
-            validation_data = {
+            # Используем минимально необходимые данные для валидации
+            validation_payload = {
                 'preliminary_signals': preliminary_signals,
                 'market_data': {}
             }
 
-            # Добавляем все исходные данные по каждой паре
+            # Добавляем только ключевые данные
             for signal in preliminary_signals:
                 symbol = signal['symbol']
-                if symbol in self.detailed_data:
-                    data = self.detailed_data[symbol]
-                    validation_data['market_data'][symbol] = {
-                        'candles_5m': data['klines_5m'][-100:],  # Последние 100 свечей 5м
-                        'candles_15m': data['klines_15m'][-50:],  # Последние 50 свечей 15м
+                if symbol in self.validation_data:
+                    data = self.validation_data[symbol]
+                    validation_payload['market_data'][symbol] = {
+                        'candles_5m': data['klines_5m'],
+                        'candles_15m': data['klines_15m'],
                         'indicators_5m': data['indicators_5m'],
                         'indicators_15m': data['indicators_15m']
                     }
 
-            # Размер данных
-            json_data = json.dumps(validation_data, separators=(',', ':'))
-            data_size = len(json_data)
-            logger.info(f"Размер данных для валидации: {data_size/1024:.1f} KB")
+            logger.info("Отправка данных на финальную валидацию...")
 
-            # Загружаем промпт
+            # Загружаем промпт и отправляем запрос
             prompt = load_prompt('prompt_validate.txt')
-
-            # ИИ клиент
-            client = AsyncOpenAI(
-                api_key=config.DEEPSEEK_API_KEY,
-                base_url=config.DEEPSEEK_URL
-            )
-
-            logger.info("Отправляем данные на финальную валидацию")
-
+            client = AsyncOpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_URL)
+            print(json.dumps(validation_payload, separators=(',', ':')))
             response = await asyncio.wait_for(
                 client.chat.completions.create(
                     model=config.DEEPSEEK_MODEL,
                     messages=[
                         {"role": "system", "content": prompt},
-                        {"role": "user", "content": json_data}
+                        {"role": "user", "content": json.dumps(validation_payload, separators=(',', ':'))}
                     ],
                     response_format={"type": "json_object"},
-                    max_tokens=3000,  # Больше токенов для детального ответа
-                    temperature=0.3   # Низкая температура для точности
+                    max_tokens=3000,
+                    temperature=0.3
                 ),
                 timeout=config.API_TIMEOUT
             )
 
             result_text = response.choices[0].message.content
-            logger.info(f"Получен ответ валидации: {len(result_text)} символов")
-
-            # Парсим JSON
             validation_result = extract_json_from_text(result_text)
 
             if validation_result:
-                validation_status = validation_result.get('validation_result', 'UNKNOWN')
                 final_signals = validation_result.get('final_signals', [])
-                rejected_signals = validation_result.get('rejected_signals', [])
+                rejected_count = len(validation_result.get('rejected_signals', []))
 
                 elapsed = time.time() - start_time
-
-                logger.info(f"РЕЗУЛЬТАТЫ ЭТАПА 4:")
-                logger.info(f"Статус валидации: {validation_status}")
-                logger.info(f"Подтверждено сигналов: {len(final_signals)}")
-                logger.info(f"Отклонено сигналов: {len(rejected_signals)}")
-                logger.info(f"Время: {elapsed:.1f}сек")
-
-                # Логируем детали
-                if final_signals:
-                    logger.info("Подтвержденные сигналы:")
-                    for signal in final_signals:
-                        duration = signal.get('hold_duration_minutes', 0)
-                        rr_ratio = signal.get('risk_reward_ratio', 0)
-                        logger.info(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%) "
-                                  f"R/R: 1:{rr_ratio} Время: {duration}мин")
-
-                if rejected_signals:
-                    logger.info("Отклоненные сигналы:")
-                    for rejected in rejected_signals:
-                        logger.info(f"{rejected['symbol']}: {rejected['reason']}")
+                logger.info(f"ЭТАП 4 завершен: подтверждено {len(final_signals)} сигналов, отклонено {rejected_count}, время {elapsed:.1f}с")
 
                 return final_signals
-
             else:
-                logger.error("Не удалось извлечь результат валидации")
+                logger.error("Ошибка парсинга результата валидации")
                 return preliminary_signals
 
         except Exception as e:
-            logger.error(f"Ошибка валидации: {e}")
+            elapsed = time.time() - start_time
+            logger.error(f"Ошибка валидации: {e}, время {elapsed:.1f}с")
             return preliminary_signals
 
     async def run_full_cycle(self) -> Dict[str, Any]:
-        """Полный цикл работы бота с 4-м этапом"""
+        """Оптимизированный полный цикл работы бота"""
         cycle_start = time.time()
 
-        logger.info("ЗАПУСК ЦИКЛА АНАЛИЗА (4 ЭТАПА)")
-        logger.info(f"Время запуска: {datetime.now().strftime('%H:%M:%S')}")
+        logger.info("ЗАПУСК ПОЛНОГО ЦИКЛА АНАЛИЗА")
         logger.info(f"DeepSeek API: {'Доступен' if has_api_key else 'Недоступен'}")
 
         try:
-            # ЭТАП 1
-            stage1_start = time.time()
-            signal_pairs = await self.stage1_filter_signals()
-            stage1_time = time.time() - stage1_start
+            # Очищаем кеш перед началом
+            self.cache.clear()
 
+            # ЭТАП 1: Фильтрация
+            signal_pairs = await self.stage1_filter_signals()
             if not signal_pairs:
                 return {
                     'result': 'NO_SIGNAL_PAIRS',
-                    'stage1_time': stage1_time,
                     'total_time': time.time() - cycle_start,
                     'pairs_scanned': self.processed_pairs,
                     'message': 'Нет пар с торговыми сигналами'
                 }
 
-            # ЭТАП 2
-            stage2_start = time.time()
+            # ЭТАП 2: ИИ отбор
             selected_pairs = await self.stage2_ai_bulk_select(signal_pairs)
-            stage2_time = time.time() - stage2_start
-
             if not selected_pairs:
                 return {
                     'result': 'NO_AI_SELECTION',
-                    'stage1_time': stage1_time,
-                    'stage2_time': stage2_time,
+                    'total_time': time.time() - cycle_start,
                     'signal_pairs': len(signal_pairs),
                     'pairs_scanned': self.processed_pairs,
-                    'total_time': time.time() - cycle_start,
                     'message': 'ИИ не выбрал подходящих пар'
                 }
 
-            # ЭТАП 3
-            stage3_start = time.time()
+            # ЭТАП 3: Детальный анализ
             preliminary_signals = await self.stage3_detailed_analysis(selected_pairs)
-            stage3_time = time.time() - stage3_start
-
             if not preliminary_signals:
                 return {
                     'result': 'NO_PRELIMINARY_SIGNALS',
-                    'stage1_time': stage1_time,
-                    'stage2_time': stage2_time,
-                    'stage3_time': stage3_time,
                     'total_time': time.time() - cycle_start,
                     'message': 'Детальный анализ не выявил качественных сигналов'
                 }
 
-            # ЭТАП 4 - НОВЫЙ!
-            stage4_start = time.time()
+            # ЭТАП 4: Финальная валидация
             validated_signals = await self.stage4_final_validation(preliminary_signals)
-            stage4_time = time.time() - stage4_start
 
+            # Формируем финальный результат
             total_time = time.time() - cycle_start
-
-            # Сохраняем финальный результат
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
             final_result = {
                 'timestamp': timestamp,
                 'result': 'SUCCESS' if validated_signals else 'NO_VALIDATED_SIGNALS',
-                'timing': {
-                    'stage1_filter': round(stage1_time, 2),
-                    'stage2_ai_bulk': round(stage2_time, 2),
-                    'stage3_detailed': round(stage3_time, 2),
-                    'stage4_validation': round(stage4_time, 2),
-                    'total': round(total_time, 2)
-                },
+                'total_time': round(total_time, 2),
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs_found': len(signal_pairs),
                     'ai_selected': len(selected_pairs),
                     'preliminary_signals': len(preliminary_signals),
                     'validated_signals': len(validated_signals),
-                    'processing_speed': round(self.processed_pairs / stage1_time, 1) if stage1_time > 0 else 0
+                    'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
                 },
                 'validated_signals': validated_signals,
                 'api_available': has_api_key
             }
 
-            # Сохраняем в файл с временной меткой
-            filename = f'bot_final_result_{timestamp}.json'
+            # Сохраняем результат
+            filename = f'bot_result_{timestamp}.json'
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(final_result, f, indent=2, ensure_ascii=False, default=str)
 
-            logger.info(f"Финальный результат сохранен в {filename}")
-
-            # Финальное логирование
-            logger.info("ЗАВЕРШЕНИЕ ПОЛНОГО ЦИКЛА АНАЛИЗА")
-            logger.info(f"Пайплайн: {self.processed_pairs} -> {len(signal_pairs)} -> {len(selected_pairs)} -> {len(preliminary_signals)} -> {len(validated_signals)}")
-            logger.info(f"Время: общее {total_time:.1f}с (фильтр: {stage1_time:.1f}с | ИИ: {stage2_time:.1f}с | анализ: {stage3_time:.1f}с | валидация: {stage4_time:.1f}с)")
-            logger.info(f"Скорость: {self.processed_pairs / stage1_time:.0f} пар/сек")
+            logger.info(f"ЦИКЛ ЗАВЕРШЕН: {self.processed_pairs}->{len(signal_pairs)}->{len(selected_pairs)}->{len(preliminary_signals)}->{len(validated_signals)}, время {total_time:.1f}с, скорость {self.processed_pairs/total_time:.0f} пар/сек")
 
             return final_result
 
         except Exception as e:
             logger.error(f"Критическая ошибка цикла: {e}")
-            import traceback
-            logger.error(f"Стек ошибки: {traceback.format_exc()}")
             return {
                 'result': 'ERROR',
                 'error': str(e),
@@ -531,83 +455,42 @@ class ScalpingBot:
 
     async def cleanup(self):
         """Очистка ресурсов"""
-        logger.info("Очистка ресурсов")
+        self.cache.clear()
         await cleanup_api()
 
 
 async def main():
-    """Главная функция с диагностикой + 4-й этап"""
-    print("СКАЛЬПИНГОВЫЙ БОТ v2.0 (С ФИНАЛЬНОЙ ВАЛИДАЦИЕЙ)")
-    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print()
-    print("ЛОГИКА РАБОТЫ (4 ЭТАПА):")
-    print("ЭТАП 1: Фильтр пар с сигналами (15м данные)")
-    print("ЭТАП 2: ИИ отбор (все пары + индикаторы одним запросом)")
-    print("ЭТАП 3: Детальный анализ (полные данные 5м+15м, уровни)")
-    print("ЭТАП 4: Финальная валидация ИИ (проверка + коррекция сигналов)")
-    print()
-    print(f"DeepSeek ИИ: {'Доступен' if has_api_key else 'Недоступен (fallback режим)'}")
-    print("=" * 70)
+    """Оптимизированная главная функция"""
+    print("ОПТИМИЗИРОВАННЫЙ СКАЛЬПИНГОВЫЙ БОТ v2.1")
+    print(f"Запуск: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"DeepSeek ИИ: {'Доступен' if has_api_key else 'Недоступен'}")
+    print("=" * 50)
 
-    if not has_api_key:
-        print("ВНИМАНИЕ: DeepSeek API недоступен, этапы 2 и 4 будут работать в fallback режиме")
-        print()
-
-    # Включаем DEBUG логирование для диагностики
-    logging.getLogger('__main__').setLevel(logging.DEBUG)
-    logging.getLogger('func_trade').setLevel(logging.DEBUG)
-
-    bot = ScalpingBot()
+    bot = OptimizedScalpingBot()
 
     try:
-        # Запуск полного цикла (4 этапа)
         result = await bot.run_full_cycle()
 
-        # Вывод результата
-        print(f"\nИТОГОВЫЙ РЕЗУЛЬТАТ:")
-        print(f"Статус: {result['result']}")
-        print(f"Временная метка: {result.get('timestamp', 'N/A')}")
-        print(f"ИИ доступность: {'Да' if result.get('api_available') else 'Нет'}")
-
-        if 'timing' in result:
-            t = result['timing']
-            print(f"Время: {t['total']}сек")
-            print(f"├─ Фильтрация: {t['stage1_filter']}сек")
-            print(f"├─ ИИ отбор: {t['stage2_ai_bulk']}сек")
-            print(f"├─ Детальный анализ: {t['stage3_detailed']}сек")
-            print(f"└─ Финальная валидация: {t['stage4_validation']}сек")
+        # Компактный вывод результата
+        print(f"\nРЕЗУЛЬТАТ: {result['result']}")
+        print(f"Время: {result.get('total_time', 0)}сек")
 
         if 'stats' in result:
             s = result['stats']
-            print(f"Пайплайн: {s['pairs_scanned']} -> {s['signal_pairs_found']} -> {s['ai_selected']} -> {s['preliminary_signals']} -> {s['validated_signals']}")
-            print(f"Производительность: {s['processing_speed']} пар/сек")
+            print(f"Пайплайн: {s['pairs_scanned']}->{s['signal_pairs_found']}->{s['ai_selected']}->{s['preliminary_signals']}->{s['validated_signals']}")
+            print(f"Скорость: {s['processing_speed']} пар/сек")
 
         if result.get('validated_signals'):
-            print(f"\nФИНАЛЬНЫЕ ТОРГОВЫЕ СИГНАЛЫ:")
+            print(f"\nФИНАЛЬНЫЕ СИГНАЛЫ:")
             for signal in result['validated_signals']:
+                rr = signal.get('risk_reward_ratio', 'N/A')
                 duration = signal.get('hold_duration_minutes', 'N/A')
-                rr_ratio = signal.get('risk_reward_ratio', 'N/A')
-                action = signal.get('action', 'UNKNOWN')
-
-                print(f"\n{signal['symbol']}: {signal['signal']} ({signal['confidence']}%) [{action}]")
-                if signal.get('entry_price'):
-                    print(f"  Вход: {signal['entry_price']:.4f} | Стоп: {signal.get('stop_loss', 0):.4f} | Профит: {signal.get('take_profit', 0):.4f}")
-                    print(f"  R/R: 1:{rr_ratio} | Время удержания: {duration} мин")
-
-                if signal.get('validation_notes'):
-                    print(f"  Валидация: {signal['validation_notes']}")
-
-                if signal.get('key_levels'):
-                    print(f"  Уровни: {signal['key_levels']}")
-        else:
-            print("\nФинальных торговых сигналов нет")
-
-        print(f"\nРезультат сохранен в файл с временной меткой")
+                print(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%) R/R:1:{rr} {duration}мин")
 
     except KeyboardInterrupt:
         print("\nОстановлено пользователем")
     except Exception as e:
-        logger.error(f"Неожиданная ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
     finally:
         await bot.cleanup()
 
@@ -617,7 +500,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nПрограмма остановлена")
-    except Exception as e:
-        print(f"Критическая ошибка: {e}")
-        import traceback
-        print(traceback.format_exc())

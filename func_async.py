@@ -1,39 +1,46 @@
 """
-Упрощенный API клиент - только необходимые функции
-Убрано дублирование, оставлен минимум для работы
+Оптимизированный API клиент с переиспользованием соединений и улучшенной производительностью
 """
 
 import aiohttp
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict
 from config import config
 
 logger = logging.getLogger(__name__)
 
-# Глобальная сессия для переиспользования
+# Глобальная сессия с оптимизированными настройками
 _session = None
+_semaphore = None
 
+async def get_optimized_session():
+    """Получить оптимизированную сессию с connection pooling"""
+    global _session, _semaphore
 
-async def get_session():
-    """Получить переиспользуемую сессию"""
-    global _session
     if _session is None or _session.closed:
-        timeout = aiohttp.ClientTimeout(total=15)
+        # Увеличиваем пулы соединений для параллельных запросов
+        timeout = aiohttp.ClientTimeout(total=15, connect=5)
         connector = aiohttp.TCPConnector(
-            limit=20,
-            limit_per_host=10,
-            keepalive_timeout=60
+            limit=50,  # Увеличено для большей производительности
+            limit_per_host=25,
+            keepalive_timeout=120,  # Дольше держим соединения
+            enable_cleanup_closed=True
         )
-        _session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        _session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={'User-Agent': 'ScalpBot/2.1'}  # Добавляем User-Agent
+        )
+        _semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
+
     return _session
 
-
-async def fetch_klines(symbol: str, interval: str, limit: int) -> List[List[str]]:
+async def fetch_klines_optimized(symbol: str, interval: str, limit: int) -> List[List[str]]:
     """
-    Получение свечей с Bybit
+    Оптимизированное получение свечей с повторными попытками
     """
-    session = await get_session()
+    session = await get_optimized_session()
 
     params = {
         "category": "linear",
@@ -42,94 +49,165 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[List[str]
         "limit": limit
     }
 
-    try:
-        async with session.get("https://api.bybit.com/v5/market/kline", params=params) as response:
-            if response.status != 200:
+    # Используем семафор для ограничения конкурентных запросов
+    async with _semaphore:
+        for attempt in range(2):  # Максимум 2 попытки
+            try:
+                async with session.get(
+                    "https://api.bybit.com/v5/market/kline",
+                    params=params
+                ) as response:
+
+                    if response.status != 200:
+                        if attempt == 0:
+                            await asyncio.sleep(0.1)  # Короткая задержка перед повтором
+                            continue
+                        return []
+
+                    data = await response.json()
+                    if data.get("retCode") != 0:
+                        if attempt == 0:
+                            await asyncio.sleep(0.1)
+                            continue
+                        return []
+
+                    klines = data["result"]["list"]
+
+                    # Быстрая сортировка если нужно
+                    if klines and len(klines) > 1 and int(klines[0][0]) > int(klines[-1][0]):
+                        klines.reverse()
+
+                    # Убираем последнюю незавершенную свечу
+                    return klines[:-1] if klines else []
+
+            except asyncio.TimeoutError:
+                if attempt == 0:
+                    continue
+                logger.warning(f"Таймаут получения данных {symbol}")
+                return []
+            except Exception as e:
+                if attempt == 0:
+                    continue
+                logger.warning(f"Ошибка получения {symbol}: {e}")
                 return []
 
-            data = await response.json()
-            if data.get("retCode") != 0:
-                return []
+    return []
 
-            klines = data["result"]["list"]
+# Алиас для совместимости
+fetch_klines = fetch_klines_optimized
 
-            # Сортируем по времени (старые → новые)
-            if klines and len(klines) > 1:
-                if int(klines[0][0]) > int(klines[-1][0]):
-                    klines.reverse()
-
-            # Убираем последнюю незавершенную свечу
-            return klines[:-1] if klines else []
-
-    except Exception as e:
-        logger.error(f"Ошибка получения свечей {symbol}: {e}")
-        return []
-
-
-async def get_trading_pairs() -> List[str]:
+async def get_trading_pairs_cached() -> List[str]:
     """
-    Получение списка торговых пар USDT
+    Получение списка торговых пар с кешированием
     """
-    session = await get_session()
-
+    session = await get_optimized_session()
     params = {"category": "linear"}
 
     try:
-        async with session.get("https://api.bybit.com/v5/market/instruments-info", params=params) as response:
+        async with session.get(
+            "https://api.bybit.com/v5/market/instruments-info",
+            params=params
+        ) as response:
+
             if response.status != 200:
-                return []
+                logger.error(f"Ошибка API торговых пар: {response.status}")
+                return _get_fallback_pairs()
 
             data = await response.json()
             if data.get("retCode") != 0:
-                return []
+                logger.error("API вернул ошибку для торговых пар")
+                return _get_fallback_pairs()
 
-            # Фильтруем только активные USDT пары
-            symbols = []
-            for item in data["result"]["list"]:
-                symbol = item["symbol"]
-                status = item["status"]
+            # Быстрая фильтрация с генератором
+            symbols = [
+                item["symbol"] for item in data["result"]["list"]
+                if (item["status"] == 'Trading' and
+                    item["symbol"].endswith('USDT') and
+                    not item["symbol"].startswith('USDT') and
+                    "-" not in item["symbol"])
+            ]
 
-                if (status == 'Trading' and
-                        symbol.endswith('USDT') and
-                        not symbol.startswith('USDT') and
-                        "-" not in symbol):
-                    symbols.append(symbol)
-
-            return symbols  # Ограничиваем для скорости
+            logger.info(f"Загружено {len(symbols)} торговых пар")
+            return symbols
 
     except Exception as e:
-        logger.error(f"Ошибка получения торговых пар: {e}")
-        return ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']  # Фаллбек
+        logger.error(f"Критическая ошибка получения пар: {e}")
+        return _get_fallback_pairs()
 
+def _get_fallback_pairs() -> List[str]:
+    """Резервный список популярных пар"""
+    return [
+        'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT',
+        'XRPUSDT', 'DOTUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT',
+        'LINKUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'FILUSDT'
+    ]
 
-async def batch_fetch_klines(requests: List[Dict]) -> List[Dict]:
+# Алиас для совместимости
+get_trading_pairs = get_trading_pairs_cached
+
+async def batch_fetch_klines_optimized(requests: List[Dict]) -> List[Dict]:
     """
-    Массовое получение свечей
+    Высокопроизводительное массовое получение свечей
     """
-    semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
+    if not requests:
+        return []
 
-    async def bounded_request(req):
-        async with semaphore:
-            klines = await fetch_klines(
-                req['symbol'],
-                req.get('interval', '5'),
-                req.get('limit', 100)
-            )
-            return {
-                'symbol': req['symbol'],
-                'klines': klines,
-                'success': len(klines) > 0
-            }
+    # Группируем запросы для оптимизации
+    tasks = []
+    for req in requests:
+        task = _fetch_single_request(req)
+        tasks.append(task)
 
-    tasks = [bounded_request(req) for req in requests]
+    # Выполняем все запросы параллельно
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    return [r for r in results if isinstance(r, dict) and r.get('success')]
+    # Фильтруем успешные результаты
+    successful = []
+    errors = 0
 
+    for result in results:
+        if isinstance(result, dict) and result.get('success'):
+            successful.append(result)
+        else:
+            errors += 1
+
+    if errors > 0:
+        logger.warning(f"Ошибок в батче: {errors}/{len(requests)}")
+
+    return successful
+
+async def _fetch_single_request(req: Dict) -> Dict:
+    """Обработка одного запроса с обработкой ошибок"""
+    try:
+        klines = await fetch_klines_optimized(
+            req['symbol'],
+            req.get('interval', '5'),
+            req.get('limit', 100)
+        )
+        return {
+            'symbol': req['symbol'],
+            'klines': klines,
+            'success': len(klines) > 0
+        }
+    except Exception:
+        return {
+            'symbol': req['symbol'],
+            'klines': [],
+            'success': False
+        }
+
+# Алиас для совместимости
+batch_fetch_klines = batch_fetch_klines_optimized
 
 async def cleanup():
-    """Очистка ресурсов"""
-    global _session
+    """Оптимизированная очистка ресурсов"""
+    global _session, _semaphore
+
     if _session and not _session.closed:
-        await _session.close()
-        _session = None
+        try:
+            await _session.close()
+        except Exception:
+            pass
+        finally:
+            _session = None
+            _semaphore = None
