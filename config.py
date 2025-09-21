@@ -1,9 +1,10 @@
 """
-Исправленная конфигурация для бота + настройки валидации
+Обновленная конфигурация для бота с поддержкой multiple AI providers
 """
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 # Загружаем переменные окружения из .env
 try:
@@ -21,10 +22,19 @@ except:
 class Config:
     """Конфигурация бота"""
 
-    # API НАСТРОЙКИ - исправлено чтение из .env
+    # API НАСТРОЙКИ
     DEEPSEEK_API_KEY = os.getenv('DEEPSEEK') or os.getenv('DEEPSEEK_API_KEY')
     DEEPSEEK_URL = 'https://api.deepseek.com/v1'
     DEEPSEEK_MODEL = 'deepseek-chat'
+
+    ANTHROPIC_API_KEY = os.getenv('ANTHROPIC')
+    ANTHROPIC_MODEL = 'claude-3-5-sonnet-20241022'
+
+    # AI ПРОВАЙДЕРЫ ДЛЯ ЭТАПОВ
+    # Возможные значения: 'deepseek', 'anthropic', 'fallback'
+    AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
+    AI_STAGE_ANALYSIS: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
+    AI_STAGE_VALIDATION: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
 
     # ЭТАПЫ ОБРАБОТКИ
     QUICK_SCAN_15M = 35
@@ -48,51 +58,77 @@ class Config:
     MIN_CONFIDENCE = 70
     MIN_VOLUME_RATIO = 1.2
     MIN_ATR_RATIO = 0.8
+    MIN_RISK_REWARD_RATIO = 1.5
+    MAX_HOLD_DURATION_MINUTES = 120
+    MIN_HOLD_DURATION_MINUTES = 15
+    VALIDATION_CONFIDENCE_BOOST = 5
 
     # ПРОИЗВОДИТЕЛЬНОСТЬ
     BATCH_SIZE = 50
     MAX_CONCURRENT = 10
     API_TIMEOUT = 120
-
-    # ЛИМИТЫ
     MAX_FINAL_PAIRS = 5
     MAX_BULK_PAIRS = 15
 
     # ПРОМПТЫ
     SELECTION_PROMPT = 'prompt_select.txt'
     ANALYSIS_PROMPT = 'prompt_analyze.txt'
-    VALIDATION_PROMPT = 'prompt_validate.txt'  # НОВЫЙ промпт для валидации
+    VALIDATION_PROMPT = 'prompt_validate.txt'
 
     # ИИ НАСТРОЙКИ
     AI_TEMPERATURE_SELECT = 0.3
     AI_TEMPERATURE_ANALYZE = 0.7
-    AI_TEMPERATURE_VALIDATE = 0.3  # НОВОЕ: низкая температура для точности валидации
+    AI_TEMPERATURE_VALIDATE = 0.3
     AI_MAX_TOKENS_SELECT = 1000
     AI_MAX_TOKENS_ANALYZE = 2000
-    AI_MAX_TOKENS_VALIDATE = 3000  # НОВОЕ: больше токенов для детального ответа валидации
-
-    # ВАЛИДАЦИЯ НАСТРОЙКИ - НОВЫЕ
-    MIN_RISK_REWARD_RATIO = 1.5  # Минимальное соотношение риск/доходность
-    MAX_HOLD_DURATION_MINUTES = 120  # Максимальное время удержания позиции (2 часа)
-    MIN_HOLD_DURATION_MINUTES = 15   # Минимальное время удержания позиции
-    VALIDATION_CONFIDENCE_BOOST = 5  # Бонус к уверенности после валидации
+    AI_MAX_TOKENS_VALIDATE = 3000
 
 
 config = Config()
+
+
+def get_available_ai_providers() -> dict:
+    """Проверка доступных AI провайдеров"""
+    providers = {}
+
+    if config.DEEPSEEK_API_KEY:
+        providers['deepseek'] = True
+    else:
+        providers['deepseek'] = False
+
+    if config.ANTHROPIC_API_KEY:
+        providers['anthropic'] = True
+    else:
+        providers['anthropic'] = False
+
+    providers['fallback'] = True  # Всегда доступен
+
+    return providers
 
 
 def check_config():
     """Проверка конфигурации"""
     print("Проверка конфигурации...")
 
-    if not config.DEEPSEEK_API_KEY:
-        print("ОШИБКА: DeepSeek API ключ не найден!")
-        print("Создайте файл .env со строкой: DEEPSEEK=your_api_key")
-        return False
+    providers = get_available_ai_providers()
 
-    print(f"DeepSeek API ключ найден (длина: {len(config.DEEPSEEK_API_KEY)})")
-    print(f"API URL: {config.DEEPSEEK_URL}")
-    print(f"Модель: {config.DEEPSEEK_MODEL}")
+    # Проверяем DeepSeek
+    if providers['deepseek']:
+        print(f"DeepSeek API ключ найден (длина: {len(config.DEEPSEEK_API_KEY)})")
+    else:
+        print("ВНИМАНИЕ: DeepSeek API ключ не найден!")
+
+    # Проверяем Anthropic
+    if providers['anthropic']:
+        print(f"Anthropic API ключ найден (длина: {len(config.ANTHROPIC_API_KEY)})")
+    else:
+        print("ВНИМАНИЕ: Anthropic API ключ не найден!")
+
+    # Проверяем настройки этапов
+    print(f"\nНастройки AI провайдеров:")
+    print(f"├─ Этап отбора: {config.AI_STAGE_SELECTION} ({'✓' if providers[config.AI_STAGE_SELECTION] else '✗'})")
+    print(f"├─ Этап анализа: {config.AI_STAGE_ANALYSIS} ({'✓' if providers[config.AI_STAGE_ANALYSIS] else '✗'})")
+    print(f"└─ Этап валидации: {config.AI_STAGE_VALIDATION} ({'✓' if providers[config.AI_STAGE_VALIDATION] else '✗'})")
 
     # Проверка файлов промптов
     prompt_files = [
@@ -107,15 +143,15 @@ def check_config():
             missing_prompts.append(prompt_file)
 
     if missing_prompts:
-        print(f"ВНИМАНИЕ: Отсутствуют файлы промптов: {missing_prompts}")
-        print("Этапы с отсутствующими промптами будут работать в fallback режиме")
+        print(f"\nВНИМАНИЕ: Отсутствуют файлы промптов: {missing_prompts}")
 
-    print(f"Настройки валидации:")
+    print(f"\nНастройки торговли:")
+    print(f"├─ Минимальная уверенность: {config.MIN_CONFIDENCE}%")
     print(f"├─ Минимальное R/R: 1:{config.MIN_RISK_REWARD_RATIO}")
     print(f"├─ Время удержания: {config.MIN_HOLD_DURATION_MINUTES}-{config.MAX_HOLD_DURATION_MINUTES} мин")
     print(f"└─ Бонус валидации: +{config.VALIDATION_CONFIDENCE_BOOST}%")
 
-    return True
+    return any(providers[stage] for stage in [config.AI_STAGE_SELECTION, config.AI_STAGE_ANALYSIS, config.AI_STAGE_VALIDATION])
 
 
-has_api_key = check_config()
+has_ai_available = check_config()

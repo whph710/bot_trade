@@ -1,5 +1,5 @@
 """
-Оптимизированный скальпинговый бот с кешированием данных и улучшенным логированием
+Оптимизированный скальпинговый бот с поддержкой multiple AI providers
 """
 
 import asyncio
@@ -9,12 +9,12 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from config import config, has_api_key
+from config import config, has_ai_available
 from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal
-from deepseek import ai_select_pairs, ai_analyze_pair
+from ai_router import ai_router
 
-# Упрощенное логирование без избыточной детализации
+# Упрощенное логирование
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -27,8 +27,8 @@ class DataCache:
     """Кеш для хранения и переиспользования рыночных данных"""
 
     def __init__(self):
-        self.klines_cache = {}  # {symbol: {interval: klines}}
-        self.indicators_cache = {}  # {symbol: {interval: indicators}}
+        self.klines_cache = {}
+        self.indicators_cache = {}
 
     def cache_klines(self, symbol: str, interval: str, klines: List):
         """Кеширование свечных данных"""
@@ -60,20 +60,19 @@ class DataCache:
 
 
 class OptimizedScalpingBot:
-    """Оптимизированный скальпинговый бот с кешированием и улучшенной производительностью"""
+    """Оптимизированный скальпинговый бот с поддержкой multiple AI"""
 
     def __init__(self):
         self.processed_pairs = 0
         self.session_start = time.time()
         self.cache = DataCache()
-        # Данные для финальной валидации (сохраняем только необходимое)
         self.validation_data = {}
 
-    async def load_initial_data(self, pairs: List[str]) -> Dict[str, Dict]:
-        """Предзагрузка всех необходимых данных одним батчем"""
+    async def load_initial_data(self, pairs: List[str]) -> Dict[str, bool]:
+        """Предзагрузка всех необходимых данных"""
         logger.info(f"Предзагрузка данных для {len(pairs)} пар...")
 
-        # Подготавливаем все запросы сразу
+        # Подготавливаем запросы для обоих таймфреймов
         requests = []
         for pair in pairs:
             requests.extend([
@@ -84,22 +83,22 @@ class OptimizedScalpingBot:
         # Массовая загрузка
         results = await batch_fetch_klines(requests)
 
-        # Кешируем все данные
+        # Кешируем данные
         loaded_pairs = set()
         for result in results:
-            if result.get('success'):
+            if result.get('success') and result.get('klines'):
                 symbol = result['symbol']
-                # Определяем интервал из запроса
                 klines = result['klines']
+
+                # Определяем интервал по количеству свечей
                 if len(klines) >= 100:  # Это 5м данные
                     self.cache.cache_klines(symbol, '5', klines)
-                    loaded_pairs.add(symbol)
                 else:  # Это 15м данные
                     self.cache.cache_klines(symbol, '15', klines)
-                    loaded_pairs.add(symbol)
+                loaded_pairs.add(symbol)
 
         logger.info(f"Загружены данные по {len(loaded_pairs)} парам")
-        return {pair: True for pair in loaded_pairs}
+        return {pair: pair in loaded_pairs for pair in pairs}
 
     def calculate_and_cache_indicators(self, symbol: str, interval: str, klines: List, history_length: int) -> Optional[Dict]:
         """Расчет и кеширование индикаторов"""
@@ -109,9 +108,7 @@ class OptimizedScalpingBot:
             return cached
 
         # Рассчитываем индикаторы
-        if interval == '5' and history_length > 20:
-            indicators = calculate_ai_indicators(klines, history_length)
-        elif interval == '15' and history_length > 20:
+        if history_length > 20:
             indicators = calculate_ai_indicators(klines, history_length)
         else:
             indicators = calculate_basic_indicators(klines)
@@ -123,7 +120,7 @@ class OptimizedScalpingBot:
         return indicators
 
     async def stage1_filter_signals(self) -> List[Dict]:
-        """ЭТАП 1: Оптимизированная фильтрация пар"""
+        """ЭТАП 1: Фильтрация пар с сигналами"""
         start_time = time.time()
         logger.info("ЭТАП 1: Фильтрация пар с сигналами")
 
@@ -133,17 +130,18 @@ class OptimizedScalpingBot:
             logger.error("Не удалось получить торговые пары")
             return []
 
-        # Предзагружаем все данные
-        await self.load_initial_data(pairs)
+        # Предзагружаем данные
+        loaded_data = await self.load_initial_data(pairs)
+        available_pairs = [pair for pair, loaded in loaded_data.items() if loaded]
 
         pairs_with_signals = []
         processed = 0
         errors = 0
 
-        logger.info(f"Обработка {len(pairs)} пар...")
+        logger.info(f"Обработка {len(available_pairs)} пар...")
 
-        # Обрабатываем кешированные данные
-        for symbol in pairs:
+        # Обрабатываем загруженные данные
+        for symbol in available_pairs:
             klines_15m = self.cache.get_klines(symbol, '15', config.QUICK_SCAN_15M)
             if not klines_15m or len(klines_15m) < 20:
                 errors += 1
@@ -168,6 +166,7 @@ class OptimizedScalpingBot:
                 processed += 1
 
             except Exception as e:
+                logger.debug(f"Ошибка обработки {symbol}: {e}")
                 errors += 1
                 continue
 
@@ -181,9 +180,9 @@ class OptimizedScalpingBot:
         return pairs_with_signals
 
     async def stage2_ai_bulk_select(self, signal_pairs: List[Dict]) -> List[str]:
-        """ЭТАП 2: Оптимизированный ИИ отбор"""
+        """ЭТАП 2: AI отбор пар"""
         start_time = time.time()
-        logger.info(f"ЭТАП 2: ИИ анализ {len(signal_pairs)} пар")
+        logger.info(f"ЭТАП 2: AI анализ {len(signal_pairs)} пар")
 
         if not signal_pairs:
             return []
@@ -191,19 +190,16 @@ class OptimizedScalpingBot:
         ai_input_data = []
         preparation_errors = 0
 
-        logger.info("Подготовка данных для ИИ...")
-
+        # Подготавливаем данные для AI
         for pair_data in signal_pairs:
             symbol = pair_data['symbol']
 
             try:
-                # Используем кешированные данные
                 candles_15m = self.cache.get_klines(symbol, '15', config.AI_BULK_15M)
                 if not candles_15m or len(candles_15m) < 20:
                     preparation_errors += 1
                     continue
 
-                # Используем кешированные индикаторы или рассчитываем новые
                 indicators_15m = self.calculate_and_cache_indicators(
                     symbol, '15', candles_15m, config.AI_INDICATORS_HISTORY
                 )
@@ -221,17 +217,18 @@ class OptimizedScalpingBot:
                 ai_input_data.append(pair_ai_data)
 
             except Exception as e:
+                logger.debug(f"Ошибка подготовки данных для {symbol}: {e}")
                 preparation_errors += 1
                 continue
 
         if not ai_input_data:
-            logger.error("Нет данных для ИИ анализа")
+            logger.error("Нет данных для AI анализа")
             return []
 
-        logger.info(f"Отправка {len(ai_input_data)} пар в ИИ (ошибок подготовки: {preparation_errors})")
+        logger.info(f"Отправка {len(ai_input_data)} пар в AI (ошибок подготовки: {preparation_errors})")
 
-        # ИИ анализ
-        selected_pairs = await ai_select_pairs(ai_input_data)
+        # AI отбор через роутер
+        selected_pairs = await ai_router.select_pairs(ai_input_data)
 
         elapsed = time.time() - start_time
         logger.info(f"ЭТАП 2 завершен: выбрано {len(selected_pairs)} пар, время {elapsed:.1f}с")
@@ -239,7 +236,7 @@ class OptimizedScalpingBot:
         return selected_pairs
 
     async def stage3_detailed_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """ЭТАП 3: Оптимизированный детальный анализ"""
+        """ЭТАП 3: Детальный анализ"""
         start_time = time.time()
         logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар")
 
@@ -248,8 +245,6 @@ class OptimizedScalpingBot:
 
         final_signals = []
 
-        logger.info("Анализ финальных пар...")
-
         for symbol in selected_pairs:
             try:
                 # Используем кешированные данные
@@ -257,7 +252,7 @@ class OptimizedScalpingBot:
                 klines_15m = self.cache.get_klines(symbol, '15', config.FINAL_15M)
 
                 if not klines_5m or not klines_15m:
-                    # Загружаем недостающие данные
+                    # Догружаем недостающие данные
                     if not klines_5m:
                         klines_5m = await fetch_klines(symbol, '5', config.FINAL_5M)
                         if klines_5m:
@@ -268,16 +263,18 @@ class OptimizedScalpingBot:
                             self.cache.cache_klines(symbol, '15', klines_15m)
 
                 if not klines_5m or not klines_15m:
+                    logger.warning(f"Недостаточно данных для {symbol}")
                     continue
 
-                # Используем кешированные индикаторы
+                # Рассчитываем индикаторы
                 indicators_5m = self.calculate_and_cache_indicators(symbol, '5', klines_5m, config.FINAL_INDICATORS)
                 indicators_15m = self.calculate_and_cache_indicators(symbol, '15', klines_15m, config.FINAL_INDICATORS)
 
                 if not indicators_5m or not indicators_15m:
+                    logger.warning(f"Ошибка расчета индикаторов для {symbol}")
                     continue
 
-                # Сохраняем данные для валидации (минимальный набор)
+                # Сохраняем данные для валидации
                 self.validation_data[symbol] = {
                     'klines_5m': klines_5m[-100:],
                     'klines_15m': klines_15m[-50:],
@@ -285,8 +282,8 @@ class OptimizedScalpingBot:
                     'indicators_15m': indicators_15m
                 }
 
-                # ИИ анализ
-                analysis = await ai_analyze_pair(symbol, klines_5m, klines_15m, indicators_5m, indicators_15m)
+                # AI анализ через роутер
+                analysis = await ai_router.analyze_pair(symbol, klines_5m, klines_15m, indicators_5m, indicators_15m)
 
                 if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
                     final_signals.append(analysis)
@@ -300,84 +297,18 @@ class OptimizedScalpingBot:
 
         return final_signals
 
-    async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> List[Dict]:
-        """ЭТАП 4: Оптимизированная финальная валидация"""
-        start_time = time.time()
-        logger.info(f"ЭТАП 4: Финальная валидация {len(preliminary_signals)} сигналов")
-
-        if not preliminary_signals or not config.DEEPSEEK_API_KEY:
-            if not config.DEEPSEEK_API_KEY:
-                logger.warning("DeepSeek API недоступен для валидации")
-            return preliminary_signals
-
-        try:
-            from deepseek import load_prompt, extract_json_from_text
-            from openai import AsyncOpenAI
-
-            # Используем минимально необходимые данные для валидации
-            validation_payload = {
-                'preliminary_signals': preliminary_signals,
-                'market_data': {}
-            }
-
-            # Добавляем только ключевые данные
-            for signal in preliminary_signals:
-                symbol = signal['symbol']
-                if symbol in self.validation_data:
-                    data = self.validation_data[symbol]
-                    validation_payload['market_data'][symbol] = {
-                        'candles_5m': data['klines_5m'],
-                        'candles_15m': data['klines_15m'],
-                        'indicators_5m': data['indicators_5m'],
-                        'indicators_15m': data['indicators_15m']
-                    }
-
-            logger.info("Отправка данных на финальную валидацию...")
-
-            # Загружаем промпт и отправляем запрос
-            prompt = load_prompt('prompt_validate.txt')
-            client = AsyncOpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_URL)
-            print(json.dumps(validation_payload, separators=(',', ':')))
-            response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=config.DEEPSEEK_MODEL,
-                    messages=[
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": json.dumps(validation_payload, separators=(',', ':'))}
-                    ],
-                    response_format={"type": "json_object"},
-                    max_tokens=3000,
-                    temperature=0.3
-                ),
-                timeout=config.API_TIMEOUT
-            )
-
-            result_text = response.choices[0].message.content
-            validation_result = extract_json_from_text(result_text)
-
-            if validation_result:
-                final_signals = validation_result.get('final_signals', [])
-                rejected_count = len(validation_result.get('rejected_signals', []))
-
-                elapsed = time.time() - start_time
-                logger.info(f"ЭТАП 4 завершен: подтверждено {len(final_signals)} сигналов, отклонено {rejected_count}, время {elapsed:.1f}с")
-
-                return final_signals
-            else:
-                logger.error("Ошибка парсинга результата валидации")
-                return preliminary_signals
-
-        except Exception as e:
-            elapsed = time.time() - start_time
-            logger.error(f"Ошибка валидации: {e}, время {elapsed:.1f}с")
-            return preliminary_signals
-
     async def run_full_cycle(self) -> Dict[str, Any]:
-        """Оптимизированный полный цикл работы бота"""
+        """Полный цикл работы бота"""
         cycle_start = time.time()
 
         logger.info("ЗАПУСК ПОЛНОГО ЦИКЛА АНАЛИЗА")
-        logger.info(f"DeepSeek API: {'Доступен' if has_api_key else 'Недоступен'}")
+
+        # Выводим статус AI провайдеров
+        ai_status = ai_router.get_status()
+        logger.info(f"AI провайдеры: {[k for k, v in ai_status['providers_available'].items() if v]}")
+        logger.info(f"Этапы: отбор-{ai_status['effective_providers']['selection']}, "
+                   f"анализ-{ai_status['effective_providers']['analysis']}, "
+                   f"валидация-{ai_status['effective_providers']['validation']}")
 
         try:
             # Очищаем кеш перед началом
@@ -393,7 +324,7 @@ class OptimizedScalpingBot:
                     'message': 'Нет пар с торговыми сигналами'
                 }
 
-            # ЭТАП 2: ИИ отбор
+            # ЭТАП 2: AI отбор
             selected_pairs = await self.stage2_ai_bulk_select(signal_pairs)
             if not selected_pairs:
                 return {
@@ -401,7 +332,7 @@ class OptimizedScalpingBot:
                     'total_time': time.time() - cycle_start,
                     'signal_pairs': len(signal_pairs),
                     'pairs_scanned': self.processed_pairs,
-                    'message': 'ИИ не выбрал подходящих пар'
+                    'message': 'AI не выбрал подходящих пар'
                 }
 
             # ЭТАП 3: Детальный анализ
@@ -410,13 +341,16 @@ class OptimizedScalpingBot:
                 return {
                     'result': 'NO_PRELIMINARY_SIGNALS',
                     'total_time': time.time() - cycle_start,
+                    'pairs_scanned': self.processed_pairs,
+                    'signal_pairs': len(signal_pairs),
+                    'ai_selected': len(selected_pairs),
                     'message': 'Детальный анализ не выявил качественных сигналов'
                 }
 
             # ЭТАП 4: Финальная валидация
             validated_signals = await self.stage4_final_validation(preliminary_signals)
 
-            # Формируем финальный результат
+            # Формируем результат
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -424,6 +358,7 @@ class OptimizedScalpingBot:
                 'timestamp': timestamp,
                 'result': 'SUCCESS' if validated_signals else 'NO_VALIDATED_SIGNALS',
                 'total_time': round(total_time, 2),
+                'ai_status': ai_status,
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs_found': len(signal_pairs),
@@ -433,7 +368,7 @@ class OptimizedScalpingBot:
                     'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
                 },
                 'validated_signals': validated_signals,
-                'api_available': has_api_key
+                'ai_providers': ai_status['providers_available']
             }
 
             # Сохраняем результат
@@ -441,12 +376,15 @@ class OptimizedScalpingBot:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(final_result, f, indent=2, ensure_ascii=False, default=str)
 
-            logger.info(f"ЦИКЛ ЗАВЕРШЕН: {self.processed_pairs}->{len(signal_pairs)}->{len(selected_pairs)}->{len(preliminary_signals)}->{len(validated_signals)}, время {total_time:.1f}с, скорость {self.processed_pairs/total_time:.0f} пар/сек")
+            logger.info(f"ЦИКЛ ЗАВЕРШЕН: {self.processed_pairs}->{len(signal_pairs)}->{len(selected_pairs)}->{len(preliminary_signals)}->{len(validated_signals)}")
+            logger.info(f"Время: {total_time:.1f}с, скорость: {self.processed_pairs/total_time:.0f} пар/сек")
 
             return final_result
 
         except Exception as e:
             logger.error(f"Критическая ошибка цикла: {e}")
+            import traceback
+            logger.error(f"Трассировка: {traceback.format_exc()}")
             return {
                 'result': 'ERROR',
                 'error': str(e),
@@ -460,11 +398,15 @@ class OptimizedScalpingBot:
 
 
 async def main():
-    """Оптимизированная главная функция"""
-    print("ОПТИМИЗИРОВАННЫЙ СКАЛЬПИНГОВЫЙ БОТ v2.1")
+    """Главная функция"""
+    print("ОПТИМИЗИРОВАННЫЙ СКАЛЬПИНГОВЫЙ БОТ v2.2")
     print(f"Запуск: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"DeepSeek ИИ: {'Доступен' if has_api_key else 'Недоступен'}")
-    print("=" * 50)
+
+    # Показываем статус AI провайдеров
+    ai_status = ai_router.get_status()
+    print(f"Доступные AI: {[k for k, v in ai_status['providers_available'].items() if v]}")
+    print(f"Этапы: {ai_status['effective_providers']['selection']}/{ai_status['effective_providers']['analysis']}/{ai_status['effective_providers']['validation']}")
+    print("=" * 60)
 
     bot = OptimizedScalpingBot()
 
@@ -473,7 +415,7 @@ async def main():
 
         # Компактный вывод результата
         print(f"\nРЕЗУЛЬТАТ: {result['result']}")
-        print(f"Время: {result.get('total_time', 0)}сек")
+        print(f"Время: {result.get('total_time', 0):.1f}сек")
 
         if 'stats' in result:
             s = result['stats']
@@ -481,16 +423,21 @@ async def main():
             print(f"Скорость: {s['processing_speed']} пар/сек")
 
         if result.get('validated_signals'):
-            print(f"\nФИНАЛЬНЫЕ СИГНАЛЫ:")
+            print(f"\nФИНАЛЬНЫЕ СИГНАЛЫ ({len(result['validated_signals'])}):")
             for signal in result['validated_signals']:
                 rr = signal.get('risk_reward_ratio', 'N/A')
                 duration = signal.get('hold_duration_minutes', 'N/A')
-                print(f"{signal['symbol']}: {signal['signal']} ({signal['confidence']}%) R/R:1:{rr} {duration}мин")
+                confidence = signal.get('confidence', 0)
+                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%) R/R:1:{rr} {duration}мин")
+        else:
+            print("\nСигналов не найдено")
 
     except KeyboardInterrupt:
         print("\nОстановлено пользователем")
     except Exception as e:
         logger.error(f"Ошибка: {e}")
+        import traceback
+        logger.error(f"Трассировка: {traceback.format_exc()}")
     finally:
         await bot.cleanup()
 

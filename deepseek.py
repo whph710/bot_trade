@@ -1,5 +1,5 @@
 """
-Оптимизированный ИИ клиент для DeepSeek с улучшенной обработкой данных
+Оптимизированный ИИ клиент для DeepSeek
 """
 
 import asyncio
@@ -36,9 +36,6 @@ def load_prompt_cached(filename: str) -> str:
     except Exception as e:
         logger.error(f"Ошибка загрузки промпта {filename}: {e}")
         raise
-
-# Алиас для совместимости
-load_prompt = load_prompt_cached
 
 def extract_json_optimized(text: str) -> Optional[Dict]:
     """Оптимизированное извлечение JSON из ответа ИИ"""
@@ -81,15 +78,11 @@ def extract_json_optimized(text: str) -> Optional[Dict]:
         logger.error(f"Общая ошибка извлечения JSON: {e}")
         return None
 
-# Алиас для совместимости
-extract_json_from_text = extract_json_optimized
-
-def create_optimized_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List[str]:
-    """Оптимизированный fallback отбор без ИИ"""
+def create_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List[str]:
+    """Fallback отбор без ИИ"""
     if not pairs_data:
         return []
 
-    # Быстрая сортировка с lambda функцией
     def quick_score(pair_data: Dict) -> float:
         base_confidence = pair_data.get('confidence', 0)
         direction = pair_data.get('direction', 'NONE')
@@ -97,7 +90,6 @@ def create_optimized_fallback_selection(pairs_data: List[Dict], max_pairs: int =
 
         score = base_confidence
 
-        # Бонусы за качественные сигналы
         if direction in ['LONG', 'SHORT']:
             score += 15
 
@@ -113,7 +105,6 @@ def create_optimized_fallback_selection(pairs_data: List[Dict], max_pairs: int =
 
         return score
 
-    # Быстрая сортировка и фильтрация
     scored_pairs = [(pair, quick_score(pair)) for pair in pairs_data]
     top_pairs = sorted(scored_pairs, key=lambda x: x[1], reverse=True)[:max_pairs]
 
@@ -125,11 +116,8 @@ def create_optimized_fallback_selection(pairs_data: List[Dict], max_pairs: int =
     logger.info(f"Fallback выбрал {len(selected)} пар")
     return selected
 
-# Алиас для совместимости
-smart_fallback_selection = create_optimized_fallback_selection
-
-def create_optimized_fallback_validation(preliminary_signals: List[Dict]) -> List[Dict]:
-    """Оптимизированная fallback валидация без ИИ"""
+def create_fallback_validation(preliminary_signals: List[Dict]) -> List[Dict]:
+    """Fallback валидация без ИИ"""
     validated_signals = []
 
     for signal in preliminary_signals:
@@ -143,7 +131,7 @@ def create_optimized_fallback_validation(preliminary_signals: List[Dict]) -> Lis
 
             if risk > 0:
                 rr_ratio = round(reward / risk, 2)
-                if rr_ratio >= 1.5:
+                if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
                     validated_signal = signal.copy()
                     validated_signal.update({
                         'risk_reward_ratio': rr_ratio,
@@ -158,23 +146,20 @@ def create_optimized_fallback_validation(preliminary_signals: List[Dict]) -> Lis
     logger.info(f"Fallback валидация: подтверждено {len(validated_signals)} сигналов")
     return validated_signals
 
-# Алиас для совместимости
-create_fallback_validation = create_optimized_fallback_validation
-
-async def ai_select_pairs_optimized(pairs_data: List[Dict]) -> List[str]:
-    """Оптимизированный ИИ отбор пар"""
+async def ai_select_pairs_deepseek(pairs_data: List[Dict]) -> List[str]:
+    """DeepSeek отбор пар"""
     if not config.DEEPSEEK_API_KEY:
-        return create_optimized_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+        return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
     if not pairs_data:
         return []
 
     try:
-        # Ограничиваем количество пар для оптимизации
+        # Ограничиваем количество пар
         if len(pairs_data) > config.MAX_BULK_PAIRS:
             pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
 
-        # Подготавливаем минимально необходимые данные
+        # Подготавливаем компактные данные
         compact_data = {}
         for item in pairs_data:
             symbol = item['symbol']
@@ -188,13 +173,12 @@ async def ai_select_pairs_optimized(pairs_data: List[Dict]) -> List[str]:
             if not candles_15m or not indicators_15m:
                 continue
 
-            # Компактная структура данных
             compact_data[symbol] = {
                 'base_signal': {
                     'direction': item.get('direction', 'NONE'),
                     'confidence': item.get('confidence', 0)
                 },
-                'candles_15m': candles_15m[-30:],  # Уменьшено для скорости
+                'candles_15m': candles_15m[-30:],
                 'indicators': {
                     'ema5': indicators_15m.get('ema5_history', [])[-30:],
                     'ema8': indicators_15m.get('ema8_history', [])[-30:],
@@ -207,9 +191,9 @@ async def ai_select_pairs_optimized(pairs_data: List[Dict]) -> List[str]:
             }
 
         if not compact_data:
-            return create_optimized_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+            return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
-        # Создаем ИИ клиент
+        # Создаем DeepSeek клиент
         client = AsyncOpenAI(
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_URL
@@ -238,40 +222,38 @@ async def ai_select_pairs_optimized(pairs_data: List[Dict]) -> List[str]:
         if json_result:
             selected_pairs = json_result.get('selected_pairs', [])
             if selected_pairs:
-                logger.info(f"ИИ выбрал {len(selected_pairs)} пар")
+                logger.info(f"DeepSeek выбрал {len(selected_pairs)} пар")
                 return selected_pairs[:config.MAX_FINAL_PAIRS]
 
-        logger.info("ИИ не выбрал пары")
+        logger.info("DeepSeek не выбрал пары")
         return []
 
     except asyncio.TimeoutError:
-        logger.error("Таймаут ИИ запроса")
-        return create_optimized_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+        logger.error("Таймаут DeepSeek запроса")
+        return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
     except Exception as e:
-        logger.error(f"Ошибка ИИ отбора: {e}")
-        return create_optimized_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
+        logger.error(f"Ошибка DeepSeek отбора: {e}")
+        return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
 
-# Алиас для совместимости
-ai_select_pairs = ai_select_pairs_optimized
-
-async def ai_analyze_pair_optimized(symbol: str, data_5m: List, data_15m: List,
+async def ai_analyze_pair_deepseek(symbol: str, data_5m: List, data_15m: List,
                                    indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-    """Оптимизированный детальный ИИ анализ пары"""
+    """DeepSeek анализ пары"""
     if not config.DEEPSEEK_API_KEY:
         return create_fallback_analysis(symbol, indicators_5m)
 
     try:
-        current_price = indicators_5m.get('current', {}).get('price', 0)
-        if current_price <= 0:
+        current_price = indicators_5m.get('current', {}).get('price')
+        if not current_price or current_price <= 0:
+            logger.warning(f"Некорректная цена для {symbol}: {current_price}")
             return create_fallback_analysis(symbol, indicators_5m)
 
-        # Компактная подготовка данных для анализа
+        # Компактная подготовка данных
         analysis_data = {
             'symbol': symbol,
             'current_price': current_price,
             'timeframes': {
                 '5m': {
-                    'candles': data_5m[-80:],  # Уменьшено для скорости
+                    'candles': data_5m[-80:],
                     'indicators': {
                         'ema5': indicators_5m.get('ema5_history', [])[-80:],
                         'ema8': indicators_5m.get('ema8_history', [])[-80:],
@@ -282,7 +264,7 @@ async def ai_analyze_pair_optimized(symbol: str, data_5m: List, data_15m: List,
                     }
                 },
                 '15m': {
-                    'candles': data_15m[-40:],  # Уменьшено для скорости
+                    'candles': data_15m[-40:],
                     'indicators': {
                         'ema5': indicators_15m.get('ema5_history', [])[-40:],
                         'ema8': indicators_15m.get('ema8_history', [])[-40:],
@@ -334,9 +316,9 @@ async def ai_analyze_pair_optimized(symbol: str, data_5m: List, data_15m: List,
             entry_price = float(json_result.get('entry_price', current_price))
             stop_loss = float(json_result.get('stop_loss', 0))
             take_profit = float(json_result.get('take_profit', 0))
-            analysis = json_result.get('analysis', 'Анализ от ИИ')
+            analysis = json_result.get('analysis', 'Анализ от DeepSeek')
 
-            # Быстрая валидация уровней
+            # Валидация уровней
             if signal in ['LONG', 'SHORT'] and entry_price > 0:
                 if stop_loss <= 0:
                     stop_loss = entry_price * (0.98 if signal == 'LONG' else 1.02)
@@ -361,22 +343,18 @@ async def ai_analyze_pair_optimized(symbol: str, data_5m: List, data_15m: List,
         logger.error(f"Таймаут анализа {symbol}")
         return create_fallback_analysis(symbol, indicators_5m)
     except Exception as e:
-        logger.error(f"Ошибка ИИ анализа {symbol}: {e}")
+        logger.error(f"Ошибка DeepSeek анализа {symbol}: {e}")
         return create_fallback_analysis(symbol, indicators_5m)
 
-# Алиас для совместимости
-ai_analyze_pair = ai_analyze_pair_optimized
-
-async def ai_final_validation_optimized(preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
-    """Оптимизированная финальная валидация сигналов с ИИ"""
+async def ai_validate_signals_deepseek(preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
+    """DeepSeek валидация сигналов"""
     if not config.DEEPSEEK_API_KEY:
-        return create_optimized_fallback_validation(preliminary_signals)
+        return create_fallback_validation(preliminary_signals)
 
     if not preliminary_signals:
         return []
 
     try:
-        # Компактная подготовка данных для валидации
         validation_data = {
             'preliminary_signals': preliminary_signals,
             'market_data': market_data
@@ -387,7 +365,7 @@ async def ai_final_validation_optimized(preliminary_signals: List[Dict], market_
             base_url=config.DEEPSEEK_URL
         )
 
-        prompt = load_prompt_cached('prompt_validate.txt')
+        prompt = load_prompt_cached(config.VALIDATION_PROMPT)
 
         response = await asyncio.wait_for(
             client.chat.completions.create(
@@ -397,8 +375,8 @@ async def ai_final_validation_optimized(preliminary_signals: List[Dict], market_
                     {"role": "user", "content": json.dumps(validation_data, separators=(',', ':'))}
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=3000,
-                temperature=0.3
+                max_tokens=config.AI_MAX_TOKENS_VALIDATE,
+                temperature=config.AI_TEMPERATURE_VALIDATE
             ),
             timeout=config.API_TIMEOUT
         )
@@ -409,21 +387,17 @@ async def ai_final_validation_optimized(preliminary_signals: List[Dict], market_
         if validation_result:
             final_signals = validation_result.get('final_signals', [])
             rejected_count = len(validation_result.get('rejected_signals', []))
-
-            logger.info(f"Валидация завершена: подтверждено {len(final_signals)}, отклонено {rejected_count}")
+            logger.info(f"DeepSeek валидация: подтверждено {len(final_signals)}, отклонено {rejected_count}")
             return final_signals
         else:
-            return create_optimized_fallback_validation(preliminary_signals)
+            return create_fallback_validation(preliminary_signals)
 
     except asyncio.TimeoutError:
-        logger.error("Таймаут валидации")
-        return create_optimized_fallback_validation(preliminary_signals)
+        logger.error("Таймаут DeepSeek валидации")
+        return create_fallback_validation(preliminary_signals)
     except Exception as e:
-        logger.error(f"Ошибка ИИ валидации: {e}")
-        return create_optimized_fallback_validation(preliminary_signals)
-
-# Алиас для совместимости
-ai_final_validation = ai_final_validation_optimized
+        logger.error(f"Ошибка DeepSeek валидации: {e}")
+        return create_fallback_validation(preliminary_signals)
 
 def create_fallback_analysis(symbol: str, indicators_5m: Dict) -> Dict:
     """Fallback анализ без ИИ"""
@@ -436,6 +410,6 @@ def create_fallback_analysis(symbol: str, indicators_5m: Dict) -> Dict:
         'entry_price': current_price,
         'stop_loss': 0,
         'take_profit': 0,
-        'analysis': 'ИИ анализ недоступен - fallback режим',
+        'analysis': 'DeepSeek анализ недоступен - fallback режим',
         'ai_generated': False
     }

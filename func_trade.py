@@ -1,9 +1,9 @@
 """
-Исправленный модуль индикаторов - устранены все ошибки расчетов
+Исправленный модуль индикаторов и торговой логики
 """
 
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from config import config
 import logging
 
@@ -11,21 +11,22 @@ logger = logging.getLogger(__name__)
 
 
 def safe_float(value) -> float:
-    """Безопасное преобразование в float с логированием"""
+    """Безопасное преобразование в float"""
     try:
-        # Если это numpy array, берем последний элемент
         if isinstance(value, np.ndarray):
             if len(value) > 0:
                 value = value[-1]
             else:
                 return 0.0
 
+        if value is None:
+            return 0.0
+
         result = float(value)
         if np.isnan(result) or np.isinf(result):
             return 0.0
         return result
-    except Exception as e:
-        logger.debug(f"Ошибка конвертации в float: {value}, {e}")
+    except (ValueError, TypeError):
         return 0.0
 
 
@@ -34,26 +35,29 @@ def validate_candles(candles: List[List[str]]) -> bool:
     if not candles or len(candles) < 10:
         return False
 
-    # Проверим несколько свечей на корректность
-    for candle in candles[:3]:
-        try:
+    try:
+        for candle in candles[:3]:
             if len(candle) < 6:
                 return False
-            # Проверяем что OHLCV числовые
+            # Проверяем что OHLCV числовые и положительные
             for i in [1, 2, 3, 4, 5]:  # open, high, low, close, volume
-                float(candle[i])
-        except (ValueError, IndexError):
-            return False
-
-    return True
+                value = float(candle[i])
+                if value <= 0:
+                    return False
+        return True
+    except (ValueError, IndexError, TypeError):
+        return False
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
-    """Расчет EMA с дополнительной защитой"""
+    """Расчет EMA с защитой от ошибок"""
     if len(prices) < period:
         return np.full_like(prices, prices[0] if len(prices) > 0 else 0)
 
     try:
+        # Фильтруем некорректные значения
+        prices = np.array([safe_float(p) for p in prices])
+
         ema = np.zeros_like(prices, dtype=np.float64)
         alpha = 2.0 / (period + 1)
         ema[0] = prices[0]
@@ -73,6 +77,9 @@ def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
         return np.full_like(prices, 50.0)
 
     try:
+        # Фильтруем данные
+        prices = np.array([safe_float(p) for p in prices])
+
         deltas = np.diff(prices)
         gains = np.where(deltas > 0, deltas, 0)
         losses = np.where(deltas < 0, -deltas, 0)
@@ -141,7 +148,7 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
         lows = np.array([safe_float(c[3]) for c in candles])
         closes = np.array([safe_float(c[4]) for c in candles])
 
-        # Проверим что есть корректные данные
+        # Проверим корректность данных
         if np.any(highs <= 0) or np.any(lows <= 0) or np.any(closes <= 0):
             return 0.0
 
@@ -169,6 +176,9 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
 def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray:
     """Безопасный расчет отношения объемов"""
     try:
+        # Фильтруем данные
+        volumes = np.array([safe_float(v) for v in volumes])
+
         if len(volumes) < window:
             return np.ones_like(volumes)
 
