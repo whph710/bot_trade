@@ -359,13 +359,13 @@ class OptimizedScalpingBot:
 
         return final_signals
 
-    async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> List[Dict]:
-        """ЭТАП 4: Финальная валидация сигналов"""
+    async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> Dict[str, List[Dict]]:
+        """ЭТАП 4: Финальная валидация сигналов (возвращает и подтвержденные и отклоненные)"""
         start_time = time.time()
         logger.info(f"ЭТАП 4: Финальная валидация {len(preliminary_signals)} сигналов")
 
         if not preliminary_signals:
-            return []
+            return {'validated': [], 'rejected': []}
 
         try:
             # Подготавливаем рыночные данные для валидации
@@ -383,7 +383,32 @@ class OptimizedScalpingBot:
             # Валидация через AI роутер
             validated_signals = await ai_router.validate_signals(preliminary_signals, market_data)
 
-            # Применяем бонус валидации
+            # Определяем отклоненные сигналы
+            validated_symbols = {signal['symbol'] for signal in validated_signals}
+            rejected_signals = []
+
+            for signal in preliminary_signals:
+                if signal['symbol'] not in validated_symbols:
+                    # Создаем очищенную копию сигнала без тяжелых данных
+                    clean_signal = {
+                        'symbol': signal['symbol'],
+                        'signal': signal['signal'],
+                        'confidence': signal['confidence'],
+                        'entry_price': signal['entry_price'],
+                        'stop_loss': signal['stop_loss'],
+                        'take_profit': signal['take_profit']
+                    }
+
+                    # Добавляем анализ если есть
+                    if 'analysis' in signal and signal['analysis']:
+                        clean_signal['analysis'] = signal['analysis']
+
+                    # Добавляем комментарий об отклонении
+                    clean_signal['rejection_reason'] = 'Не прошел финальную валидацию AI'
+
+                    rejected_signals.append(clean_signal)
+
+            # Применяем бонус валидации к подтвержденным
             for signal in validated_signals:
                 if signal.get('action') == 'APPROVED':
                     original_confidence = signal.get('confidence', 0)
@@ -391,13 +416,16 @@ class OptimizedScalpingBot:
                     signal['confidence'] = boosted_confidence
 
             elapsed = time.time() - start_time
-            logger.info(f"ЭТАП 4 завершен: подтверждено {len(validated_signals)} сигналов, время {elapsed:.1f}с")
+            logger.info(f"ЭТАП 4 завершен: подтверждено {len(validated_signals)}, отклонено {len(rejected_signals)}, время {elapsed:.1f}с")
 
-            return validated_signals
+            return {
+                'validated': validated_signals,
+                'rejected': rejected_signals
+            }
 
         except Exception as e:
             logger.error(f"Ошибка валидации сигналов: {e}")
-            return []
+            return {'validated': [], 'rejected': []}
 
     async def run_full_cycle(self) -> Dict[str, Any]:
         """Полный цикл работы бота"""
@@ -450,15 +478,25 @@ class OptimizedScalpingBot:
                 }
 
             # ЭТАП 4: Финальная валидация
-            validated_signals = await self.stage4_final_validation(preliminary_signals)
+            validation_result = await self.stage4_final_validation(preliminary_signals)
+            validated_signals = validation_result['validated']
+            rejected_signals = validation_result['rejected']
 
             # Формируем результат
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
+            # Определяем результат
+            if validated_signals:
+                result_type = 'SUCCESS'
+            elif rejected_signals:
+                result_type = 'NO_VALIDATED_SIGNALS_WITH_REJECTED'
+            else:
+                result_type = 'NO_VALIDATED_SIGNALS'
+
             final_result = {
                 'timestamp': timestamp,
-                'result': 'SUCCESS' if validated_signals else 'NO_VALIDATED_SIGNALS',
+                'result': result_type,
                 'total_time': round(total_time, 2),
                 'ai_status': ai_status,
                 'stats': {
@@ -467,9 +505,11 @@ class OptimizedScalpingBot:
                     'ai_selected': len(selected_pairs),
                     'preliminary_signals': len(preliminary_signals),
                     'validated_signals': len(validated_signals),
+                    'rejected_signals': len(rejected_signals),
                     'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
                 },
                 'validated_signals': validated_signals,
+                'rejected_signals': rejected_signals if rejected_signals else None,
                 'ai_providers': ai_status['providers_available']
             }
 
@@ -524,13 +564,43 @@ async def main():
             print(f"Пайплайн: {s['pairs_scanned']}->{s['signal_pairs_found']}->{s['ai_selected']}->{s['preliminary_signals']}->{s['validated_signals']}")
             print(f"Скорость: {s['processing_speed']} пар/сек")
 
+        # Показываем подтвержденные сигналы
         if result.get('validated_signals'):
-            print(f"\nФИНАЛЬНЫЕ СИГНАЛЫ ({len(result['validated_signals'])}):")
+            print(f"\nПОДТВЕРЖДЕННЫЕ СИГНАЛЫ ({len(result['validated_signals'])}):")
             for signal in result['validated_signals']:
                 rr = signal.get('risk_reward_ratio', 'N/A')
                 duration = signal.get('hold_duration_minutes', 'N/A')
                 confidence = signal.get('confidence', 0)
                 print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%) R/R:1:{rr} {duration}мин")
+
+        # Показываем отклоненные сигналы (только если нет подтвержденных)
+        elif result.get('rejected_signals'):
+            rejected = result['rejected_signals']
+            print(f"\nОТКЛОНЕННЫЕ НА 4-М ЭТАПЕ СИГНАЛЫ ({len(rejected)}):")
+            for signal in rejected:
+                entry = signal.get('entry_price', 0)
+                stop = signal.get('stop_loss', 0)
+                take = signal.get('take_profit', 0)
+                confidence = signal.get('confidence', 0)
+
+                # Рассчитываем R/R если есть данные
+                rr_ratio = "N/A"
+                if entry > 0 and stop > 0 and take > 0:
+                    risk = abs(entry - stop)
+                    reward = abs(take - entry)
+                    if risk > 0:
+                        rr_ratio = f"{reward/risk:.2f}"
+
+                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%)")
+                print(f"    Вход: {entry:.6f} | Стоп: {stop:.6f} | Профит: {take:.6f} | R/R: 1:{rr_ratio}")
+
+                if signal.get('analysis'):
+                    analysis_short = signal['analysis'][:100] + "..." if len(signal['analysis']) > 100 else signal['analysis']
+                    print(f"    Анализ: {analysis_short}")
+
+                if signal.get('rejection_reason'):
+                    print(f"    Причина отклонения: {signal['rejection_reason']}")
+                print()
         else:
             print("\nСигналов не найдено")
 
