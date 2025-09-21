@@ -30,22 +30,53 @@ def safe_float(value) -> float:
         return 0.0
 
 
-def validate_candles(candles: List[List[str]]) -> bool:
-    """Валидация свечных данных"""
-    if not candles or len(candles) < 10:
+def validate_candles(candles: List[List[str]], min_length: int = 10) -> bool:
+    """Улучшенная валидация свечных данных"""
+    if not candles or len(candles) < min_length:
         return False
 
     try:
-        for candle in candles[:3]:
-            if len(candle) < 6:
+        # Проверяем структуру первых нескольких свечей
+        for i, candle in enumerate(candles[:min(3, len(candles))]):
+            if not isinstance(candle, list) or len(candle) < 6:
+                logger.debug(f"Свеча {i}: неправильная структура - {type(candle)}, длина: {len(candle) if isinstance(candle, list) else 'N/A'}")
                 return False
-            # Проверяем что OHLCV числовые и положительные
-            for i in [1, 2, 3, 4, 5]:  # open, high, low, close, volume
-                value = float(candle[i])
-                if value <= 0:
+
+            try:
+                # Проверяем что можем конвертировать в числа
+                timestamp = int(candle[0])
+                open_price = float(candle[1])
+                high_price = float(candle[2])
+                low_price = float(candle[3])
+                close_price = float(candle[4])
+                volume = float(candle[5])
+
+                # Базовая проверка значений
+                if any(price <= 0 for price in [open_price, high_price, low_price, close_price]):
+                    logger.debug(f"Свеча {i}: неположительные цены")
                     return False
+
+                if high_price < max(open_price, close_price) or low_price > min(open_price, close_price):
+                    logger.debug(f"Свеча {i}: нарушение OHLC логики")
+                    return False
+
+                if volume < 0:
+                    logger.debug(f"Свеча {i}: отрицательный объем")
+                    return False
+
+                # Проверка на аномальные значения
+                if any(abs(price) > 1e10 for price in [open_price, high_price, low_price, close_price]):
+                    logger.debug(f"Свеча {i}: аномально большие цены")
+                    return False
+
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Свеча {i}: ошибка конвертации - {e}")
+                return False
+
         return True
-    except (ValueError, IndexError, TypeError):
+
+    except Exception as e:
+        logger.debug(f"Ошибка валидации свечей: {e}")
         return False
 
 
@@ -58,9 +89,16 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
         # Фильтруем некорректные значения
         prices = np.array([safe_float(p) for p in prices])
 
+        # Проверяем что есть валидные данные
+        if np.all(prices == 0) or len(prices) == 0:
+            return np.zeros_like(prices)
+
         ema = np.zeros_like(prices, dtype=np.float64)
         alpha = 2.0 / (period + 1)
-        ema[0] = prices[0]
+
+        # Начинаем с первого ненулевого значения
+        start_val = next((p for p in prices if p > 0), prices[0])
+        ema[0] = start_val
 
         for i in range(1, len(prices)):
             ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
@@ -79,6 +117,9 @@ def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
     try:
         # Фильтруем данные
         prices = np.array([safe_float(p) for p in prices])
+
+        if np.all(prices == 0) or len(prices) < 2:
+            return np.full_like(prices, 50.0)
 
         deltas = np.diff(prices)
         gains = np.where(deltas > 0, deltas, 0)
@@ -111,6 +152,9 @@ def calculate_rsi(prices: np.ndarray, period: int = 9) -> np.ndarray:
             else:
                 rsi[i] = 100 if avg_gains[i] > 0 else 50
 
+        # Ограничиваем RSI в диапазоне 0-100
+        rsi = np.clip(rsi, 0, 100)
+
         return rsi
     except Exception as e:
         logger.error(f"Ошибка расчета RSI: {e}")
@@ -140,7 +184,7 @@ def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: i
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
     """Расчет ATR с защитой"""
-    if not validate_candles(candles) or len(candles) < period + 1:
+    if not validate_candles(candles, period + 1):
         return 0.0
 
     try:
@@ -199,8 +243,8 @@ def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray
 
 def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
     """Базовые индикаторы с полной защитой от ошибок"""
-    if not validate_candles(candles):
-        logger.warning("Некорректные данные свечей для базовых индикаторов")
+    if not validate_candles(candles, 20):
+        logger.debug("Некорректные данные свечей для базовых индикаторов")
         return {}
 
     try:
@@ -209,7 +253,7 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
 
         # Проверим корректность данных
         if len(closes) < 20 or np.all(closes == 0) or np.all(volumes == 0):
-            logger.warning("Недостаточно корректных данных для индикаторов")
+            logger.debug("Недостаточно корректных данных для индикаторов")
             return {}
 
         # EMA система
@@ -250,8 +294,8 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
 
 def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Dict[str, Any]:
     """Индикаторы для ИИ с историей - исправлены все ошибки"""
-    if not validate_candles(candles):
-        logger.warning("Некорректные данные свечей для ИИ индикаторов")
+    if not validate_candles(candles, max(history_length, 20)):
+        logger.debug(f"Некорректные данные свечей для ИИ индикаторов: {len(candles) if candles else 0} свечей")
         return {}
 
     try:
@@ -260,7 +304,7 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
 
         # Проверим корректность
         if len(closes) < history_length or np.all(closes == 0):
-            logger.warning(f"Недостаточно данных для ИИ индикаторов: {len(closes)} свечей, нужно {history_length}")
+            logger.debug(f"Недостаточно данных для ИИ индикаторов: {len(closes)} свечей, нужно {history_length}")
             return {}
 
         # EMA с историей
@@ -280,7 +324,7 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
         # Проверим что массивы не пустые
         min_length = min(len(ema5), len(ema8), len(ema20), len(rsi), len(volume_ratios))
         if min_length < history_length:
-            logger.warning(f"Массивы индикаторов слишком короткие: {min_length} < {history_length}")
+            logger.debug(f"Массивы индикаторов слишком короткие: {min_length} < {history_length}")
             return {}
 
         # Безопасное извлечение истории
@@ -290,8 +334,9 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
                 if len(arr) >= length:
                     return [safe_float(x) for x in arr[-length:]]
                 else:
-                    # Дополняем нулями если не хватает данных
-                    result = [0.0] * (length - len(arr))
+                    # Дополняем первым значением если не хватает данных
+                    first_val = safe_float(arr[0]) if len(arr) > 0 else 0.0
+                    result = [first_val] * (length - len(arr))
                     result.extend([safe_float(x) for x in arr])
                     return result
             except Exception as e:
@@ -348,11 +393,11 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
 
         # Валидация значений
         if price <= 0 or ema5 <= 0 or ema8 <= 0 or ema20 <= 0:
-            logger.warning(f"Некорректные значения цены/EMA: {price}, {ema5}, {ema8}, {ema20}")
+            logger.debug(f"Некорректные значения цены/EMA: {price}, {ema5}, {ema8}, {ema20}")
             return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
         if not (0 <= rsi <= 100):
-            logger.warning(f"Некорректное значение RSI: {rsi}")
+            logger.debug(f"Некорректное значение RSI: {rsi}")
             rsi = 50  # Используем нейтральное значение
 
         # Проверяем базовые условия

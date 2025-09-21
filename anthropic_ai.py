@@ -21,8 +21,7 @@ class AnthropicClient:
         self.base_url = "https://api.anthropic.com/v1/messages"
         self.timeout = config.API_TIMEOUT
 
-    async def _make_request(self, messages: List[Dict], max_tokens: int = 1000, temperature: float = 0.7) -> Optional[
-        str]:
+    async def _make_request(self, messages: List[Dict], max_tokens: int = 1000, temperature: float = 0.7) -> Optional[str]:
         """Базовый запрос к Anthropic API"""
         if not self.api_key:
             raise ValueError("Anthropic API key не найден")
@@ -56,6 +55,13 @@ class AnthropicClient:
         except httpx.TimeoutException:
             logger.error("Таймаут запроса к Anthropic API")
             raise asyncio.TimeoutError("Anthropic API timeout")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.error(f"Anthropic API 404: возможно неправильная версия API или модель {self.model}")
+                logger.error(f"URL: {self.base_url}")
+                logger.error(f"Попробуйте обновить модель в конфигурации")
+            logger.error(f"HTTP ошибка Anthropic API: {e}")
+            raise
         except httpx.HTTPError as e:
             logger.error(f"HTTP ошибка Anthropic API: {e}")
             raise
@@ -109,6 +115,15 @@ class AnthropicClient:
         except Exception as e:
             logger.error(f"Общая ошибка извлечения JSON: {e}")
             return None
+
+    def safe_float_conversion(self, value) -> float:
+        """Безопасное преобразование в float с обработкой None"""
+        if value is None:
+            return 0.0
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
         """Отбор пар через Claude"""
@@ -182,11 +197,29 @@ class AnthropicClient:
 
     async def analyze_pair(self, symbol: str, data_5m: List, data_15m: List,
                            indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-        """Анализ пары через Claude"""
+        """Анализ пары через Claude с улучшенной обработкой ошибок"""
         try:
             from deepseek import load_prompt_cached
 
-            current_price = indicators_5m.get('current', {}).get('price', 0)
+            # Безопасное извлечение текущей цены
+            current_price = None
+
+            # Попытка 1: из indicators_5m
+            if indicators_5m and 'current' in indicators_5m:
+                current_price = indicators_5m['current'].get('price')
+
+            # Попытка 2: из indicators_15m
+            if current_price is None and indicators_15m and 'current' in indicators_15m:
+                current_price = indicators_15m['current'].get('price')
+
+            # Попытка 3: из последней свечи 5m
+            if current_price is None and data_5m and len(data_5m) > 0:
+                try:
+                    current_price = float(data_5m[-1][4])  # close price
+                except (IndexError, ValueError, TypeError):
+                    pass
+
+            current_price = self.safe_float_conversion(current_price)
             if current_price <= 0:
                 return self._create_fallback_analysis(symbol, current_price)
 
@@ -218,16 +251,13 @@ class AnthropicClient:
                 },
                 'current_state': {
                     'price': current_price,
-                    'atr': indicators_5m.get('current', {}).get('atr', 0),
-                    'trend_5m': 'UP' if indicators_5m.get('current', {}).get('ema5', 0) > indicators_5m.get('current',
-                                                                                                            {}).get(
-                        'ema20', 0) else 'DOWN',
-                    'trend_15m': 'UP' if indicators_15m.get('current', {}).get('ema5', 0) > indicators_15m.get(
-                        'current', {}).get('ema20', 0) else 'DOWN',
-                    'rsi_5m': indicators_5m.get('current', {}).get('rsi', 50),
-                    'rsi_15m': indicators_15m.get('current', {}).get('rsi', 50),
-                    'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0),
-                    'macd_momentum': indicators_5m.get('current', {}).get('macd_histogram', 0)
+                    'atr': self.safe_float_conversion(indicators_5m.get('current', {}).get('atr', 0)),
+                    'trend_5m': 'UP' if self.safe_float_conversion(indicators_5m.get('current', {}).get('ema5', 0)) > self.safe_float_conversion(indicators_5m.get('current', {}).get('ema20', 0)) else 'DOWN',
+                    'trend_15m': 'UP' if self.safe_float_conversion(indicators_15m.get('current', {}).get('ema5', 0)) > self.safe_float_conversion(indicators_15m.get('current', {}).get('ema20', 0)) else 'DOWN',
+                    'rsi_5m': self.safe_float_conversion(indicators_5m.get('current', {}).get('rsi', 50)),
+                    'rsi_15m': self.safe_float_conversion(indicators_15m.get('current', {}).get('rsi', 50)),
+                    'volume_ratio': self.safe_float_conversion(indicators_5m.get('current', {}).get('volume_ratio', 1.0)),
+                    'macd_momentum': self.safe_float_conversion(indicators_5m.get('current', {}).get('macd_histogram', 0))
                 }
             }
 
@@ -251,10 +281,10 @@ class AnthropicClient:
 
             if result:
                 signal = str(result.get('signal', 'NO_SIGNAL')).upper()
-                confidence = max(0, min(100, int(result.get('confidence', 0))))
-                entry_price = float(result.get('entry_price', current_price))
-                stop_loss = float(result.get('stop_loss', 0))
-                take_profit = float(result.get('take_profit', 0))
+                confidence = max(0, min(100, int(self.safe_float_conversion(result.get('confidence', 0)))))
+                entry_price = self.safe_float_conversion(result.get('entry_price', current_price))
+                stop_loss = self.safe_float_conversion(result.get('stop_loss', 0))
+                take_profit = self.safe_float_conversion(result.get('take_profit', 0))
                 analysis = str(result.get('analysis', 'Анализ от Claude'))
 
                 # Валидация уровней
@@ -280,7 +310,8 @@ class AnthropicClient:
 
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol} через Claude: {e}")
-            return self._create_fallback_analysis(symbol, indicators_5m.get('current', {}).get('price', 0))
+            current_price = self.safe_float_conversion(indicators_5m.get('current', {}).get('price', 0))
+            return self._create_fallback_analysis(symbol, current_price)
 
     async def validate_signals(self, preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
         """Валидация сигналов через Claude"""
@@ -344,9 +375,9 @@ class AnthropicClient:
         validated_signals = []
 
         for signal in preliminary_signals:
-            entry = signal.get('entry_price', 0)
-            stop = signal.get('stop_loss', 0)
-            profit = signal.get('take_profit', 0)
+            entry = self.safe_float_conversion(signal.get('entry_price', 0))
+            stop = self.safe_float_conversion(signal.get('stop_loss', 0))
+            profit = self.safe_float_conversion(signal.get('take_profit', 0))
 
             if entry > 0 and stop > 0 and profit > 0:
                 risk = abs(entry - stop)

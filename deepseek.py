@@ -78,6 +78,15 @@ def extract_json_optimized(text: str) -> Optional[Dict]:
         logger.error(f"Общая ошибка извлечения JSON: {e}")
         return None
 
+def safe_float_conversion(value) -> float:
+    """Безопасное преобразование в float с обработкой None"""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
 def create_fallback_selection(pairs_data: List[Dict], max_pairs: int = 3) -> List[str]:
     """Fallback отбор без ИИ"""
     if not pairs_data:
@@ -121,9 +130,9 @@ def create_fallback_validation(preliminary_signals: List[Dict]) -> List[Dict]:
     validated_signals = []
 
     for signal in preliminary_signals:
-        entry = signal.get('entry_price', 0)
-        stop = signal.get('stop_loss', 0)
-        profit = signal.get('take_profit', 0)
+        entry = safe_float_conversion(signal.get('entry_price', 0))
+        stop = safe_float_conversion(signal.get('stop_loss', 0))
+        profit = safe_float_conversion(signal.get('take_profit', 0))
 
         if entry > 0 and stop > 0 and profit > 0:
             risk = abs(entry - stop)
@@ -237,13 +246,39 @@ async def ai_select_pairs_deepseek(pairs_data: List[Dict]) -> List[str]:
 
 async def ai_analyze_pair_deepseek(symbol: str, data_5m: List, data_15m: List,
                                    indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-    """DeepSeek анализ пары"""
+    """DeepSeek анализ пары с улучшенной обработкой ошибок"""
     if not config.DEEPSEEK_API_KEY:
         return create_fallback_analysis(symbol, indicators_5m)
 
     try:
-        current_price = indicators_5m.get('current', {}).get('price')
-        if not current_price or current_price <= 0:
+        # Безопасное извлечение текущей цены с несколькими попытками
+        current_price = None
+
+        # Попытка 1: из indicators_5m
+        if indicators_5m and 'current' in indicators_5m:
+            current_price = indicators_5m['current'].get('price')
+
+        # Попытка 2: из indicators_15m
+        if current_price is None and indicators_15m and 'current' in indicators_15m:
+            current_price = indicators_15m['current'].get('price')
+
+        # Попытка 3: из последней свечи 5m
+        if current_price is None and data_5m and len(data_5m) > 0:
+            try:
+                current_price = float(data_5m[-1][4])  # close price
+            except (IndexError, ValueError, TypeError):
+                pass
+
+        # Попытка 4: из последней свечи 15m
+        if current_price is None and data_15m and len(data_15m) > 0:
+            try:
+                current_price = float(data_15m[-1][4])  # close price
+            except (IndexError, ValueError, TypeError):
+                pass
+
+        # Проверяем что цена корректная
+        current_price = safe_float_conversion(current_price)
+        if current_price <= 0:
             logger.warning(f"Некорректная цена для {symbol}: {current_price}")
             return create_fallback_analysis(symbol, indicators_5m)
 
@@ -276,13 +311,13 @@ async def ai_analyze_pair_deepseek(symbol: str, data_5m: List, data_15m: List,
             },
             'current_state': {
                 'price': current_price,
-                'atr': indicators_5m.get('current', {}).get('atr', 0),
-                'trend_5m': 'UP' if indicators_5m.get('current', {}).get('ema5', 0) > indicators_5m.get('current', {}).get('ema20', 0) else 'DOWN',
-                'trend_15m': 'UP' if indicators_15m.get('current', {}).get('ema5', 0) > indicators_15m.get('current', {}).get('ema20', 0) else 'DOWN',
-                'rsi_5m': indicators_5m.get('current', {}).get('rsi', 50),
-                'rsi_15m': indicators_15m.get('current', {}).get('rsi', 50),
-                'volume_ratio': indicators_5m.get('current', {}).get('volume_ratio', 1.0),
-                'macd_momentum': indicators_5m.get('current', {}).get('macd_histogram', 0)
+                'atr': safe_float_conversion(indicators_5m.get('current', {}).get('atr', 0)),
+                'trend_5m': 'UP' if safe_float_conversion(indicators_5m.get('current', {}).get('ema5', 0)) > safe_float_conversion(indicators_5m.get('current', {}).get('ema20', 0)) else 'DOWN',
+                'trend_15m': 'UP' if safe_float_conversion(indicators_15m.get('current', {}).get('ema5', 0)) > safe_float_conversion(indicators_15m.get('current', {}).get('ema20', 0)) else 'DOWN',
+                'rsi_5m': safe_float_conversion(indicators_5m.get('current', {}).get('rsi', 50)),
+                'rsi_15m': safe_float_conversion(indicators_15m.get('current', {}).get('rsi', 50)),
+                'volume_ratio': safe_float_conversion(indicators_5m.get('current', {}).get('volume_ratio', 1.0)),
+                'macd_momentum': safe_float_conversion(indicators_5m.get('current', {}).get('macd_histogram', 0))
             }
         }
 
@@ -312,10 +347,10 @@ async def ai_analyze_pair_deepseek(symbol: str, data_5m: List, data_15m: List,
 
         if json_result:
             signal = json_result.get('signal', 'NO_SIGNAL').upper()
-            confidence = max(0, min(100, int(json_result.get('confidence', 0))))
-            entry_price = float(json_result.get('entry_price', current_price))
-            stop_loss = float(json_result.get('stop_loss', 0))
-            take_profit = float(json_result.get('take_profit', 0))
+            confidence = max(0, min(100, int(safe_float_conversion(json_result.get('confidence', 0)))))
+            entry_price = safe_float_conversion(json_result.get('entry_price', current_price))
+            stop_loss = safe_float_conversion(json_result.get('stop_loss', 0))
+            take_profit = safe_float_conversion(json_result.get('take_profit', 0))
             analysis = json_result.get('analysis', 'Анализ от DeepSeek')
 
             # Валидация уровней
@@ -400,8 +435,15 @@ async def ai_validate_signals_deepseek(preliminary_signals: List[Dict], market_d
         return create_fallback_validation(preliminary_signals)
 
 def create_fallback_analysis(symbol: str, indicators_5m: Dict) -> Dict:
-    """Fallback анализ без ИИ"""
-    current_price = indicators_5m.get('current', {}).get('price', 0)
+    """Fallback анализ без ИИ с безопасным извлечением цены"""
+    current_price = 0.0
+
+    if indicators_5m and 'current' in indicators_5m:
+        current_price = safe_float_conversion(indicators_5m['current'].get('price', 0))
+
+    if current_price <= 0 and indicators_5m:
+        # Пробуем извлечь из других полей
+        current_price = safe_float_conversion(indicators_5m.get('price', 0))
 
     return {
         'symbol': symbol,

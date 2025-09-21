@@ -28,12 +28,13 @@ class Config:
     DEEPSEEK_MODEL = 'deepseek-chat'
 
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC')
-    ANTHROPIC_MODEL = 'claude-3-5-sonnet-20241022'
+    # Обновленная модель Claude Sonnet 4 для 2025 года
+    ANTHROPIC_MODEL = 'claude-sonnet-4-20250514'
 
     # AI ПРОВАЙДЕРЫ ДЛЯ ЭТАПОВ
     # Возможные значения: 'deepseek', 'anthropic', 'fallback'
-    AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
-    AI_STAGE_ANALYSIS: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
+    AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'#'deepseek'
+    AI_STAGE_ANALYSIS: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'#'deepseek'
     AI_STAGE_VALIDATION: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
 
     # ЭТАПЫ ОБРАБОТКИ
@@ -121,6 +122,7 @@ def check_config():
     # Проверяем Anthropic
     if providers['anthropic']:
         print(f"Anthropic API ключ найден (длина: {len(config.ANTHROPIC_API_KEY)})")
+        print(f"Используемая модель: {config.ANTHROPIC_MODEL}")
     else:
         print("ВНИМАНИЕ: Anthropic API ключ не найден!")
 

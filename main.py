@@ -68,6 +68,50 @@ class OptimizedScalpingBot:
         self.cache = DataCache()
         self.validation_data = {}
 
+    def validate_klines_data(self, klines: List, min_length: int = 10) -> bool:
+        """Улучшенная валидация свечных данных"""
+        if not klines or len(klines) < min_length:
+            return False
+
+        try:
+            # Проверяем первые 3 свечи как образец
+            for i, candle in enumerate(klines[:3]):
+                if not isinstance(candle, list) or len(candle) < 6:
+                    logger.debug(f"Свеча {i} имеет неправильную структуру: {len(candle) if isinstance(candle, list) else 'не список'}")
+                    return False
+
+                # Проверяем OHLCV значения
+                try:
+                    timestamp = int(candle[0])
+                    open_price = float(candle[1])
+                    high_price = float(candle[2])
+                    low_price = float(candle[3])
+                    close_price = float(candle[4])
+                    volume = float(candle[5])
+
+                    # Базовая валидация цен
+                    if any(price <= 0 for price in [open_price, high_price, low_price, close_price]):
+                        logger.debug(f"Свеча {i} содержит неположительные цены")
+                        return False
+
+                    if high_price < max(open_price, close_price) or low_price > min(open_price, close_price):
+                        logger.debug(f"Свеча {i} нарушает OHLC логику")
+                        return False
+
+                    if volume < 0:
+                        logger.debug(f"Свеча {i} содержит отрицательный объем")
+                        return False
+
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Ошибка парсинга свечи {i}: {e}")
+                    return False
+
+            return True
+
+        except Exception as e:
+            logger.debug(f"Ошибка валидации свечных данных: {e}")
+            return False
+
     async def load_initial_data(self, pairs: List[str]) -> Dict[str, bool]:
         """Предзагрузка всех необходимых данных"""
         logger.info(f"Предзагрузка данных для {len(pairs)} пар...")
@@ -90,7 +134,11 @@ class OptimizedScalpingBot:
                 symbol = result['symbol']
                 klines = result['klines']
 
-                # Определяем интервал по количеству свечей
+                # Валидируем данные перед кешированием
+                if not self.validate_klines_data(klines, 15):
+                    continue
+
+                # Определяем интервал по количеству свечей (приблизительно)
                 if len(klines) >= 100:  # Это 5м данные
                     self.cache.cache_klines(symbol, '5', klines)
                 else:  # Это 15м данные
@@ -107,17 +155,26 @@ class OptimizedScalpingBot:
         if cached:
             return cached
 
+        # Дополнительная валидация перед расчетом индикаторов
+        if not self.validate_klines_data(klines, 20):
+            logger.debug(f"Данные для {symbol} {interval} не прошли валидацию индикаторов")
+            return None
+
         # Рассчитываем индикаторы
-        if history_length > 20:
-            indicators = calculate_ai_indicators(klines, history_length)
-        else:
-            indicators = calculate_basic_indicators(klines)
+        try:
+            if history_length > 20:
+                indicators = calculate_ai_indicators(klines, history_length)
+            else:
+                indicators = calculate_basic_indicators(klines)
 
-        # Кешируем результат
-        if indicators:
-            self.cache.cache_indicators(symbol, interval, indicators)
+            # Кешируем результат
+            if indicators:
+                self.cache.cache_indicators(symbol, interval, indicators)
 
-        return indicators
+            return indicators
+        except Exception as e:
+            logger.debug(f"Ошибка расчета индикаторов для {symbol} {interval}: {e}")
+            return None
 
     async def stage1_filter_signals(self) -> List[Dict]:
         """ЭТАП 1: Фильтрация пар с сигналами"""
@@ -143,7 +200,7 @@ class OptimizedScalpingBot:
         # Обрабатываем загруженные данные
         for symbol in available_pairs:
             klines_15m = self.cache.get_klines(symbol, '15', config.QUICK_SCAN_15M)
-            if not klines_15m or len(klines_15m) < 20:
+            if not klines_15m or not self.validate_klines_data(klines_15m, 20):
                 errors += 1
                 continue
 
@@ -196,7 +253,7 @@ class OptimizedScalpingBot:
 
             try:
                 candles_15m = self.cache.get_klines(symbol, '15', config.AI_BULK_15M)
-                if not candles_15m or len(candles_15m) < 20:
+                if not candles_15m or not self.validate_klines_data(candles_15m, 20):
                     preparation_errors += 1
                     continue
 
@@ -255,15 +312,20 @@ class OptimizedScalpingBot:
                     # Догружаем недостающие данные
                     if not klines_5m:
                         klines_5m = await fetch_klines(symbol, '5', config.FINAL_5M)
-                        if klines_5m:
+                        if klines_5m and self.validate_klines_data(klines_5m, 20):
                             self.cache.cache_klines(symbol, '5', klines_5m)
                     if not klines_15m:
                         klines_15m = await fetch_klines(symbol, '15', config.FINAL_15M)
-                        if klines_15m:
+                        if klines_15m and self.validate_klines_data(klines_15m, 20):
                             self.cache.cache_klines(symbol, '15', klines_15m)
 
                 if not klines_5m or not klines_15m:
                     logger.warning(f"Недостаточно данных для {symbol}")
+                    continue
+
+                # Дополнительная валидация
+                if not self.validate_klines_data(klines_5m, 20) or not self.validate_klines_data(klines_15m, 20):
+                    logger.warning(f"Данные для {symbol} не прошли валидацию")
                     continue
 
                 # Рассчитываем индикаторы
@@ -296,6 +358,46 @@ class OptimizedScalpingBot:
         logger.info(f"ЭТАП 3 завершен: получено {len(final_signals)} сигналов, время {elapsed:.1f}с")
 
         return final_signals
+
+    async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> List[Dict]:
+        """ЭТАП 4: Финальная валидация сигналов"""
+        start_time = time.time()
+        logger.info(f"ЭТАП 4: Финальная валидация {len(preliminary_signals)} сигналов")
+
+        if not preliminary_signals:
+            return []
+
+        try:
+            # Подготавливаем рыночные данные для валидации
+            market_data = {
+                'timestamp': datetime.now().isoformat(),
+                'total_signals': len(preliminary_signals),
+                'market_conditions': 'active',  # Можно расширить анализом общего рынка
+                'session_info': {
+                    'processed_pairs': self.processed_pairs,
+                    'session_duration': time.time() - self.session_start
+                },
+                'validation_context': self.validation_data
+            }
+
+            # Валидация через AI роутер
+            validated_signals = await ai_router.validate_signals(preliminary_signals, market_data)
+
+            # Применяем бонус валидации
+            for signal in validated_signals:
+                if signal.get('action') == 'APPROVED':
+                    original_confidence = signal.get('confidence', 0)
+                    boosted_confidence = min(100, original_confidence + config.VALIDATION_CONFIDENCE_BOOST)
+                    signal['confidence'] = boosted_confidence
+
+            elapsed = time.time() - start_time
+            logger.info(f"ЭТАП 4 завершен: подтверждено {len(validated_signals)} сигналов, время {elapsed:.1f}с")
+
+            return validated_signals
+
+        except Exception as e:
+            logger.error(f"Ошибка валидации сигналов: {e}")
+            return []
 
     async def run_full_cycle(self) -> Dict[str, Any]:
         """Полный цикл работы бота"""
