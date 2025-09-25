@@ -33,7 +33,7 @@ class Config:
 
     # AI ПРОВАЙДЕРЫ ДЛЯ ЭТАПОВ
     # Возможные значения: 'deepseek', 'anthropic', 'fallback'
-    AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
+    AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
     AI_STAGE_ANALYSIS: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
     AI_STAGE_VALIDATION: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
 
