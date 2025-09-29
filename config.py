@@ -34,7 +34,7 @@ class Config:
     # AI ПРОВАЙДЕРЫ ДЛЯ ЭТАПОВ
     AI_STAGE_SELECTION: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
     AI_STAGE_ANALYSIS: Literal['deepseek', 'anthropic', 'fallback'] = 'anthropic'
-    AI_STAGE_VALIDATION: Literal['deepseek', 'anthropic', 'fallback'] = 'deepseek'
+    AI_STAGE_VALIDATION: Literal['deepseek', 'anthropic', 'fallback'] = 'fallback'
 
     # ЭТАПЫ ОБРАБОТКИ - адаптировано для 1H/4H
     # Для быстрого сканирования используем 4H с меньшим количеством свечей

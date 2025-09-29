@@ -1,5 +1,6 @@
 """
 Оптимизированный скальпинговый бот с поддержкой multiple AI providers
+ИЗМЕНЕНО: 3-й этап теперь загружает свежие данные заново
 """
 
 import asyncio
@@ -57,6 +58,13 @@ class DataCache:
         """Очистка кеша"""
         self.klines_cache.clear()
         self.indicators_cache.clear()
+
+    def clear_symbol(self, symbol: str):
+        """Очистка данных конкретного символа"""
+        if symbol in self.klines_cache:
+            del self.klines_cache[symbol]
+        if symbol in self.indicators_cache:
+            del self.indicators_cache[symbol]
 
 
 class OptimizedScalpingBot:
@@ -176,6 +184,25 @@ class OptimizedScalpingBot:
             logger.debug(f"Ошибка расчета индикаторов для {symbol} {interval}: {e}")
             return None
 
+    def calculate_fresh_indicators(self, symbol: str, interval: str, klines: List, history_length: int) -> Optional[Dict]:
+        """Расчет индикаторов БЕЗ кеширования (для свежих данных)"""
+        # Дополнительная валидация перед расчетом индикаторов
+        if not self.validate_klines_data(klines, 20):
+            logger.debug(f"Данные для {symbol} {interval} не прошли валидацию индикаторов")
+            return None
+
+        # Рассчитываем индикаторы
+        try:
+            if history_length > 20:
+                indicators = calculate_ai_indicators(klines, history_length)
+            else:
+                indicators = calculate_basic_indicators(klines)
+
+            return indicators
+        except Exception as e:
+            logger.debug(f"Ошибка расчета свежих индикаторов для {symbol} {interval}: {e}")
+            return None
+
     async def stage1_filter_signals(self) -> List[Dict]:
         """ЭТАП 1: Фильтрация пар с сигналами"""
         start_time = time.time()
@@ -293,9 +320,9 @@ class OptimizedScalpingBot:
         return selected_pairs
 
     async def stage3_detailed_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """ЭТАП 3: Детальный анализ"""
+        """ЭТАП 3: Детальный анализ с ПЕРЕЗАГРУЗКОЙ свежих данных"""
         start_time = time.time()
-        logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар")
+        logger.info(f"ЭТАП 3: Детальный анализ {len(selected_pairs)} пар с перезагрузкой данных")
 
         if not selected_pairs:
             return []
@@ -304,58 +331,70 @@ class OptimizedScalpingBot:
 
         for symbol in selected_pairs:
             try:
-                # Используем кешированные данные
-                klines_5m = self.cache.get_klines(symbol, '5', config.FINAL_5M)
-                klines_15m = self.cache.get_klines(symbol, '15', config.FINAL_15M)
+                # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Очищаем старые данные символа
+                logger.debug(f"{symbol}: Очистка кешированных данных")
+                self.cache.clear_symbol(symbol)
 
-                if not klines_5m or not klines_15m:
-                    # Догружаем недостающие данные
-                    if not klines_5m:
-                        klines_5m = await fetch_klines(symbol, '5', config.FINAL_5M)
-                        if klines_5m and self.validate_klines_data(klines_5m, 20):
-                            self.cache.cache_klines(symbol, '5', klines_5m)
-                    if not klines_15m:
-                        klines_15m = await fetch_klines(symbol, '15', config.FINAL_15M)
-                        if klines_15m and self.validate_klines_data(klines_15m, 20):
-                            self.cache.cache_klines(symbol, '15', klines_15m)
+                # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Загружаем СВЕЖИЕ данные напрямую из API
+                logger.debug(f"{symbol}: Загрузка свежих данных 5m")
+                klines_5m = await fetch_klines(symbol, '5', config.FINAL_5M)
 
+                logger.debug(f"{symbol}: Загрузка свежих данных 15m")
+                klines_15m = await fetch_klines(symbol, '15', config.FINAL_15M)
+
+                # Валидация свежих данных
                 if not klines_5m or not klines_15m:
-                    logger.warning(f"Недостаточно данных для {symbol}")
+                    logger.warning(f"{symbol}: Не удалось загрузить свежие данные")
                     continue
 
-                # Дополнительная валидация
                 if not self.validate_klines_data(klines_5m, 20) or not self.validate_klines_data(klines_15m, 20):
-                    logger.warning(f"Данные для {symbol} не прошли валидацию")
+                    logger.warning(f"{symbol}: Свежие данные не прошли валидацию")
                     continue
 
-                # Рассчитываем индикаторы
-                indicators_5m = self.calculate_and_cache_indicators(symbol, '5', klines_5m, config.FINAL_INDICATORS)
-                indicators_15m = self.calculate_and_cache_indicators(symbol, '15', klines_15m, config.FINAL_INDICATORS)
+                logger.debug(f"{symbol}: Загружено {len(klines_5m)} свечей 5m и {len(klines_15m)} свечей 15m")
+
+                # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Рассчитываем индикаторы на СВЕЖИХ данных БЕЗ кеширования
+                logger.debug(f"{symbol}: Расчет свежих индикаторов 5m")
+                indicators_5m = self.calculate_fresh_indicators(symbol, '5', klines_5m, config.FINAL_INDICATORS)
+
+                logger.debug(f"{symbol}: Расчет свежих индикаторов 15m")
+                indicators_15m = self.calculate_fresh_indicators(symbol, '15', klines_15m, config.FINAL_INDICATORS)
 
                 if not indicators_5m or not indicators_15m:
-                    logger.warning(f"Ошибка расчета индикаторов для {symbol}")
+                    logger.warning(f"{symbol}: Ошибка расчета свежих индикаторов")
                     continue
 
-                # Сохраняем данные для валидации
+                logger.debug(f"{symbol}: Индикаторы успешно рассчитаны")
+
+                # Сохраняем СВЕЖИЕ данные для валидации
                 self.validation_data[symbol] = {
                     'klines_5m': klines_5m[-100:],
                     'klines_15m': klines_15m[-50:],
                     'indicators_5m': indicators_5m,
-                    'indicators_15m': indicators_15m
+                    'indicators_15m': indicators_15m,
+                    'data_timestamp': datetime.now().isoformat(),
+                    'data_freshness': 'FRESH'  # Маркер свежести данных
                 }
 
-                # AI анализ через роутер
+                # AI анализ через роутер со СВЕЖИМИ данными
+                logger.debug(f"{symbol}: Отправка свежих данных в AI анализ")
                 analysis = await ai_router.analyze_pair(symbol, klines_5m, klines_15m, indicators_5m, indicators_15m)
 
                 if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
+                    # Добавляем информацию о свежести данных
+                    analysis['data_freshness'] = 'FRESH'
+                    analysis['data_timestamp'] = datetime.now().isoformat()
                     final_signals.append(analysis)
+                    logger.info(f"{symbol}: Получен сигнал {analysis['signal']} с уверенностью {analysis['confidence']}% (СВЕЖИЕ ДАННЫЕ)")
 
             except Exception as e:
                 logger.error(f"Ошибка анализа {symbol}: {e}")
+                import traceback
+                logger.debug(f"Трассировка для {symbol}: {traceback.format_exc()}")
                 continue
 
         elapsed = time.time() - start_time
-        logger.info(f"ЭТАП 3 завершен: получено {len(final_signals)} сигналов, время {elapsed:.1f}с")
+        logger.info(f"ЭТАП 3 завершен: получено {len(final_signals)} сигналов на СВЕЖИХ данных, время {elapsed:.1f}с")
 
         return final_signals
 
@@ -372,7 +411,8 @@ class OptimizedScalpingBot:
             market_data = {
                 'timestamp': datetime.now().isoformat(),
                 'total_signals': len(preliminary_signals),
-                'market_conditions': 'active',  # Можно расширить анализом общего рынка
+                'market_conditions': 'active',
+                'data_freshness': 'FRESH',  # Указываем что данные свежие
                 'session_info': {
                     'processed_pairs': self.processed_pairs,
                     'session_duration': time.time() - self.session_start
@@ -396,7 +436,8 @@ class OptimizedScalpingBot:
                         'confidence': signal['confidence'],
                         'entry_price': signal['entry_price'],
                         'stop_loss': signal['stop_loss'],
-                        'take_profit': signal['take_profit']
+                        'take_profit': signal['take_profit'],
+                        'data_freshness': signal.get('data_freshness', 'UNKNOWN')
                     }
 
                     # Добавляем анализ если есть
@@ -465,7 +506,7 @@ class OptimizedScalpingBot:
                     'message': 'AI не выбрал подходящих пар'
                 }
 
-            # ЭТАП 3: Детальный анализ
+            # ЭТАП 3: Детальный анализ со СВЕЖИМИ данными
             preliminary_signals = await self.stage3_detailed_analysis(selected_pairs)
             if not preliminary_signals:
                 return {
@@ -499,6 +540,7 @@ class OptimizedScalpingBot:
                 'result': result_type,
                 'total_time': round(total_time, 2),
                 'ai_status': ai_status,
+                'data_freshness': 'STAGE3_FRESH_DATA',  # Маркер что на 3 этапе были свежие данные
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs_found': len(signal_pairs),
@@ -520,6 +562,7 @@ class OptimizedScalpingBot:
 
             logger.info(f"ЦИКЛ ЗАВЕРШЕН: {self.processed_pairs}->{len(signal_pairs)}->{len(selected_pairs)}->{len(preliminary_signals)}->{len(validated_signals)}")
             logger.info(f"Время: {total_time:.1f}с, скорость: {self.processed_pairs/total_time:.0f} пар/сек")
+            logger.info(f"ВАЖНО: На 3-м этапе использовались СВЕЖИЕ данные, загруженные заново")
 
             return final_result
 
@@ -541,13 +584,14 @@ class OptimizedScalpingBot:
 
 async def main():
     """Главная функция"""
-    print("ОПТИМИЗИРОВАННЫЙ СКАЛЬПИНГОВЫЙ БОТ v2.2")
+    print("ОПТИМИЗИРОВАННЫЙ СКАЛЬПИНГОВЫЙ БОТ v2.3 (FRESH DATA STAGE 3)")
     print(f"Запуск: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Показываем статус AI провайдеров
     ai_status = ai_router.get_status()
     print(f"Доступные AI: {[k for k, v in ai_status['providers_available'].items() if v]}")
     print(f"Этапы: {ai_status['effective_providers']['selection']}/{ai_status['effective_providers']['analysis']}/{ai_status['effective_providers']['validation']}")
+    print("ИЗМЕНЕНИЕ: На 3-м этапе данные загружаются заново!")
     print("=" * 60)
 
     bot = OptimizedScalpingBot()
@@ -558,6 +602,7 @@ async def main():
         # Компактный вывод результата
         print(f"\nРЕЗУЛЬТАТ: {result['result']}")
         print(f"Время: {result.get('total_time', 0):.1f}сек")
+        print(f"Свежесть данных: {result.get('data_freshness', 'UNKNOWN')}")
 
         if 'stats' in result:
             s = result['stats']
@@ -571,7 +616,8 @@ async def main():
                 rr = signal.get('risk_reward_ratio', 'N/A')
                 duration = signal.get('hold_duration_minutes', 'N/A')
                 confidence = signal.get('confidence', 0)
-                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%) R/R:1:{rr} {duration}мин")
+                freshness = signal.get('data_freshness', 'UNKNOWN')
+                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%) R/R:1:{rr} {duration}мин [{freshness}]")
 
         # Показываем отклоненные сигналы (только если нет подтвержденных)
         elif result.get('rejected_signals'):
@@ -582,6 +628,7 @@ async def main():
                 stop = signal.get('stop_loss', 0)
                 take = signal.get('take_profit', 0)
                 confidence = signal.get('confidence', 0)
+                freshness = signal.get('data_freshness', 'UNKNOWN')
 
                 # Рассчитываем R/R если есть данные
                 rr_ratio = "N/A"
@@ -591,7 +638,7 @@ async def main():
                     if risk > 0:
                         rr_ratio = f"{reward/risk:.2f}"
 
-                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%)")
+                print(f"  {signal['symbol']}: {signal['signal']} ({confidence}%) [{freshness}]")
                 print(f"    Вход: {entry:.6f} | Стоп: {stop:.6f} | Профит: {take:.6f} | R/R: 1:{rr_ratio}")
 
                 if signal.get('analysis'):
@@ -619,3 +666,47 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nПрограмма остановлена")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
