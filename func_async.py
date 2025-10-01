@@ -76,7 +76,7 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[List[str]
                         klines.reverse()
 
                     # Убираем последнюю незавершенную свечу
-                    return klines if klines else []
+                    return klines[:-1] if len(klines) > 1 else []
 
             except asyncio.TimeoutError:
                 if attempt == 0:
