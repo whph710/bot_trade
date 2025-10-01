@@ -1,5 +1,5 @@
 """
-Расширенный валидатор сигналов
+Расширенный валидатор сигналов - ПОЛНАЯ ВЕРСИЯ
 Интегрирует все новые проверки: funding, OI, correlations, orderflow, SMC, VP
 """
 
@@ -37,31 +37,329 @@ class EnhancedSignalValidator:
         self.vp_analyzer = VolumeProfileAnalyzer()
         self.ai_analyzer = AIAdvancedAnalyzer(ai_router)
 
-    async def validate_signals_batch(
-            validator: EnhancedSignalValidator,
-            signals: List[Dict],
-            candles_data: Dict[str, Dict],  # {symbol: {'1h': candles, '4h': candles}}
+    async def validate_signal_comprehensive(
+            self,
+            signal: Dict,
+            symbol_candles_1h: List[List],
+            symbol_candles_4h: List[List],
             btc_candles_1h: List[List],
-            sector_candles: Optional[Dict[str, Dict]] = None
+            sector_candles: Optional[Dict[str, List[List]]] = None
     ) -> Dict:
         """
-        Пакетная валидация множества сигналов
+        ПОЛНАЯ валидация сигнала со ВСЕМИ проверками
 
         Args:
-            validator: экземпляр EnhancedSignalValidator
-            signals: список предварительных сигналов
-            candles_data: данные свечей для всех символов
-            btc_candles_1h: свечи BTC
-            sector_candles: опционально - свечи секторов
+            signal: предварительный сигнал от AI
+            symbol_candles_1h: свечи символа 1H
+            symbol_candles_4h: свечи символа 4H
+            btc_candles_1h: свечи BTC 1H
+            sector_candles: опционально - свечи пар сектора
 
         Returns:
             {
-                'validated': [signals],
-                'rejected': [signals],
-                'validation_stats': {...}
+                'approved': True / False,
+                'final_confidence': int,
+                'original_confidence': int,
+                'adjustments': {...},
+                'blocking_factors': [...],
+                'validation_summary': str
             }
         """
+        symbol = signal['symbol']
+        signal_direction = signal['signal']
+        original_confidence = signal.get('confidence', 0)
 
+        logger.info(f"Начало расширенной валидации {symbol} {signal_direction} (confidence: {original_confidence})")
+
+        # Инициализируем результаты
+        adjustments = {
+            'funding_rate': 0,
+            'open_interest': 0,
+            'spread': 0,
+            'orderbook_imbalance': 0,
+            'taker_volume': 0,
+            'btc_correlation': 0,
+            'sector_analysis': 0,
+            'orderflow_ai': 0,
+            'smc_patterns': 0,
+            'volume_profile': 0,
+            'key_levels': 0
+        }
+
+        blocking_factors = []
+        validation_details = []
+
+        try:
+            # ========== ЭТАП 1: MARKET DATA (КРИТИЧНО) ==========
+            logger.debug(f"{symbol}: Сбор market data...")
+
+            # Определяем направление цены
+            if len(symbol_candles_1h) >= 10:
+                from func_correlation import determine_trend, extract_prices_from_candles
+
+                prices_1h = extract_prices_from_candles(symbol_candles_1h)
+                price_direction = determine_trend(prices_1h, window=10)
+            else:
+                price_direction = 'FLAT'
+
+            # Собираем market snapshot
+            market_snapshot = await self.market_collector.get_market_snapshot(symbol)
+
+            # 1. Funding Rate
+            if market_snapshot['funding_rate']:
+                funding_analysis = self.market_analyzer.analyze_funding_rate(
+                    market_snapshot['funding_rate']
+                )
+                adjustments['funding_rate'] = funding_analysis['confidence_adjustment']
+                validation_details.append(f"Funding: {funding_analysis['reasoning']}")
+
+                if funding_analysis['risk_level'] == 'HIGH':
+                    blocking_factors.append(funding_analysis['reasoning'])
+
+            # 2. Open Interest
+            if market_snapshot['open_interest']:
+                oi_analysis = self.market_analyzer.analyze_open_interest(
+                    market_snapshot['open_interest'],
+                    price_direction
+                )
+                adjustments['open_interest'] = oi_analysis['confidence_adjustment']
+                validation_details.append(f"OI: {oi_analysis['reasoning']}")
+
+            # 3. Spread (КРИТИЧНО - может заблокировать)
+            if market_snapshot['orderbook']:
+                spread_analysis = self.market_analyzer.analyze_spread(
+                    market_snapshot['orderbook']
+                )
+                adjustments['spread'] = spread_analysis['confidence_adjustment']
+                validation_details.append(f"Spread: {spread_analysis['reasoning']}")
+
+                if not spread_analysis['tradeable']:
+                    blocking_factors.append(f"BLOCK: {spread_analysis['reasoning']}")
+                    # Это критический блокер - сразу отклоняем
+                    return self._create_rejection_result(
+                        signal, original_confidence, adjustments, blocking_factors, validation_details
+                    )
+
+            # 4. Orderbook Imbalance
+            if market_snapshot['orderbook']:
+                imbalance_analysis = self.market_analyzer.analyze_orderbook_imbalance(
+                    market_snapshot['orderbook']
+                )
+                adjustments['orderbook_imbalance'] = imbalance_analysis['confidence_adjustment']
+                validation_details.append(f"Orderbook: {imbalance_analysis['reasoning']}")
+
+            # 5. Taker Volume
+            if market_snapshot['taker_volume']:
+                taker_analysis = self.market_analyzer.analyze_taker_volume(
+                    market_snapshot['taker_volume']
+                )
+                adjustments['taker_volume'] = taker_analysis['confidence_adjustment']
+                validation_details.append(f"Taker: {taker_analysis['reasoning']}")
+
+            # ========== ЭТАП 2: CORRELATION ANALYSIS ==========
+            logger.debug(f"{symbol}: Корреляционный анализ...")
+
+            from func_correlation import get_comprehensive_correlation_analysis
+
+            corr_analysis = await get_comprehensive_correlation_analysis(
+                symbol,
+                symbol_candles_1h,
+                btc_candles_1h,
+                signal_direction,
+                sector_candles
+            )
+
+            # Проверка BTC alignment (может заблокировать)
+            if corr_analysis.get('should_block_signal'):
+                blocking_factors.append(corr_analysis['btc_alignment']['reasoning'])
+                # Это критический блокер
+                return self._create_rejection_result(
+                    signal, original_confidence, adjustments, blocking_factors, validation_details
+                )
+
+            adjustments['btc_correlation'] = corr_analysis.get('total_confidence_adjustment', 0)
+            validation_details.append(f"BTC Corr: {corr_analysis['btc_correlation']['reasoning']}")
+
+            if 'sector_analysis' in corr_analysis:
+                adjustments['sector_analysis'] = corr_analysis['sector_analysis'].get('confidence_adjustment', 0)
+                validation_details.append(f"Sector: {corr_analysis['sector_analysis']['reasoning']}")
+
+            # ========== ЭТАП 3: VOLUME PROFILE ==========
+            logger.debug(f"{symbol}: Расчет Volume Profile...")
+
+            from func_volume_profile import (
+                calculate_volume_profile_for_candles,
+                analyze_volume_profile,
+                analyze_key_levels
+            )
+
+            # Рассчитываем VP на 4H данных (больше истории)
+            vp_data = calculate_volume_profile_for_candles(symbol_candles_4h, num_bins=50)
+
+            current_price = float(symbol_candles_1h[-1][4]) if symbol_candles_1h else 0
+
+            if vp_data and vp_data.get('poc', 0) > 0:
+                vp_analysis = analyze_volume_profile(vp_data, current_price)
+                adjustments['volume_profile'] = vp_analysis['total_confidence_adjustment']
+
+                # Ключевые уровни (круглые числа, PDH/PDL, VP)
+                key_levels_analysis = analyze_key_levels(current_price, vp_data, symbol_candles_1h)
+                adjustments['key_levels'] = key_levels_analysis['total_confidence_adjustment']
+
+                validation_details.append(
+                    f"VP: POC {vp_data['poc']:.2f}, VA [{vp_data['value_area_low']:.2f}-{vp_data['value_area_high']:.2f}]")
+                validation_details.append(f"Key Levels: {key_levels_analysis['round_numbers']['reasoning']}")
+
+            # ========== ЭТАП 4: AI ADVANCED ANALYSIS ==========
+            logger.debug(f"{symbol}: AI продвинутый анализ...")
+
+            # 4.1 Order Flow AI
+            if market_snapshot['orderbook']:
+                prices_recent = [float(c[4]) for c in symbol_candles_1h[-20:]]
+
+                orderflow_ai = await self.ai_analyzer.analyze_orderbook_flow(
+                    symbol,
+                    market_snapshot['orderbook'],
+                    prices_recent
+                )
+
+                adjustments['orderflow_ai'] = orderflow_ai.get('confidence_adjustment', 0)
+                validation_details.append(f"OrderFlow AI: {orderflow_ai.get('reasoning', 'N/A')}")
+
+            # 4.2 Smart Money Concepts AI
+            smc_ai = await self.ai_analyzer.detect_smart_money_concepts(
+                symbol,
+                symbol_candles_1h,
+                current_price
+            )
+
+            adjustments['smc_patterns'] = smc_ai.get('confidence_boost', 0)
+            validation_details.append(f"SMC AI: {smc_ai.get('reasoning', 'N/A')}")
+
+            # ========== ЭТАП 5: ФИНАЛЬНЫЙ РАСЧЕТ ==========
+
+            total_adjustment = sum(adjustments.values())
+            final_confidence = original_confidence + total_adjustment
+
+            # Ограничиваем диапазон 0-100
+            final_confidence = max(0, min(100, final_confidence))
+
+            # Проверка порога
+            MIN_CONFIDENCE_THRESHOLD = 70
+            approved = final_confidence >= MIN_CONFIDENCE_THRESHOLD and len(blocking_factors) == 0
+
+            validation_summary = self._create_validation_summary(
+                symbol, signal_direction, original_confidence, final_confidence,
+                adjustments, blocking_factors, approved
+            )
+
+            logger.info(
+                f"{symbol}: Валидация завершена. Confidence: {original_confidence}->{final_confidence}, Approved: {approved}")
+
+            return {
+                'approved': approved,
+                'final_confidence': final_confidence,
+                'original_confidence': original_confidence,
+                'total_adjustment': total_adjustment,
+                'adjustments': adjustments,
+                'blocking_factors': blocking_factors,
+                'validation_details': validation_details,
+                'validation_summary': validation_summary,
+                'market_data': market_snapshot,
+                'correlation_data': corr_analysis,
+                'volume_profile_data': vp_data if vp_data and vp_data.get('poc', 0) > 0 else None
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка валидации {symbol}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
+            return {
+                'approved': False,
+                'final_confidence': 0,
+                'original_confidence': original_confidence,
+                'total_adjustment': 0,
+                'adjustments': adjustments,
+                'blocking_factors': [f"Validation error: {str(e)}"],
+                'validation_details': validation_details,
+                'validation_summary': f"ERROR during validation: {str(e)}"
+            }
+
+    def _create_rejection_result(
+            self,
+            signal: Dict,
+            original_confidence: int,
+            adjustments: Dict,
+            blocking_factors: List[str],
+            validation_details: List[str]
+    ) -> Dict:
+        """Создать результат отклонения"""
+        return {
+            'approved': False,
+            'final_confidence': 0,
+            'original_confidence': original_confidence,
+            'total_adjustment': sum(adjustments.values()),
+            'adjustments': adjustments,
+            'blocking_factors': blocking_factors,
+            'validation_details': validation_details,
+            'validation_summary': f"REJECTED: {blocking_factors[0] if blocking_factors else 'Unknown reason'}"
+        }
+
+    def _create_validation_summary(
+            self,
+            symbol: str,
+            signal_direction: str,
+            original_conf: int,
+            final_conf: int,
+            adjustments: Dict,
+            blocking_factors: List[str],
+            approved: bool
+    ) -> str:
+        """Создать краткое резюме валидации"""
+
+        # Топ-3 adjustment по модулю
+        top_adjustments = sorted(
+            adjustments.items(),
+            key=lambda x: abs(x[1]),
+            reverse=True
+        )[:3]
+
+        adj_summary = ", ".join([f"{k}: {v:+d}" for k, v in top_adjustments if v != 0])
+
+        if approved:
+            return f"✅ {symbol} {signal_direction} APPROVED: {original_conf}->{final_conf} ({adj_summary})"
+        else:
+            reason = blocking_factors[0] if blocking_factors else f"confidence {final_conf}<70"
+            return f"❌ {symbol} {signal_direction} REJECTED: {reason} ({adj_summary})"
+
+
+# ==================== BATCH VALIDATION ====================
+
+async def validate_signals_batch(
+        validator: EnhancedSignalValidator,
+        signals: List[Dict],
+        candles_data: Dict[str, Dict],  # {symbol: {'1h': candles, '4h': candles}}
+        btc_candles_1h: List[List],
+        sector_candles: Optional[Dict[str, Dict]] = None
+) -> Dict:
+    """
+    Пакетная валидация множества сигналов
+
+    Args:
+        validator: экземпляр EnhancedSignalValidator
+        signals: список предварительных сигналов
+        candles_data: данные свечей для всех символов
+        btc_candles_1h: свечи BTC
+        sector_candles: опционально - свечи секторов
+
+    Returns:
+        {
+            'validated': [signals],
+            'rejected': [signals],
+            'validation_stats': {...}
+        }
+    """
     validated_signals = []
     rejected_signals = []
 
@@ -409,314 +707,7 @@ def get_validation_statistics(validation_results: List[Dict]) -> Dict:
         'total': len(validation_results),
         'approved': len(approved),
         'rejected': len(rejected),
-        'approval_rate': round(len(approved) / len(validation_results) * 100, 1),
+        'approval_rate': round(len(approved) / len(validation_results) * 100, 1) if validation_results else 0,
         'avg_confidence_change': round(avg_confidence_change, 1),
         'top_rejection_reasons': [f"{reason} ({count}x)" for reason, count in top_rejections]
     }
-
-
-signal_comprehensive(
-    self,
-    signal: Dict,
-symbol_candles_1h: List[List],
-symbol_candles_4h: List[List],
-btc_candles_1h: List[List],
-sector_candles: Optional[Dict[str, List[List]]] = None
-) -> Dict:
-"""
-ПОЛНАЯ валидация сигнала со ВСЕМИ проверками
-
-Args:
-    signal: предварительный сигнал от AI
-    symbol_candles_1h: свечи символа 1H
-    symbol_candles_4h: свечи символа 4H
-    btc_candles_1h: свечи BTC 1H
-    sector_candles: опционально - свечи пар сектора
-
-Returns:
-    {
-        'approved': True / False,
-        'final_confidence': int,
-        'original_confidence': int,
-        'adjustments': {...},
-        'blocking_factors': [...],
-        'validation_summary': str
-    }
-"""
-symbol = signal['symbol']
-signal_direction = signal['signal']
-original_confidence = signal.get('confidence', 0)
-
-logger.info(f"Начало расширенной валидации {symbol} {signal_direction} (confidence: {original_confidence})")
-
-# Инициализируем результаты
-adjustments = {
-    'funding_rate': 0,
-    'open_interest': 0,
-    'spread': 0,
-    'orderbook_imbalance': 0,
-    'taker_volume': 0,
-    'btc_correlation': 0,
-    'sector_analysis': 0,
-    'orderflow_ai': 0,
-    'smc_patterns': 0,
-    'volume_profile': 0,
-    'key_levels': 0
-}
-
-blocking_factors = []
-validation_details = []
-
-try:
-    # ========== ЭТАП 1: MARKET DATA (КРИТИЧНО) ==========
-    logger.debug(f"{symbol}: Сбор market data...")
-
-    # Определяем направление цены
-    if len(symbol_candles_1h) >= 10:
-        from func_correlation import determine_trend, extract_prices_from_candles
-
-        prices_1h = extract_prices_from_candles(symbol_candles_1h)
-        price_direction = determine_trend(prices_1h, window=10)
-    else:
-        price_direction = 'FLAT'
-
-    # Собираем market snapshot
-    market_snapshot = await self.market_collector.get_market_snapshot(symbol)
-
-    # 1. Funding Rate
-    if market_snapshot['funding_rate']:
-        funding_analysis = self.market_analyzer.analyze_funding_rate(
-            market_snapshot['funding_rate']
-        )
-        adjustments['funding_rate'] = funding_analysis['confidence_adjustment']
-        validation_details.append(f"Funding: {funding_analysis['reasoning']}")
-
-        if funding_analysis['risk_level'] == 'HIGH':
-            blocking_factors.append(funding_analysis['reasoning'])
-
-    # 2. Open Interest
-    if market_snapshot['open_interest']:
-        oi_analysis = self.market_analyzer.analyze_open_interest(
-            market_snapshot['open_interest'],
-            price_direction
-        )
-        adjustments['open_interest'] = oi_analysis['confidence_adjustment']
-        validation_details.append(f"OI: {oi_analysis['reasoning']}")
-
-    # 3. Spread (КРИТИЧНО - может заблокировать)
-    if market_snapshot['orderbook']:
-        spread_analysis = self.market_analyzer.analyze_spread(
-            market_snapshot['orderbook']
-        )
-        adjustments['spread'] = spread_analysis['confidence_adjustment']
-        validation_details.append(f"Spread: {spread_analysis['reasoning']}")
-
-        if not spread_analysis['tradeable']:
-            blocking_factors.append(f"BLOCK: {spread_analysis['reasoning']}")
-            # Это критический блокер - сразу отклоняем
-            return self._create_rejection_result(
-                signal, original_confidence, adjustments, blocking_factors, validation_details
-            )
-
-    # 4. Orderbook Imbalance
-    if market_snapshot['orderbook']:
-        imbalance_analysis = self.market_analyzer.analyze_orderbook_imbalance(
-            market_snapshot['orderbook']
-        )
-        adjustments['orderbook_imbalance'] = imbalance_analysis['confidence_adjustment']
-        validation_details.append(f"Orderbook: {imbalance_analysis['reasoning']}")
-
-    # 5. Taker Volume
-    if market_snapshot['taker_volume']:
-        taker_analysis = self.market_analyzer.analyze_taker_volume(
-            market_snapshot['taker_volume']
-        )
-        adjustments['taker_volume'] = taker_analysis['confidence_adjustment']
-        validation_details.append(f"Taker: {taker_analysis['reasoning']}")
-
-    # ========== ЭТАП 2: CORRELATION ANALYSIS ==========
-    logger.debug(f"{symbol}: Корреляционный анализ...")
-
-    from func_correlation import get_comprehensive_correlation_analysis
-
-    corr_analysis = await get_comprehensive_correlation_analysis(
-        symbol,
-        symbol_candles_1h,
-        btc_candles_1h,
-        signal_direction,
-        sector_candles
-    )
-
-    # Проверка BTC alignment (может заблокировать)
-    if corr_analysis.get('should_block_signal'):
-        blocking_factors.append(corr_analysis['btc_alignment']['reasoning'])
-        # Это критический блокер
-        return self._create_rejection_result(
-            signal, original_confidence, adjustments, blocking_factors, validation_details
-        )
-
-    adjustments['btc_correlation'] = corr_analysis.get('total_confidence_adjustment', 0)
-    validation_details.append(f"BTC Corr: {corr_analysis['btc_correlation']['reasoning']}")
-
-    if 'sector_analysis' in corr_analysis:
-        adjustments['sector_analysis'] = corr_analysis['sector_analysis'].get('confidence_adjustment', 0)
-        validation_details.append(f"Sector: {corr_analysis['sector_analysis']['reasoning']}")
-
-    # ========== ЭТАП 3: VOLUME PROFILE ==========
-    logger.debug(f"{symbol}: Расчет Volume Profile...")
-
-    from func_volume_profile import (
-        calculate_volume_profile_for_candles,
-        analyze_volume_profile,
-        analyze_key_levels
-    )
-
-    # Рассчитываем VP на 4H данных (больше истории)
-    vp_data = calculate_volume_profile_for_candles(symbol_candles_4h, num_bins=50)
-
-    current_price = float(symbol_candles_1h[-1][4]) if symbol_candles_1h else 0
-
-    if vp_data and vp_data.get('poc', 0) > 0:
-        vp_analysis = analyze_volume_profile(vp_data, current_price)
-        adjustments['volume_profile'] = vp_analysis['total_confidence_adjustment']
-
-        # Ключевые уровни (круглые числа, PDH/PDL, VP)
-        key_levels_analysis = analyze_key_levels(current_price, vp_data, symbol_candles_1h)
-        adjustments['key_levels'] = key_levels_analysis['total_confidence_adjustment']
-
-        validation_details.append(
-            f"VP: POC {vp_data['poc']:.2f}, VA [{vp_data['value_area_low']:.2f}-{vp_data['value_area_high']:.2f}]")
-        validation_details.append(f"Key Levels: {key_levels_analysis['round_numbers']['reasoning']}")
-
-    # ========== ЭТАП 4: AI ADVANCED ANALYSIS ==========
-    logger.debug(f"{symbol}: AI продвинутый анализ...")
-
-    # 4.1 Order Flow AI
-    if market_snapshot['orderbook']:
-        prices_recent = [float(c[4]) for c in symbol_candles_1h[-20:]]
-
-        orderflow_ai = await self.ai_analyzer.analyze_orderbook_flow(
-            symbol,
-            market_snapshot['orderbook'],
-            prices_recent
-        )
-
-        adjustments['orderflow_ai'] = orderflow_ai.get('confidence_adjustment', 0)
-        validation_details.append(f"OrderFlow AI: {orderflow_ai.get('reasoning', 'N/A')}")
-
-    # 4.2 Smart Money Concepts AI
-    smc_ai = await self.ai_analyzer.detect_smart_money_concepts(
-        symbol,
-        symbol_candles_1h,
-        current_price
-    )
-
-    adjustments['smc_patterns'] = smc_ai.get('confidence_boost', 0)
-    validation_details.append(f"SMC AI: {smc_ai.get('reasoning', 'N/A')}")
-
-    # ========== ЭТАП 5: ФИНАЛЬНЫЙ РАСЧЕТ ==========
-
-    total_adjustment = sum(adjustments.values())
-    final_confidence = original_confidence + total_adjustment
-
-    # Ограничиваем диапазон 0-100
-    final_confidence = max(0, min(100, final_confidence))
-
-    # Проверка порога
-    MIN_CONFIDENCE_THRESHOLD = 70
-    approved = final_confidence >= MIN_CONFIDENCE_THRESHOLD and len(blocking_factors) == 0
-
-    validation_summary = self._create_validation_summary(
-        symbol, signal_direction, original_confidence, final_confidence,
-        adjustments, blocking_factors, approved
-    )
-
-    logger.info(
-        f"{symbol}: Валидация завершена. Confidence: {original_confidence}->{final_confidence}, Approved: {approved}")
-
-    return {
-        'approved': approved,
-        'final_confidence': final_confidence,
-        'original_confidence': original_confidence,
-        'total_adjustment': total_adjustment,
-        'adjustments': adjustments,
-        'blocking_factors': blocking_factors,
-        'validation_details': validation_details,
-        'validation_summary': validation_summary,
-        'market_data': market_snapshot,
-        'correlation_data': corr_analysis,
-        'volume_profile_data': vp_data if vp_data and vp_data.get('poc', 0) > 0 else None
-    }
-
-except Exception as e:
-    logger.error(f"Ошибка валидации {symbol}: {e}")
-    import traceback
-
-    logger.error(f"Traceback: {traceback.format_exc()}")
-
-    return {
-        'approved': False,
-        'final_confidence': 0,
-        'original_confidence': original_confidence,
-        'total_adjustment': 0,
-        'adjustments': adjustments,
-        'blocking_factors': [f"Validation error: {str(e)}"],
-        'validation_details': validation_details,
-        'validation_summary': f"ERROR during validation: {str(e)}"
-    }
-
-
-def _create_rejection_result(
-        self,
-        signal: Dict,
-        original_confidence: int,
-        adjustments: Dict,
-        blocking_factors: List[str],
-        validation_details: List[str]
-) -> Dict:
-    """Создать результат отклонения"""
-    return {
-        'approved': False,
-        'final_confidence': 0,
-        'original_confidence': original_confidence,
-        'total_adjustment': sum(adjustments.values()),
-        'adjustments': adjustments,
-        'blocking_factors': blocking_factors,
-        'validation_details': validation_details,
-        'validation_summary': f"REJECTED: {blocking_factors[0] if blocking_factors else 'Unknown reason'}"
-    }
-
-
-def _create_validation_summary(
-        self,
-        symbol: str,
-        signal_direction: str,
-        original_conf: int,
-        final_conf: int,
-        adjustments: Dict,
-        blocking_factors: List[str],
-        approved: bool
-) -> str:
-    """Создать краткое резюме валидации"""
-
-    # Топ-3 adjustment по модулю
-    top_adjustments = sorted(
-        adjustments.items(),
-        key=lambda x: abs(x[1]),
-        reverse=True
-    )[:3]
-
-    adj_summary = ", ".join([f"{k}: {v:+d}" for k, v in top_adjustments if v != 0])
-
-    if approved:
-        return f"✅ {symbol} {signal_direction} APPROVED: {original_conf}->{final_conf} ({adj_summary})"
-    else:
-        reason = blocking_factors[0] if blocking_factors else f"confidence {final_conf}<70"
-        return f"❌ {symbol} {signal_direction} REJECTED: {reason} ({adj_summary})"
-
-
-# ==================== BATCH VALIDATION ====================
-
-async def validate_
-
-    Не дописано , надо дописать 

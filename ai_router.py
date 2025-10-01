@@ -1,9 +1,10 @@
 """
 Маршрутизатор для выбора AI провайдера на каждом этапе
+ОБНОВЛЕНО: Добавлен универсальный метод call_ai для ai_advanced_analysis
 """
 
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from config import config, get_available_ai_providers
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,69 @@ class AIRouter:
 
         logger.warning(f"Этап {stage}: используется fallback режим")
         return 'fallback'
+
+    async def call_ai(
+            self,
+            prompt: str,
+            stage: str = 'analysis',
+            max_tokens: int = 2000,
+            temperature: float = 0.7
+    ) -> str:
+        """
+        Универсальный метод для вызова AI с произвольным промптом
+        Используется в ai_advanced_analysis модуле
+
+        Args:
+            prompt: текст промпта
+            stage: этап для выбора провайдера
+            max_tokens: максимум токенов в ответе
+            temperature: температура генерации
+
+        Returns:
+            Текстовый ответ от AI
+        """
+        provider = self._get_provider_for_stage(stage)
+        logger.debug(f"call_ai через {provider}")
+
+        try:
+            if provider == 'deepseek':
+                import asyncio
+                from openai import AsyncOpenAI
+
+                client = AsyncOpenAI(
+                    api_key=config.DEEPSEEK_API_KEY,
+                    base_url=config.DEEPSEEK_URL
+                )
+
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=config.DEEPSEEK_MODEL,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    ),
+                    timeout=config.API_TIMEOUT
+                )
+
+                return response.choices[0].message.content
+
+            elif provider == 'anthropic':
+                messages = [{"role": "user", "content": prompt}]
+                return await anthropic_client._make_request(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+
+            else:  # fallback
+                logger.warning("call_ai: fallback mode, returning empty response")
+                return "{}"
+
+        except Exception as e:
+            logger.error(f"Ошибка call_ai через {provider}: {e}")
+            return "{}"
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
         """Отбор пар через выбранный AI провайдер"""
