@@ -151,7 +151,7 @@ class AnthropicClient:
                         'direction': item.get('direction', 'NONE'),
                         'confidence': item.get('confidence', 0)
                     },
-                    'candles_15m': candles_15m[-30:],
+                    'candles_60m': candles_15m[-30:],
                     'indicators': {
                         'ema5': indicators_15m.get('ema5_history', [])[-30:],
                         'ema8': indicators_15m.get('ema8_history', [])[-30:],
