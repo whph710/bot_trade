@@ -1,6 +1,10 @@
 """
-Расширенный валидатор сигналов - ПОЛНАЯ ВЕРСИЯ
-Интегрирует все новые проверки: funding, OI, correlations, orderflow, SMC, VP
+Расширенный валидатор - УЛУЧШЕННАЯ ВЕРСИЯ
+
+Изменения:
+- Работает с данными из Stage 3 (не собирает новые)
+- Всегда возвращает JSON даже если не прошел валидацию
+- Фокус на критичных факторах
 """
 
 import asyncio
@@ -12,269 +16,250 @@ logger = logging.getLogger(__name__)
 
 
 class EnhancedSignalValidator:
-    """
-    Комплексный валидатор сигналов со всеми проверками
-    """
+    """Комплексный валидатор (использует данные из Stage 3)"""
 
-    def __init__(
-            self,
-            session,  # aiohttp session
-            ai_router  # твой AIRouter
-    ):
+    def __init__(self, session, ai_router):
         self.session = session
         self.ai_router = ai_router
 
-        # Импортируем модули (будут доступны после интеграции)
-        from func_market_data import MarketDataCollector, MarketDataAnalyzer
-        from func_correlation import CorrelationAnalyzer
-        from func_volume_profile import VolumeProfileCalculator, VolumeProfileAnalyzer
-        from ai_advanced_analysis import AIAdvancedAnalyzer
-
-        self.market_collector = MarketDataCollector(session)
-        self.market_analyzer = MarketDataAnalyzer()
-        self.corr_analyzer = CorrelationAnalyzer()
-        self.vp_calculator = VolumeProfileCalculator()
-        self.vp_analyzer = VolumeProfileAnalyzer()
-        self.ai_analyzer = AIAdvancedAnalyzer(ai_router)
-
-    async def validate_signal_comprehensive(
+    async def validate_signal_from_stage3_data(
             self,
             signal: Dict,
-            symbol_candles_1h: List[List],
-            symbol_candles_4h: List[List],
-            btc_candles_1h: List[List],
-            sector_candles: Optional[Dict[str, List[List]]] = None
+            comprehensive_data: Dict
     ) -> Dict:
         """
-        ПОЛНАЯ валидация сигнала со ВСЕМИ проверками
+        Валидация сигнала используя данные из Stage 3
+        ВСЕГДА возвращает полный JSON с levels
 
         Args:
             signal: предварительный сигнал от AI
-            symbol_candles_1h: свечи символа 1H
-            symbol_candles_4h: свечи символа 4H
-            btc_candles_1h: свечи BTC 1H
-            sector_candles: опционально - свечи пар сектора
+            comprehensive_data: все данные собранные в Stage 3
 
         Returns:
-            {
-                'approved': True / False,
-                'final_confidence': int,
-                'original_confidence': int,
-                'adjustments': {...},
-                'blocking_factors': [...],
-                'validation_summary': str
-            }
+            Полный результат валидации с levels (даже если rejected)
         """
         symbol = signal['symbol']
         signal_direction = signal['signal']
         original_confidence = signal.get('confidence', 0)
 
-        logger.info(f"Начало расширенной валидации {symbol} {signal_direction} (confidence: {original_confidence})")
+        logger.info(f"Validating {symbol} {signal_direction} (confidence: {original_confidence})")
 
-        # Инициализируем результаты
+        # Извлекаем данные из Stage 3
+        market_data = comprehensive_data.get('market_data', {})
+        corr_data = comprehensive_data.get('correlation_data', {})
+        vp_analysis = comprehensive_data.get('vp_analysis', {})
+        orderflow_ai = comprehensive_data.get('orderflow_ai', {})
+        smc_ai = comprehensive_data.get('smc_ai', {})
+
         adjustments = {
             'funding_rate': 0,
             'open_interest': 0,
             'spread': 0,
-            'orderbook_imbalance': 0,
+            'orderbook_pressure': 0,
             'taker_volume': 0,
             'btc_correlation': 0,
-            'sector_analysis': 0,
-            'orderflow_ai': 0,
-            'smc_patterns': 0,
             'volume_profile': 0,
-            'key_levels': 0
+            'orderflow_ai': 0,
+            'smc_patterns': 0
         }
 
         blocking_factors = []
-        validation_details = []
+        warnings = []
 
         try:
-            # ========== ЭТАП 1: MARKET DATA (КРИТИЧНО) ==========
-            logger.debug(f"{symbol}: Сбор market data...")
+            # ========== КРИТИЧЕСКИЕ ПРОВЕРКИ ==========
 
-            # Определяем направление цены
-            if len(symbol_candles_1h) >= 10:
-                from func_correlation import determine_trend, extract_prices_from_candles
+            # 1. SPREAD (может заблокировать)
+            if market_data.get('orderbook'):
+                spread_pct = market_data['orderbook'].get('spread_pct', 0)
 
-                prices_1h = extract_prices_from_candles(symbol_candles_1h)
-                price_direction = determine_trend(prices_1h, window=10)
+                if spread_pct > 0.15:  # >0.15% - illiquid
+                    blocking_factors.append(f"SPREAD TOO WIDE: {spread_pct:.3f}%")
+                elif spread_pct > 0.08:
+                    adjustments['spread'] = -5
+                    warnings.append(f"Wide spread {spread_pct:.3f}%")
+
+            # 2. FUNDING RATE
+            if market_data.get('funding_rate'):
+                funding_rate = market_data['funding_rate'].get('funding_rate', 0)
+
+                # Экстремальный funding против направления
+                if signal_direction == 'LONG' and funding_rate > 0.001:  # >0.10%
+                    adjustments['funding_rate'] = -15
+                    warnings.append(f"High funding {funding_rate*100:.3f}% - longs overleveraged")
+                elif signal_direction == 'SHORT' and funding_rate < -0.001:
+                    adjustments['funding_rate'] = -15
+                    warnings.append(f"Negative funding {funding_rate*100:.3f}% - shorts overleveraged")
+                elif abs(funding_rate) < 0.0003:  # neutral
+                    adjustments['funding_rate'] = 0
+                else:  # умеренный в нашу пользу
+                    adjustments['funding_rate'] = +5
+
+            # 3. OPEN INTEREST
+            if market_data.get('open_interest'):
+                oi_trend = market_data['open_interest'].get('oi_trend', 'STABLE')
+                oi_change = market_data['open_interest'].get('oi_change_24h', 0)
+
+                # Определяем price direction из данных
+                candles_1h = comprehensive_data.get('candles_1h', [])
+                if len(candles_1h) >= 10:
+                    from func_correlation import determine_trend, extract_prices_from_candles
+                    prices = extract_prices_from_candles(candles_1h)
+                    price_direction = determine_trend(prices, window=10)
+                else:
+                    price_direction = 'FLAT'
+
+                # Price UP + OI UP = сильный тренд
+                if price_direction == 'UP' and oi_trend == 'GROWING':
+                    if signal_direction == 'LONG':
+                        adjustments['open_interest'] = +12
+                    else:
+                        adjustments['open_interest'] = -10
+                        warnings.append("OI growing on uptrend, SHORT risky")
+
+                # Price DOWN + OI UP = сильный downtrend
+                elif price_direction == 'DOWN' and oi_trend == 'GROWING':
+                    if signal_direction == 'SHORT':
+                        adjustments['open_interest'] = +12
+                    else:
+                        adjustments['open_interest'] = -10
+                        warnings.append("OI growing on downtrend, LONG risky")
+
+                # Price UP + OI DOWN = слабый rally (short covering)
+                elif price_direction == 'UP' and oi_trend == 'DECLINING':
+                    adjustments['open_interest'] = -8
+                    warnings.append("OI declining on rally - weak move")
+
+            # 4. ORDERBOOK PRESSURE
+            if market_data.get('orderbook'):
+                bids = market_data['orderbook'].get('bids', [])
+                asks = market_data['orderbook'].get('asks', [])
+
+                if bids and asks:
+                    bid_volume = sum(size for price, size in bids[:10])
+                    ask_volume = sum(size for price, size in asks[:10])
+
+                    if ask_volume > 0:
+                        ratio = bid_volume / ask_volume
+
+                        if signal_direction == 'LONG':
+                            if ratio > 1.5:  # strong bids
+                                adjustments['orderbook_pressure'] = +10
+                            elif ratio < 0.67:  # strong asks
+                                adjustments['orderbook_pressure'] = -10
+                                warnings.append(f"Orderbook against LONG (ratio {ratio:.2f})")
+
+                        elif signal_direction == 'SHORT':
+                            if ratio < 0.67:  # strong asks
+                                adjustments['orderbook_pressure'] = +10
+                            elif ratio > 1.5:  # strong bids
+                                adjustments['orderbook_pressure'] = -10
+                                warnings.append(f"Orderbook against SHORT (ratio {ratio:.2f})")
+
+            # 5. TAKER VOLUME
+            if market_data.get('taker_volume'):
+                buy_pressure = market_data['taker_volume'].get('buy_pressure', 0.5)
+
+                if signal_direction == 'LONG':
+                    if buy_pressure > 0.60:  # strong buying
+                        adjustments['taker_volume'] = +8
+                    elif buy_pressure < 0.40:  # strong selling
+                        adjustments['taker_volume'] = -12
+                        warnings.append(f"Taker volume shows selling pressure: {buy_pressure*100:.1f}%")
+
+                elif signal_direction == 'SHORT':
+                    if buy_pressure < 0.40:  # strong selling
+                        adjustments['taker_volume'] = +8
+                    elif buy_pressure > 0.60:  # strong buying
+                        adjustments['taker_volume'] = -12
+                        warnings.append(f"Taker volume shows buying pressure: {buy_pressure*100:.1f}%")
+
+            # 6. BTC CORRELATION (может заблокировать)
+            if corr_data and corr_data.get('should_block_signal'):
+                blocking_factors.append(corr_data['btc_alignment']['reasoning'])
             else:
-                price_direction = 'FLAT'
+                adjustments['btc_correlation'] = corr_data.get('total_confidence_adjustment', 0)
 
-            # Собираем market snapshot
-            market_snapshot = await self.market_collector.get_market_snapshot(symbol)
+            # 7. VOLUME PROFILE
+            if vp_analysis:
+                adjustments['volume_profile'] = vp_analysis.get('total_confidence_adjustment', 0)
 
-            # 1. Funding Rate
-            if market_snapshot['funding_rate']:
-                funding_analysis = self.market_analyzer.analyze_funding_rate(
-                    market_snapshot['funding_rate']
-                )
-                adjustments['funding_rate'] = funding_analysis['confidence_adjustment']
-                validation_details.append(f"Funding: {funding_analysis['reasoning']}")
-
-                if funding_analysis['risk_level'] == 'HIGH':
-                    blocking_factors.append(funding_analysis['reasoning'])
-
-            # 2. Open Interest
-            if market_snapshot['open_interest']:
-                oi_analysis = self.market_analyzer.analyze_open_interest(
-                    market_snapshot['open_interest'],
-                    price_direction
-                )
-                adjustments['open_interest'] = oi_analysis['confidence_adjustment']
-                validation_details.append(f"OI: {oi_analysis['reasoning']}")
-
-            # 3. Spread (КРИТИЧНО - может заблокировать)
-            if market_snapshot['orderbook']:
-                spread_analysis = self.market_analyzer.analyze_spread(
-                    market_snapshot['orderbook']
-                )
-                adjustments['spread'] = spread_analysis['confidence_adjustment']
-                validation_details.append(f"Spread: {spread_analysis['reasoning']}")
-
-                if not spread_analysis['tradeable']:
-                    blocking_factors.append(f"BLOCK: {spread_analysis['reasoning']}")
-                    # Это критический блокер - сразу отклоняем
-                    return self._create_rejection_result(
-                        signal, original_confidence, adjustments, blocking_factors, validation_details
-                    )
-
-            # 4. Orderbook Imbalance
-            if market_snapshot['orderbook']:
-                imbalance_analysis = self.market_analyzer.analyze_orderbook_imbalance(
-                    market_snapshot['orderbook']
-                )
-                adjustments['orderbook_imbalance'] = imbalance_analysis['confidence_adjustment']
-                validation_details.append(f"Orderbook: {imbalance_analysis['reasoning']}")
-
-            # 5. Taker Volume
-            if market_snapshot['taker_volume']:
-                taker_analysis = self.market_analyzer.analyze_taker_volume(
-                    market_snapshot['taker_volume']
-                )
-                adjustments['taker_volume'] = taker_analysis['confidence_adjustment']
-                validation_details.append(f"Taker: {taker_analysis['reasoning']}")
-
-            # ========== ЭТАП 2: CORRELATION ANALYSIS ==========
-            logger.debug(f"{symbol}: Корреляционный анализ...")
-
-            from func_correlation import get_comprehensive_correlation_analysis
-
-            corr_analysis = await get_comprehensive_correlation_analysis(
-                symbol,
-                symbol_candles_1h,
-                btc_candles_1h,
-                signal_direction,
-                sector_candles
-            )
-
-            # Проверка BTC alignment (может заблокировать)
-            if corr_analysis.get('should_block_signal'):
-                blocking_factors.append(corr_analysis['btc_alignment']['reasoning'])
-                # Это критический блокер
-                return self._create_rejection_result(
-                    signal, original_confidence, adjustments, blocking_factors, validation_details
-                )
-
-            adjustments['btc_correlation'] = corr_analysis.get('total_confidence_adjustment', 0)
-            validation_details.append(f"BTC Corr: {corr_analysis['btc_correlation']['reasoning']}")
-
-            if 'sector_analysis' in corr_analysis:
-                adjustments['sector_analysis'] = corr_analysis['sector_analysis'].get('confidence_adjustment', 0)
-                validation_details.append(f"Sector: {corr_analysis['sector_analysis']['reasoning']}")
-
-            # ========== ЭТАП 3: VOLUME PROFILE ==========
-            logger.debug(f"{symbol}: Расчет Volume Profile...")
-
-            from func_volume_profile import (
-                calculate_volume_profile_for_candles,
-                analyze_volume_profile,
-                analyze_key_levels
-            )
-
-            # Рассчитываем VP на 4H данных (больше истории)
-            vp_data = calculate_volume_profile_for_candles(symbol_candles_4h, num_bins=50)
-
-            current_price = float(symbol_candles_1h[-1][4]) if symbol_candles_1h else 0
-
-            if vp_data and vp_data.get('poc', 0) > 0:
-                vp_analysis = analyze_volume_profile(vp_data, current_price)
-                adjustments['volume_profile'] = vp_analysis['total_confidence_adjustment']
-
-                # Ключевые уровни (круглые числа, PDH/PDL, VP)
-                key_levels_analysis = analyze_key_levels(current_price, vp_data, symbol_candles_1h)
-                adjustments['key_levels'] = key_levels_analysis['total_confidence_adjustment']
-
-                validation_details.append(
-                    f"VP: POC {vp_data['poc']:.2f}, VA [{vp_data['value_area_low']:.2f}-{vp_data['value_area_high']:.2f}]")
-                validation_details.append(f"Key Levels: {key_levels_analysis['round_numbers']['reasoning']}")
-
-            # ========== ЭТАП 4: AI ADVANCED ANALYSIS ==========
-            logger.debug(f"{symbol}: AI продвинутый анализ...")
-
-            # 4.1 Order Flow AI
-            if market_snapshot['orderbook']:
-                prices_recent = [float(c[4]) for c in symbol_candles_1h[-20:]]
-
-                orderflow_ai = await self.ai_analyzer.analyze_orderbook_flow(
-                    symbol,
-                    market_snapshot['orderbook'],
-                    prices_recent
-                )
-
+            # 8. AI ORDERFLOW
+            if orderflow_ai:
                 adjustments['orderflow_ai'] = orderflow_ai.get('confidence_adjustment', 0)
-                validation_details.append(f"OrderFlow AI: {orderflow_ai.get('reasoning', 'N/A')}")
 
-            # 4.2 Smart Money Concepts AI
-            smc_ai = await self.ai_analyzer.detect_smart_money_concepts(
-                symbol,
-                symbol_candles_1h,
-                current_price
-            )
+                # Проверка на spoofing
+                if orderflow_ai.get('spoofing_risk') == 'HIGH':
+                    warnings.append("High spoofing risk detected in orderbook")
 
-            adjustments['smc_patterns'] = smc_ai.get('confidence_boost', 0)
-            validation_details.append(f"SMC AI: {smc_ai.get('reasoning', 'N/A')}")
+            # 9. SMC PATTERNS
+            if smc_ai:
+                adjustments['smc_patterns'] = smc_ai.get('confidence_boost', 0)
 
-            # ========== ЭТАП 5: ФИНАЛЬНЫЙ РАСЧЕТ ==========
+            # ========== ФИНАЛЬНЫЙ РАСЧЕТ ==========
 
             total_adjustment = sum(adjustments.values())
             final_confidence = original_confidence + total_adjustment
-
-            # Ограничиваем диапазон 0-100
             final_confidence = max(0, min(100, final_confidence))
 
             # Проверка порога
-            MIN_CONFIDENCE_THRESHOLD = 70
-            approved = final_confidence >= MIN_CONFIDENCE_THRESHOLD and len(blocking_factors) == 0
+            MIN_CONFIDENCE = 70
+            approved = final_confidence >= MIN_CONFIDENCE and len(blocking_factors) == 0
 
-            validation_summary = self._create_validation_summary(
-                symbol, signal_direction, original_confidence, final_confidence,
-                adjustments, blocking_factors, approved
+            # ========== ФОРМИРУЕМ LEVELS (ВСЕГДА) ==========
+
+            entry_price = signal.get('entry_price', 0)
+            stop_loss = signal.get('stop_loss', 0)
+
+            # Take Profit Levels (3 уровня)
+            take_profit_levels = self._calculate_take_profit_levels(
+                signal,
+                comprehensive_data,
+                approved
             )
 
-            logger.info(
-                f"{symbol}: Валидация завершена. Confidence: {original_confidence}->{final_confidence}, Approved: {approved}")
+            # Hold Time
+            hold_time = self._calculate_hold_time(
+                signal,
+                comprehensive_data,
+                approved
+            )
 
-            return {
+            # ========== РЕЗУЛЬТАТ ==========
+
+            validation_summary = self._create_summary(
+                symbol, signal_direction, original_confidence, final_confidence,
+                adjustments, blocking_factors, warnings, approved
+            )
+
+            result = {
                 'approved': approved,
                 'final_confidence': final_confidence,
                 'original_confidence': original_confidence,
                 'total_adjustment': total_adjustment,
                 'adjustments': adjustments,
                 'blocking_factors': blocking_factors,
-                'validation_details': validation_details,
+                'warnings': warnings,
                 'validation_summary': validation_summary,
-                'market_data': market_snapshot,
-                'correlation_data': corr_analysis,
-                'volume_profile_data': vp_data if vp_data and vp_data.get('poc', 0) > 0 else None
+
+                # LEVELS (всегда присутствуют)
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit_levels': take_profit_levels,
+                'hold_time_hours': hold_time,
+                'risk_reward_ratio': self._calculate_best_rr(entry_price, stop_loss, take_profit_levels)
             }
+
+            logger.info(f"{symbol}: {validation_summary}")
+
+            return result
 
         except Exception as e:
             logger.error(f"Ошибка валидации {symbol}: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(traceback.format_exc())
 
+            # Даже при ошибке возвращаем структуру с levels
             return {
                 'approved': False,
                 'final_confidence': 0,
@@ -282,239 +267,323 @@ class EnhancedSignalValidator:
                 'total_adjustment': 0,
                 'adjustments': adjustments,
                 'blocking_factors': [f"Validation error: {str(e)}"],
-                'validation_details': validation_details,
-                'validation_summary': f"ERROR during validation: {str(e)}"
+                'warnings': [],
+                'validation_summary': f"ERROR: {str(e)}",
+                'entry_price': signal.get('entry_price', 0),
+                'stop_loss': signal.get('stop_loss', 0),
+                'take_profit_levels': [signal.get('take_profit', 0)],
+                'hold_time_hours': {'min': 4, 'max': 48},
+                'risk_reward_ratio': 0
             }
 
-    def _create_rejection_result(
+    def _calculate_take_profit_levels(
             self,
             signal: Dict,
-            original_confidence: int,
-            adjustments: Dict,
-            blocking_factors: List[str],
-            validation_details: List[str]
-    ) -> Dict:
-        """Создать результат отклонения"""
+            comprehensive_data: Dict,
+            approved: bool
+    ) -> List[float]:
+        """
+        Рассчитать 3 уровня Take Profit
+
+        Логика:
+        - TP1: консервативный (60% от полного движения)
+        - TP2: базовый (100% - основной таргет)
+        - TP3: расширенный (160% - при сильном импульсе)
+        """
+        signal_direction = signal.get('signal', 'LONG')
+        entry = signal.get('entry_price', 0)
+        stop = signal.get('stop_loss', 0)
+        base_tp = signal.get('take_profit', 0)
+
+        if entry == 0 or stop == 0:
+            return [base_tp] if base_tp > 0 else []
+
+        risk = abs(entry - stop)
+
+        # Определяем силу сетапа
+        vp_data = comprehensive_data.get('volume_profile', {})
+        market_data = comprehensive_data.get('market_data', {})
+
+        # Проверяем volume spike
+        volume_spike = 1.0
+        if market_data.get('taker_volume'):
+            total_vol = market_data['taker_volume'].get('total_volume', 0)
+            # Примерная оценка силы
+            volume_spike = 1.5  # можно улучшить логику
+
+        # Базовые множители
+        if volume_spike > 2.0:
+            multipliers = [1.5, 2.5, 4.0]  # сильный импульс
+        elif volume_spike > 1.5:
+            multipliers = [1.2, 2.0, 3.2]  # средний
+        else:
+            multipliers = [1.0, 1.5, 2.5]  # слабый
+
+        # Рассчитываем levels
+        if signal_direction == 'LONG':
+            tp1 = entry + (risk * multipliers[0])
+            tp2 = entry + (risk * multipliers[1])
+            tp3 = entry + (risk * multipliers[2])
+        else:  # SHORT
+            tp1 = entry - (risk * multipliers[0])
+            tp2 = entry - (risk * multipliers[1])
+            tp3 = entry - (risk * multipliers[2])
+
+        # Корректируем на ближайшие уровни сопротивления/поддержки
+        if vp_data and vp_data.get('poc', 0) > 0:
+            poc = vp_data['poc']
+            va_high = vp_data.get('value_area_high', 0)
+            va_low = vp_data.get('value_area_low', 0)
+
+            # Проверяем не упираемся ли в POC
+            for i, tp in enumerate([tp1, tp2, tp3]):
+                if signal_direction == 'LONG':
+                    # Если TP близко к POC сверху, сдвигаем чуть выше
+                    if abs(tp - poc) / poc < 0.005 and tp > poc:
+                        [tp1, tp2, tp3][i] = poc * 1.003
+                else:  # SHORT
+                    if abs(tp - poc) / poc < 0.005 and tp < poc:
+                        [tp1, tp2, tp3][i] = poc * 0.997
+
+        # Округляем до разумной точности
+        tp_levels = [round(tp, 2) for tp in [tp1, tp2, tp3]]
+
+        # Валидация: TP должны быть в правильном направлении
+        if signal_direction == 'LONG':
+            tp_levels = [tp for tp in tp_levels if tp > entry]
+        else:
+            tp_levels = [tp for tp in tp_levels if tp < entry]
+
+        # Сортируем
+        tp_levels.sort(reverse=(signal_direction == 'SHORT'))
+
+        return tp_levels[:3]  # Максимум 3
+
+    def _calculate_hold_time(
+            self,
+            signal: Dict,
+            comprehensive_data: Dict,
+            approved: bool
+    ) -> Dict[str, int]:
+        """
+        Рассчитать время удержания позиции
+
+        Returns:
+            {'min': 4, 'max': 48}  # в часах
+        """
+        # Базовое время
+        min_hold = 4
+        max_hold = 48
+
+        # Анализируем волатильность
+        candles_1h = comprehensive_data.get('candles_1h', [])
+        if len(candles_1h) >= 20:
+            try:
+                from func_trade import calculate_atr
+                atr = calculate_atr(candles_1h, period=14)
+                current_price = float(candles_1h[-1][4])
+
+                if current_price > 0:
+                    atr_pct = (atr / current_price) * 100
+
+                    # Высокая волатильность = быстрее
+                    if atr_pct > 2.0:
+                        min_hold = 2
+                        max_hold = 24
+                    elif atr_pct > 1.5:
+                        min_hold = 4
+                        max_hold = 36
+                    elif atr_pct < 0.5:
+                        # Низкая волатильность = дольше
+                        min_hold = 8
+                        max_hold = 72
+            except:
+                pass
+
+        # Проверяем силу сетапа
+        smc_ai = comprehensive_data.get('smc_ai', {})
+        if smc_ai:
+            confidence_boost = smc_ai.get('confidence_boost', 0)
+            if confidence_boost > 20:
+                # Очень сильный сетап - может быть быстрое движение
+                min_hold = max(2, min_hold - 2)
+                max_hold = min(max_hold, 36)
+
         return {
-            'approved': False,
-            'final_confidence': 0,
-            'original_confidence': original_confidence,
-            'total_adjustment': sum(adjustments.values()),
-            'adjustments': adjustments,
-            'blocking_factors': blocking_factors,
-            'validation_details': validation_details,
-            'validation_summary': f"REJECTED: {blocking_factors[0] if blocking_factors else 'Unknown reason'}"
+            'min': min_hold,
+            'max': max_hold
         }
 
-    def _create_validation_summary(
+    def _calculate_best_rr(
+            self,
+            entry: float,
+            stop: float,
+            tp_levels: List[float]
+    ) -> float:
+        """Рассчитать лучший R/R (обычно для TP2)"""
+        if not tp_levels or entry == 0 or stop == 0:
+            return 0
+
+        risk = abs(entry - stop)
+        if risk == 0:
+            return 0
+
+        # Используем TP2 (средний уровень) или TP1 если только один
+        target_tp = tp_levels[1] if len(tp_levels) > 1 else tp_levels[0]
+        reward = abs(target_tp - entry)
+
+        return round(reward / risk, 2)
+
+    def _create_summary(
             self,
             symbol: str,
-            signal_direction: str,
-            original_conf: int,
+            direction: str,
+            orig_conf: int,
             final_conf: int,
             adjustments: Dict,
-            blocking_factors: List[str],
+            blocking: List[str],
+            warnings: List[str],
             approved: bool
     ) -> str:
-        """Создать краткое резюме валидации"""
+        """Создать краткое резюме"""
 
-        # Топ-3 adjustment по модулю
-        top_adjustments = sorted(
+        # Топ-3 adjustment
+        top_adj = sorted(
             adjustments.items(),
             key=lambda x: abs(x[1]),
             reverse=True
         )[:3]
 
-        adj_summary = ", ".join([f"{k}: {v:+d}" for k, v in top_adjustments if v != 0])
+        adj_str = ", ".join([f"{k}: {v:+d}" for k, v in top_adj if v != 0])
 
         if approved:
-            return f"✅ {symbol} {signal_direction} APPROVED: {original_conf}->{final_conf} ({adj_summary})"
+            summary = f"✅ {symbol} {direction} APPROVED: {orig_conf}->{final_conf}%"
+            if adj_str:
+                summary += f" ({adj_str})"
         else:
-            reason = blocking_factors[0] if blocking_factors else f"confidence {final_conf}<70"
-            return f"❌ {symbol} {signal_direction} REJECTED: {reason} ({adj_summary})"
+            reason = blocking[0] if blocking else f"Low confidence {final_conf}%"
+            summary = f"❌ {symbol} {direction} REJECTED: {reason}"
+            if warnings:
+                summary += f" | Warnings: {len(warnings)}"
+
+        return summary
 
 
-# ==================== BATCH VALIDATION ====================
+# ==================== BATCH VALIDATION (УЛУЧШЕННАЯ) ====================
 
-async def validate_signals_batch(
+async def validate_signals_batch_improved(
         validator: EnhancedSignalValidator,
-        signals: List[Dict],
-        candles_data: Dict[str, Dict],  # {symbol: {'1h': candles, '4h': candles}}
-        btc_candles_1h: List[List],
-        sector_candles: Optional[Dict[str, Dict]] = None
+        signals_with_data: List[Dict]
 ) -> Dict:
     """
-    Пакетная валидация множества сигналов
+    Пакетная валидация с данными из Stage 3
 
     Args:
         validator: экземпляр EnhancedSignalValidator
-        signals: список предварительных сигналов
-        candles_data: данные свечей для всех символов
-        btc_candles_1h: свечи BTC
-        sector_candles: опционально - свечи секторов
+        signals_with_data: сигналы с comprehensive_data из Stage 3
 
     Returns:
-        {
-            'validated': [signals],
-            'rejected': [signals],
-            'validation_stats': {...}
-        }
+        {'validated': [...], 'rejected': [...]}
     """
     validated_signals = []
     rejected_signals = []
 
     validation_tasks = []
 
-    for signal in signals:
-        symbol = signal['symbol']
+    for signal in signals_with_data:
+        comprehensive_data = signal.get('comprehensive_data', {})
 
-        # Проверяем наличие данных
-        if symbol not in candles_data:
-            logger.warning(f"Нет данных свечей для {symbol}, пропускаем")
+        if not comprehensive_data:
+            logger.warning(f"No comprehensive_data for {signal.get('symbol', 'UNKNOWN')}")
             rejected_signals.append({
-                **signal,
-                'rejection_reason': 'No candle data available'
+                'symbol': signal.get('symbol'),
+                'signal': signal.get('signal'),
+                'rejection_reason': 'Missing comprehensive data from Stage 3'
             })
             continue
 
-        symbol_data = candles_data[symbol]
-
-        # Подготавливаем данные сектора если есть
-        symbol_sector_candles = None
-        if sector_candles:
-            from func_correlation import CorrelationAnalyzer
-            analyzer = CorrelationAnalyzer()
-            peers = analyzer.get_sector_peers(symbol)
-
-            if peers:
-                symbol_sector_candles = {}
-                for peer in peers:
-                    if peer in sector_candles:
-                        symbol_sector_candles[peer] = sector_candles[peer].get('1h', [])
-
-        # Создаем задачу валидации
-        task = validator.validate_signal_comprehensive(
-            signal,
-            symbol_data.get('1h', []),
-            symbol_data.get('4h', []),
-            btc_candles_1h,
-            symbol_sector_candles
-        )
-
+        task = validator.validate_signal_from_stage3_data(signal, comprehensive_data)
         validation_tasks.append((signal, task))
 
-    # Выполняем все валидации параллельно
+    # Выполняем все валидации
     results = []
     for signal, task in validation_tasks:
         try:
             result = await task
             results.append((signal, result))
         except Exception as e:
-            logger.error(f"Ошибка валидации {signal['symbol']}: {e}")
+            logger.error(f"Validation failed for {signal.get('symbol')}: {e}")
             results.append((signal, {
                 'approved': False,
                 'final_confidence': 0,
-                'blocking_factors': [f"Validation failed: {str(e)}"]
+                'blocking_factors': [f"Validation crashed: {str(e)}"],
+                'entry_price': signal.get('entry_price', 0),
+                'stop_loss': signal.get('stop_loss', 0),
+                'take_profit_levels': [],
+                'hold_time_hours': {'min': 4, 'max': 48}
             }))
 
-    # Разделяем на одобренные и отклоненные
+    # Разделяем на approved/rejected
     for original_signal, validation_result in results:
+
+        # Создаем финальный сигнал с validation данными
+        final_signal = {
+            'symbol': original_signal['symbol'],
+            'signal': original_signal['signal'],
+            'confidence': validation_result['final_confidence'],
+            'original_confidence': validation_result['original_confidence'],
+            'entry_price': validation_result['entry_price'],
+            'stop_loss': validation_result['stop_loss'],
+            'take_profit_levels': validation_result['take_profit_levels'],
+            'hold_time_hours': validation_result['hold_time_hours'],
+            'risk_reward_ratio': validation_result['risk_reward_ratio'],
+            'analysis': original_signal.get('analysis', ''),
+            'validation': validation_result,
+            'timestamp': original_signal.get('timestamp')
+        }
+
         if validation_result['approved']:
-            # Обновляем сигнал с новыми данными
-            updated_signal = {
-                **original_signal,
-                'confidence': validation_result['final_confidence'],
-                'original_confidence': validation_result['original_confidence'],
-                'validation': validation_result
-            }
-            validated_signals.append(updated_signal)
+            validated_signals.append(final_signal)
         else:
-            # Создаем очищенную версию для rejected
-            rejected_signal = {
-                'symbol': original_signal['symbol'],
-                'signal': original_signal['signal'],
-                'confidence': original_signal.get('confidence', 0),
-                'entry_price': original_signal.get('entry_price', 0),
-                'rejection_reason': validation_result.get('blocking_factors', ['Unknown'])[0],
-                'validation_summary': validation_result.get('validation_summary', '')
-            }
-            rejected_signals.append(rejected_signal)
+            # Для rejected тоже возвращаем levels
+            rejected_signals.append(final_signal)
 
-    # Статистика
-    validation_stats = {
-        'total_signals': len(signals),
-        'validated': len(validated_signals),
-        'rejected': len(rejected_signals),
-        'validation_rate': round(len(validated_signals) / len(signals) * 100, 1) if signals else 0
-    }
-
-    logger.info(f"Batch validation: {validation_stats['validated']}/{validation_stats['total_signals']} approved")
+    logger.info(f"Batch validation: {len(validated_signals)} approved, {len(rejected_signals)} rejected")
 
     return {
         'validated': validated_signals,
-        'rejected': rejected_signals,
-        'validation_stats': validation_stats
+        'rejected': rejected_signals
     }
 
 
-# ==================== QUICK CHECKS ====================
+# ==================== QUICK MARKET CHECK (без изменений) ====================
 
-async def quick_market_check(
-        session,
-        symbol: str
-) -> Dict:
-    """
-    Быстрая проверка только критических параметров (для фильтрации на ранних этапах)
-
-    Args:
-        session: aiohttp session
-        symbol: торговая пара
-
-    Returns:
-        {
-            'tradeable': True / False,
-            'reason': str,
-            'spread_ok': bool,
-            'funding_ok': bool
-        }
-    """
+async def quick_market_check(session, symbol: str) -> Dict:
+    """Быстрая проверка критических параметров"""
     from func_market_data import MarketDataCollector, MarketDataAnalyzer
 
     collector = MarketDataCollector(session)
     analyzer = MarketDataAnalyzer()
 
     try:
-        # Собираем только критичные данные
         funding_data = await collector.get_funding_rate(symbol)
         orderbook_data = await collector.get_orderbook(symbol, depth=10)
 
-        # Проверка funding
         funding_ok = True
-        funding_reason = ""
+        spread_ok = True
 
         if funding_data:
             funding_analysis = analyzer.analyze_funding_rate(funding_data)
             if funding_analysis['risk_level'] == 'HIGH':
                 funding_ok = False
-                funding_reason = funding_analysis['reasoning']
-
-        # Проверка spread
-        spread_ok = True
-        spread_reason = ""
 
         if orderbook_data:
             spread_analysis = analyzer.analyze_spread(orderbook_data)
             if not spread_analysis['tradeable']:
                 spread_ok = False
-                spread_reason = spread_analysis['reasoning']
 
-        # Итоговое решение
         tradeable = funding_ok and spread_ok
-
-        if not tradeable:
-            reason = spread_reason if not spread_ok else funding_reason
-        else:
-            reason = "All quick checks passed"
+        reason = "OK" if tradeable else "High risk detected"
 
         return {
             'tradeable': tradeable,
@@ -524,10 +593,9 @@ async def quick_market_check(
         }
 
     except Exception as e:
-        logger.error(f"Ошибка quick check для {symbol}: {e}")
         return {
             'tradeable': False,
-            'reason': f"Error: {str(e)}",
+            'reason': f'Error: {str(e)}',
             'spread_ok': False,
             'funding_ok': False
         }
@@ -538,12 +606,7 @@ async def batch_quick_market_check(
         symbols: List[str],
         max_concurrent: int = 10
 ) -> Dict[str, Dict]:
-    """
-    Пакетная быстрая проверка множества пар
-
-    Returns:
-        {symbol: quick_check_result}
-    """
+    """Пакетная быстрая проверка"""
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def check_with_semaphore(symbol):
@@ -556,158 +619,36 @@ async def batch_quick_market_check(
     return {
         symbol: result if isinstance(result, dict) else {
             'tradeable': False,
-            'reason': f'Error: {str(result)}',
-            'spread_ok': False,
-            'funding_ok': False
+            'reason': f'Error: {str(result)}'
         }
         for symbol, result in zip(symbols, results)
     }
 
 
-# ==================== HELPER FUNCTIONS ====================
-
-def calculate_confidence_components(adjustments: Dict) -> Dict:
-    """
-    Разбить adjustments на категории для анализа
-
-    Returns:
-        {
-            'market_data_score': int,
-            'correlation_score': int,
-            'ai_analysis_score': int,
-            'technical_score': int
-        }
-    """
-    market_data_score = (
-            adjustments.get('funding_rate', 0) +
-            adjustments.get('open_interest', 0) +
-            adjustments.get('spread', 0) +
-            adjustments.get('orderbook_imbalance', 0) +
-            adjustments.get('taker_volume', 0)
-    )
-
-    correlation_score = (
-            adjustments.get('btc_correlation', 0) +
-            adjustments.get('sector_analysis', 0)
-    )
-
-    ai_analysis_score = (
-            adjustments.get('orderflow_ai', 0) +
-            adjustments.get('smc_patterns', 0)
-    )
-
-    technical_score = (
-            adjustments.get('volume_profile', 0) +
-            adjustments.get('key_levels', 0)
-    )
-
-    return {
-        'market_data_score': market_data_score,
-        'correlation_score': correlation_score,
-        'ai_analysis_score': ai_analysis_score,
-        'technical_score': technical_score,
-        'total_score': market_data_score + correlation_score + ai_analysis_score + technical_score
-    }
-
-
-def create_validation_report(validation_results: List[Dict]) -> str:
-    """
-    Создать текстовый отчет по валидации
-
-    Args:
-        validation_results: список результатов валидации
-
-    Returns:
-        Форматированный текстовый отчет
-    """
-    report_lines = []
-    report_lines.append("=" * 80)
-    report_lines.append("VALIDATION REPORT")
-    report_lines.append("=" * 80)
-
-    approved = [r for r in validation_results if r.get('approved', False)]
-    rejected = [r for r in validation_results if not r.get('approved', False)]
-
-    report_lines.append(f"\nTotal Signals: {len(validation_results)}")
-    report_lines.append(f"✅ Approved: {len(approved)}")
-    report_lines.append(f"❌ Rejected: {len(rejected)}")
-    report_lines.append(f"Success Rate: {len(approved) / len(validation_results) * 100:.1f}%")
-
-    if approved:
-        report_lines.append("\n" + "-" * 80)
-        report_lines.append("APPROVED SIGNALS:")
-        report_lines.append("-" * 80)
-
-        for result in approved:
-            report_lines.append(f"\n{result.get('validation_summary', 'N/A')}")
-
-            # Breakdown adjustments
-            if 'adjustments' in result:
-                components = calculate_confidence_components(result['adjustments'])
-                report_lines.append(f"  Breakdown: Market={components['market_data_score']:+d}, "
-                                    f"Corr={components['correlation_score']:+d}, "
-                                    f"AI={components['ai_analysis_score']:+d}, "
-                                    f"Tech={components['technical_score']:+d}")
-
-    if rejected:
-        report_lines.append("\n" + "-" * 80)
-        report_lines.append("REJECTED SIGNALS:")
-        report_lines.append("-" * 80)
-
-        for result in rejected:
-            report_lines.append(f"\n{result.get('validation_summary', 'N/A')}")
-
-            if 'blocking_factors' in result and result['blocking_factors']:
-                for factor in result['blocking_factors'][:3]:  # Top 3
-                    report_lines.append(f"  - {factor}")
-
-    report_lines.append("\n" + "=" * 80)
-
-    return "\n".join(report_lines)
-
-
 def get_validation_statistics(validation_results: List[Dict]) -> Dict:
-    """
-    Собрать статистику по валидации
-
-    Returns:
-        Подробная статистика
-    """
+    """Собрать статистику по валидации"""
     if not validation_results:
         return {
             'total': 0,
             'approved': 0,
             'rejected': 0,
-            'avg_confidence_change': 0,
-            'top_rejection_reasons': []
+            'avg_confidence_change': 0
         }
 
     approved = [r for r in validation_results if r.get('approved', False)]
-    rejected = [r for r in validation_results if not r.get('approved', False)]
 
-    # Среднее изменение confidence
     confidence_changes = []
     for result in validation_results:
         if 'original_confidence' in result and 'final_confidence' in result:
             change = result['final_confidence'] - result['original_confidence']
             confidence_changes.append(change)
 
-    avg_confidence_change = sum(confidence_changes) / len(confidence_changes) if confidence_changes else 0
-
-    # Топ причин отклонения
-    rejection_reasons = []
-    for result in rejected:
-        if 'blocking_factors' in result and result['blocking_factors']:
-            rejection_reasons.extend(result['blocking_factors'])
-
-    from collections import Counter
-    top_rejections = Counter(rejection_reasons).most_common(5)
+    avg_change = sum(confidence_changes) / len(confidence_changes) if confidence_changes else 0
 
     return {
         'total': len(validation_results),
         'approved': len(approved),
-        'rejected': len(rejected),
-        'approval_rate': round(len(approved) / len(validation_results) * 100, 1) if validation_results else 0,
-        'avg_confidence_change': round(avg_confidence_change, 1),
-        'top_rejection_reasons': [f"{reason} ({count}x)" for reason, count in top_rejections]
+        'rejected': len(validation_results) - len(approved),
+        'approval_rate': round(len(approved) / len(validation_results) * 100, 1),
+        'avg_confidence_change': round(avg_change, 1)
     }

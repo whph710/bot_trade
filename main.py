@@ -1,6 +1,9 @@
 """
-Торговый бот - основной модуль
-Без кэширования, универсальные таймфреймы
+Торговый бот - основной модуль (УЛУЧШЕННАЯ ВЕРСИЯ)
+Изменения:
+- Сбор всех данных на Stage 3 (не на Stage 4)
+- Компактный финальный JSON
+- Адекватная передача данных между этапами
 """
 
 import asyncio
@@ -16,7 +19,7 @@ from func_trade import calculate_basic_indicators, calculate_ai_indicators, chec
 from ai_router import ai_router
 from func_enhanced_validator import (
     EnhancedSignalValidator,
-    validate_signals_batch,
+    validate_signals_batch_improved,
     batch_quick_market_check,
     get_validation_statistics
 )
@@ -30,12 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class TradingBot:
-    """Торговый бот без кэширования"""
+    """Торговый бот с улучшенной логикой"""
 
     def __init__(self):
         self.processed_pairs = 0
         self.session_start = time.time()
-        self.validation_data = {}
         self.enhanced_validator = None
 
     async def initialize_validator(self):
@@ -61,16 +63,12 @@ class TradingBot:
         return candles_map
 
     async def stage1_filter_signals(self) -> List[Dict]:
-        """
-        STAGE 1: Фильтрация пар с сигналами + Quick Market Checks
-        Используется ДЛИННЫЙ таймфрейм для структурного анализа
-        """
+        """STAGE 1: Фильтрация + Quick Market Checks"""
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 1: Signal filtering on {config.TIMEFRAME_LONG_NAME} timeframe")
         logger.info("=" * 60)
 
-        # Получаем список пар
         pairs = await get_trading_pairs()
         if not pairs:
             logger.error("Failed to get trading pairs")
@@ -86,7 +84,7 @@ class TradingBot:
 
         logger.info(f"Quick checks: {len(tradeable_pairs)} tradeable, {filtered_count} filtered out")
 
-        # Загружаем свечи ДЛИННОГО таймфрейма
+        # Загружаем свечи
         candles_map = await self.load_candles_batch(
             tradeable_pairs,
             config.TIMEFRAME_LONG,
@@ -95,7 +93,6 @@ class TradingBot:
 
         logger.info(f"Loaded candles for {len(candles_map)} pairs")
 
-        # Обрабатываем пары
         pairs_with_signals = []
         processed = 0
 
@@ -129,15 +126,11 @@ class TradingBot:
         logger.info(f"STAGE 1 completed in {elapsed:.1f}s")
         logger.info(f"  Processed: {processed} pairs")
         logger.info(f"  Signals found: {len(pairs_with_signals)}")
-        logger.info(f"  Filtered out: {filtered_count}")
 
         return pairs_with_signals
 
     async def stage2_ai_bulk_select(self, signal_pairs: List[Dict]) -> List[str]:
-        """
-        STAGE 2: AI отбор лучших пар
-        Используется ДЛИННЫЙ таймфрейм
-        """
+        """STAGE 2: AI отбор лучших пар"""
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 2: AI selection from {len(signal_pairs)} pairs")
@@ -146,7 +139,6 @@ class TradingBot:
         if not signal_pairs:
             return []
 
-        # Загружаем свечи для AI анализа
         symbols = [p['symbol'] for p in signal_pairs]
         candles_map = await self.load_candles_batch(
             symbols,
@@ -154,7 +146,6 @@ class TradingBot:
             config.AI_BULK_CANDLES
         )
 
-        # Подготавливаем данные для AI
         ai_input_data = []
 
         for pair_data in signal_pairs:
@@ -173,7 +164,7 @@ class TradingBot:
                 'symbol': symbol,
                 'confidence': pair_data['confidence'],
                 'direction': pair_data['direction'],
-                'candles_15m': candles,  # Имя ключа для совместимости с промптами
+                'candles_15m': candles,
                 'indicators_15m': indicators
             })
 
@@ -182,7 +173,6 @@ class TradingBot:
             return []
 
         logger.info(f"Sending {len(ai_input_data)} pairs to AI")
-
         selected_pairs = await ai_router.select_pairs(ai_input_data)
 
         elapsed = time.time() - start_time
@@ -191,18 +181,34 @@ class TradingBot:
 
         return selected_pairs
 
-    async def stage3_detailed_analysis(self, selected_pairs: List[str]) -> List[Dict]:
+    async def stage3_detailed_analysis_with_data(self, selected_pairs: List[str]) -> List[Dict]:
         """
-        STAGE 3: Детальный анализ на обоих таймфреймах
-        Загружаем КОРОТКИЙ и ДЛИННЫЙ таймфреймы
+        STAGE 3: ПОЛНЫЙ анализ с ВСЕМИ данными
+
+        КРИТИЧНО: Здесь собираются ВСЕ данные для AI:
+        - Свечи 1H и 4H
+        - Индикаторы
+        - Market data (funding, OI, orderbook, taker volume)
+        - BTC данные для корреляций
+        - Sector данные
+        - Volume Profile
+        - Всё передается AI для анализа
         """
         start_time = time.time()
         logger.info("=" * 60)
-        logger.info(f"STAGE 3: Detailed analysis of {len(selected_pairs)} pairs")
+        logger.info(f"STAGE 3: Detailed analysis + DATA COLLECTION for {len(selected_pairs)} pairs")
         logger.info("=" * 60)
 
         if not selected_pairs:
             return []
+
+        # Инициализируем validator для сбора данных
+        await self.initialize_validator()
+
+        # Загружаем BTC для корреляций
+        logger.info("Loading BTC data for correlations...")
+        btc_candles_1h = await fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
+        btc_candles_4h = await fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
 
         final_signals = []
 
@@ -210,66 +216,131 @@ class TradingBot:
             try:
                 logger.debug(f"Analyzing {symbol}...")
 
-                # Загружаем ОБА таймфрейма
-                klines_short = await fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
-                klines_long = await fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+                # 1. Загружаем свечи
+                klines_1h = await fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
+                klines_4h = await fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
 
-                if not klines_short or not klines_long:
+                if not klines_1h or not klines_4h:
                     logger.warning(f"{symbol}: Failed to load candles")
                     continue
 
-                if not validate_candles(klines_short, 20) or not validate_candles(klines_long, 20):
+                if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
                     logger.warning(f"{symbol}: Invalid candles")
                     continue
 
-                # Рассчитываем индикаторы
-                indicators_short = calculate_ai_indicators(klines_short, config.FINAL_INDICATORS_HISTORY)
-                indicators_long = calculate_ai_indicators(klines_long, config.FINAL_INDICATORS_HISTORY)
+                # 2. Рассчитываем индикаторы
+                indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
+                indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
 
-                if not indicators_short or not indicators_long:
+                if not indicators_1h or not indicators_4h:
                     logger.warning(f"{symbol}: Indicators calculation failed")
                     continue
 
-                # Сохраняем для валидации
-                self.validation_data[symbol] = {
-                    'klines_short': klines_short[-100:],
-                    'klines_long': klines_long[-50:],
-                    'indicators_short': indicators_short,
-                    'indicators_long': indicators_long,
-                    'timestamp': datetime.now().isoformat()
+                # 3. СОБИРАЕМ ВСЕ РАСШИРЕННЫЕ ДАННЫЕ
+                logger.debug(f"{symbol}: Collecting market data...")
+
+                # Market snapshot
+                from func_market_data import MarketDataCollector, MarketDataAnalyzer
+                from func_correlation import get_comprehensive_correlation_analysis
+                from func_volume_profile import calculate_volume_profile_for_candles, analyze_volume_profile
+                from ai_advanced_analysis import get_ai_orderflow_analysis, get_ai_smc_patterns
+
+                collector = MarketDataCollector(await get_optimized_session())
+                market_snapshot = await collector.get_market_snapshot(symbol)
+
+                # Correlation analysis
+                corr_analysis = await get_comprehensive_correlation_analysis(
+                    symbol,
+                    klines_1h,
+                    btc_candles_1h,
+                    'UNKNOWN',  # direction пока неизвестен
+                    None  # sector_candles можно добавить позже
+                )
+
+                # Volume Profile (на 4H данных)
+                vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
+                current_price = float(klines_1h[-1][4]) if klines_1h else 0
+                vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
+
+                # AI OrderFlow Analysis
+                orderflow_ai = None
+                if market_snapshot['orderbook']:
+                    prices_recent = [float(c[4]) for c in klines_1h[-20:]]
+                    orderflow_ai = await get_ai_orderflow_analysis(
+                        ai_router,
+                        symbol,
+                        market_snapshot['orderbook'],
+                        prices_recent
+                    )
+
+                # AI Smart Money Concepts
+                smc_ai = await get_ai_smc_patterns(
+                    ai_router,
+                    symbol,
+                    klines_1h,
+                    current_price
+                )
+
+                # 4. ФОРМИРУЕМ ПОЛНЫЙ ПАКЕТ ДАННЫХ ДЛЯ AI
+                comprehensive_data = {
+                    # Базовые данные
+                    'symbol': symbol,
+                    'candles_1h': klines_1h,
+                    'candles_4h': klines_4h,
+                    'indicators_1h': indicators_1h,
+                    'indicators_4h': indicators_4h,
+                    'current_price': current_price,
+
+                    # Расширенные данные
+                    'market_data': market_snapshot,
+                    'correlation_data': corr_analysis,
+                    'volume_profile': vp_data,
+                    'vp_analysis': vp_analysis,
+                    'orderflow_ai': orderflow_ai,
+                    'smc_ai': smc_ai,
+
+                    # BTC данные
+                    'btc_candles_1h': btc_candles_1h,
+                    'btc_candles_4h': btc_candles_4h
                 }
 
-                # AI анализ (используем старые имена ключей для совместимости)
-                analysis = await ai_router.analyze_pair(
+                # 5. AI АНАЛИЗ С ПОЛНЫМИ ДАННЫМИ
+                logger.debug(f"{symbol}: Running AI analysis with comprehensive data...")
+
+                analysis = await ai_router.analyze_pair_comprehensive(
                     symbol,
-                    klines_short,  # data_5m для промпта
-                    klines_long,   # data_15m для промпта
-                    indicators_short,  # indicators_5m
-                    indicators_long    # indicators_15m
+                    comprehensive_data
                 )
 
                 if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
+                    # Сохраняем ВСЕ данные для Stage 4
+                    analysis['comprehensive_data'] = comprehensive_data
                     analysis['timestamp'] = datetime.now().isoformat()
+
                     final_signals.append(analysis)
                     logger.info(f"Signal found: {symbol} {analysis['signal']} {analysis['confidence']}%")
 
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 continue
 
         elapsed = time.time() - start_time
         logger.info(f"STAGE 3 completed in {elapsed:.1f}s")
-        logger.info(f"  Signals: {len(final_signals)}")
+        logger.info(f"  Signals with full data: {len(final_signals)}")
 
         return final_signals
 
     async def stage4_final_validation(self, preliminary_signals: List[Dict]) -> Dict[str, Any]:
         """
-        STAGE 4: Расширенная валидация
+        STAGE 4: ТОЛЬКО валидация (БЕЗ сбора новых данных)
+
+        Используются данные из Stage 3 (comprehensive_data)
         """
         start_time = time.time()
         logger.info("=" * 60)
-        logger.info(f"STAGE 4: Enhanced validation of {len(preliminary_signals)} signals")
+        logger.info(f"STAGE 4: Final validation of {len(preliminary_signals)} signals")
         logger.info("=" * 60)
 
         if not preliminary_signals:
@@ -278,47 +349,30 @@ class TradingBot:
         try:
             await self.initialize_validator()
 
-            # Подготовка данных
-            candles_data = {}
-            for signal in preliminary_signals:
-                symbol = signal['symbol']
-                if symbol in self.validation_data:
-                    candles_data[symbol] = {
-                        '1h': self.validation_data[symbol]['klines_short'],
-                        '4h': self.validation_data[symbol]['klines_long']
-                    }
+            logger.info("Running validation with Stage 3 data...")
 
-            # Загружаем BTC для корреляций
-            logger.info("Loading BTC data for correlation analysis...")
-            btc_candles = await fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
-
-            # Валидация
-            logger.info("Running enhanced validation...")
-            validation_result = await validate_signals_batch(
+            # Валидация БЕЗ сбора новых данных
+            validation_result = await validate_signals_batch_improved(
                 self.enhanced_validator,
-                preliminary_signals,
-                candles_data,
-                btc_candles,
-                None
+                preliminary_signals  # Содержат comprehensive_data
             )
 
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
-            # Статистика
-            all_results = [s.get('validation', {}) for s in validated]
-            stats = get_validation_statistics(all_results)
+            # Очищаем comprehensive_data из финального ответа (она огромная)
+            for signal in validated:
+                if 'comprehensive_data' in signal:
+                    del signal['comprehensive_data']
 
             elapsed = time.time() - start_time
             logger.info(f"STAGE 4 completed in {elapsed:.1f}s")
             logger.info(f"  Approved: {len(validated)}")
             logger.info(f"  Rejected: {len(rejected)}")
-            logger.info(f"  Approval rate: {stats['approval_rate']}%")
 
             return {
                 'validated': validated,
-                'rejected': rejected,
-                'validation_stats': stats
+                'rejected': rejected
             }
 
         except Exception as e:
@@ -335,10 +389,6 @@ class TradingBot:
         logger.info("STARTING FULL ANALYSIS CYCLE")
         logger.info("=" * 80)
 
-        ai_status = ai_router.get_status()
-        logger.info(f"AI providers: {[k for k, v in ai_status['providers_available'].items() if v]}")
-        logger.info(f"Timeframes: {config.TIMEFRAME_SHORT_NAME} (detail) + {config.TIMEFRAME_LONG_NAME} (structure)")
-
         try:
             # STAGE 1
             signal_pairs = await self.stage1_filter_signals()
@@ -346,8 +396,7 @@ class TradingBot:
                 return {
                     'result': 'NO_SIGNAL_PAIRS',
                     'total_time': time.time() - cycle_start,
-                    'pairs_scanned': self.processed_pairs,
-                    'message': 'No pairs with signals'
+                    'pairs_scanned': self.processed_pairs
                 }
 
             # STAGE 2
@@ -357,32 +406,46 @@ class TradingBot:
                     'result': 'NO_AI_SELECTION',
                     'total_time': time.time() - cycle_start,
                     'signal_pairs': len(signal_pairs),
-                    'pairs_scanned': self.processed_pairs,
-                    'message': 'AI did not select any pairs'
+                    'pairs_scanned': self.processed_pairs
                 }
 
-            # STAGE 3
-            preliminary_signals = await self.stage3_detailed_analysis(selected_pairs)
+            # STAGE 3 (с ПОЛНЫМ сбором данных)
+            preliminary_signals = await self.stage3_detailed_analysis_with_data(selected_pairs)
             if not preliminary_signals:
                 return {
                     'result': 'NO_PRELIMINARY_SIGNALS',
                     'total_time': time.time() - cycle_start,
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs': len(signal_pairs),
-                    'ai_selected': len(selected_pairs),
-                    'message': 'No signals from detailed analysis'
+                    'ai_selected': len(selected_pairs)
                 }
 
-            # STAGE 4
+            # STAGE 4 (только валидация)
             validation_result = await self.stage4_final_validation(preliminary_signals)
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
-            # Результат
+            # КОМПАКТНЫЙ финальный результат
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
             result_type = 'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS'
+
+            # Форматируем КОМПАКТНЫЙ ответ
+            compact_signals = []
+            for sig in validated:
+                compact_signal = {
+                    'symbol': sig['symbol'],
+                    'signal': sig['signal'],
+                    'confidence': sig['confidence'],
+                    'entry_price': sig['entry_price'],
+                    'stop_loss': sig['stop_loss'],
+                    'take_profit_levels': sig.get('take_profit_levels', [sig.get('take_profit', 0)]),
+                    'hold_time_hours': sig.get('hold_time_hours', {'min': 4, 'max': 48}),
+                    'analysis': sig.get('analysis', 'No analysis available'),
+                    'risk_reward': sig.get('risk_reward_ratio', 0)
+                }
+                compact_signals.append(compact_signal)
 
             final_result = {
                 'timestamp': timestamp,
@@ -395,22 +458,18 @@ class TradingBot:
                     'ai_selected': len(selected_pairs),
                     'preliminary_signals': len(preliminary_signals),
                     'validated_signals': len(validated),
-                    'rejected_signals': len(rejected),
-                    'processing_speed': round(self.processed_pairs / total_time, 1)
+                    'rejected_signals': len(rejected)
                 },
-                'validated_signals': validated,
-                'rejected_signals': rejected if rejected else None,
-                'validation_stats': validation_result.get('validation_stats', {})
+                'signals': compact_signals
             }
 
             # Сохраняем
             filename = f'bot_result_{timestamp}.json'
             with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(final_result, f, indent=2, ensure_ascii=False, default=str)
+                json.dump(final_result, f, indent=2, ensure_ascii=False)
 
             logger.info("=" * 80)
-            logger.info(f"CYCLE COMPLETE: {self.processed_pairs}->{len(signal_pairs)}->{len(selected_pairs)}->{len(preliminary_signals)}->{len(validated)}")
-            logger.info(f"Time: {total_time:.1f}s, speed: {self.processed_pairs/total_time:.0f} pairs/sec")
+            logger.info(f"CYCLE COMPLETE: {len(validated)} signals validated")
             logger.info(f"Result saved: {filename}")
             logger.info("=" * 80)
 
@@ -434,13 +493,7 @@ class TradingBot:
 async def main():
     """Главная функция"""
     print("=" * 80)
-    print("TRADING BOT v3.0 (1H/4H STRATEGY)")
-    print("=" * 80)
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    ai_status = ai_router.get_status()
-    print(f"AI providers: {[k for k, v in ai_status['providers_available'].items() if v]}")
-    print(f"Timeframes: {config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}")
+    print("TRADING BOT v3.1 (IMPROVED)")
     print("=" * 80)
 
     bot = TradingBot()
@@ -454,39 +507,21 @@ async def main():
         print(f"Time: {result.get('total_time', 0):.1f}s")
         print("=" * 80)
 
-        if 'stats' in result:
-            s = result['stats']
-            print(f"\nPipeline: {s['pairs_scanned']}->{s['signal_pairs_found']}->{s['ai_selected']}->{s['preliminary_signals']}->{s['validated_signals']}")
-            print(f"Speed: {s['processing_speed']} pairs/sec")
-
-        if result.get('validated_signals'):
-            print(f"\nVALIDATED SIGNALS ({len(result['validated_signals'])}):")
-            for sig in result['validated_signals']:
-                conf = sig.get('confidence', 0)
-                orig = sig.get('original_confidence', conf)
-                adj = conf - orig
-                rr = sig.get('risk_reward_ratio', 'N/A')
-                print(f"  {sig['symbol']}: {sig['signal']} ({orig}->{conf}% {adj:+d}) R/R:1:{rr}")
-
-        elif result.get('rejected_signals'):
-            print(f"\nREJECTED SIGNALS ({len(result['rejected_signals'])}):")
-            for sig in result['rejected_signals'][:5]:
-                print(f"  {sig['symbol']}: {sig['signal']} - {sig.get('rejection_reason', 'Unknown')}")
-
-        print("\n" + "=" * 80)
+        if result.get('signals'):
+            print(f"\nSIGNALS ({len(result['signals'])}):")
+            for sig in result['signals']:
+                print(f"\n{sig['symbol']}: {sig['signal']} (Confidence: {sig['confidence']}%)")
+                print(f"  Entry: ${sig['entry_price']}")
+                print(f"  Stop: ${sig['stop_loss']}")
+                print(f"  TPs: {sig['take_profit_levels']}")
+                print(f"  Hold: {sig['hold_time_hours']['min']}-{sig['hold_time_hours']['max']}h")
+                print(f"  R/R: 1:{sig['risk_reward']}")
 
     except KeyboardInterrupt:
         print("\nStopped by user")
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
     finally:
         await bot.cleanup()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nProgram stopped")
+    asyncio.run(main())
