@@ -1,9 +1,12 @@
 """
-Торговый бот - основной модуль (УЛУЧШЕННАЯ ВЕРСИЯ)
-Изменения:
-- Сбор всех данных на Stage 3 (не на Stage 4)
-- Компактный финальный JSON
-- Адекватная передача данных между этапами
+Торговый бот - ФИНАЛЬНАЯ ВЕРСИЯ
+
+Ключевые улучшения:
+1. Все данные собираются в Stage 3
+2. Stage 4 только валидирует
+3. Компактный JSON на выходе
+4. Адаптивные TP levels и hold time
+5. Всегда возвращает JSON даже если rejected
 """
 
 import asyncio
@@ -33,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class TradingBot:
-    """Торговый бот с улучшенной логикой"""
+    """Торговый бот - финальная версия"""
 
     def __init__(self):
         self.processed_pairs = 0
@@ -185,14 +188,13 @@ class TradingBot:
         """
         STAGE 3: ПОЛНЫЙ анализ с ВСЕМИ данными
 
-        КРИТИЧНО: Здесь собираются ВСЕ данные для AI:
+        КРИТИЧНО: Собираются ВСЕ данные для AI:
         - Свечи 1H и 4H
         - Индикаторы
         - Market data (funding, OI, orderbook, taker volume)
         - BTC данные для корреляций
-        - Sector данные
         - Volume Profile
-        - Всё передается AI для анализа
+        - AI анализы (OrderFlow, SMC)
         """
         start_time = time.time()
         logger.info("=" * 60)
@@ -202,7 +204,6 @@ class TradingBot:
         if not selected_pairs:
             return []
 
-        # Инициализируем validator для сбора данных
         await self.initialize_validator()
 
         # Загружаем BTC для корреляций
@@ -236,30 +237,32 @@ class TradingBot:
                     logger.warning(f"{symbol}: Indicators calculation failed")
                     continue
 
+                current_price = float(klines_1h[-1][4]) if klines_1h else 0
+
                 # 3. СОБИРАЕМ ВСЕ РАСШИРЕННЫЕ ДАННЫЕ
                 logger.debug(f"{symbol}: Collecting market data...")
 
-                # Market snapshot
-                from func_market_data import MarketDataCollector, MarketDataAnalyzer
+                from func_market_data import MarketDataCollector
                 from func_correlation import get_comprehensive_correlation_analysis
                 from func_volume_profile import calculate_volume_profile_for_candles, analyze_volume_profile
                 from ai_advanced_analysis import get_ai_orderflow_analysis, get_ai_smc_patterns
 
                 collector = MarketDataCollector(await get_optimized_session())
-                market_snapshot = await collector.get_market_snapshot(symbol)
+
+                # Market snapshot с адаптивным стаканом
+                market_snapshot = await collector.get_market_snapshot(symbol, current_price)
 
                 # Correlation analysis
                 corr_analysis = await get_comprehensive_correlation_analysis(
                     symbol,
                     klines_1h,
                     btc_candles_1h,
-                    'UNKNOWN',  # direction пока неизвестен
-                    None  # sector_candles можно добавить позже
+                    'UNKNOWN',
+                    None
                 )
 
                 # Volume Profile (на 4H данных)
                 vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
-                current_price = float(klines_1h[-1][4]) if klines_1h else 0
                 vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
 
                 # AI OrderFlow Analysis
@@ -283,23 +286,18 @@ class TradingBot:
 
                 # 4. ФОРМИРУЕМ ПОЛНЫЙ ПАКЕТ ДАННЫХ ДЛЯ AI
                 comprehensive_data = {
-                    # Базовые данные
                     'symbol': symbol,
                     'candles_1h': klines_1h,
                     'candles_4h': klines_4h,
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
                     'current_price': current_price,
-
-                    # Расширенные данные
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
                     'volume_profile': vp_data,
                     'vp_analysis': vp_analysis,
                     'orderflow_ai': orderflow_ai,
                     'smc_ai': smc_ai,
-
-                    # BTC данные
                     'btc_candles_1h': btc_candles_1h,
                     'btc_candles_4h': btc_candles_4h
                 }
@@ -337,6 +335,7 @@ class TradingBot:
         STAGE 4: ТОЛЬКО валидация (БЕЗ сбора новых данных)
 
         Используются данные из Stage 3 (comprehensive_data)
+        Всегда возвращает JSON с levels даже для rejected
         """
         start_time = time.time()
         logger.info("=" * 60)
@@ -354,14 +353,14 @@ class TradingBot:
             # Валидация БЕЗ сбора новых данных
             validation_result = await validate_signals_batch_improved(
                 self.enhanced_validator,
-                preliminary_signals  # Содержат comprehensive_data
+                preliminary_signals
             )
 
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
             # Очищаем comprehensive_data из финального ответа (она огромная)
-            for signal in validated:
+            for signal in validated + rejected:
                 if 'comprehensive_data' in signal:
                     del signal['comprehensive_data']
 
@@ -440,17 +439,21 @@ class TradingBot:
                     'confidence': sig['confidence'],
                     'entry_price': sig['entry_price'],
                     'stop_loss': sig['stop_loss'],
-                    'take_profit_levels': sig.get('take_profit_levels', [sig.get('take_profit', 0)]),
+                    'take_profit_levels': sig.get('take_profit_levels', []),
                     'hold_time_hours': sig.get('hold_time_hours', {'min': 4, 'max': 48}),
-                    'analysis': sig.get('analysis', 'No analysis available'),
-                    'risk_reward': sig.get('risk_reward_ratio', 0)
+                    'risk_reward_ratio': sig.get('risk_reward_ratio', 0),
+                    'analysis': sig.get('analysis', '')
                 }
                 compact_signals.append(compact_signal)
+
+            # Статистика валидации
+            all_validation_results = [sig.get('validation', {}) for sig in validated + rejected if sig.get('validation')]
+            validation_stats = get_validation_statistics(all_validation_results)
 
             final_result = {
                 'timestamp': timestamp,
                 'result': result_type,
-                'total_time': round(total_time, 2),
+                'total_time': round(total_time, 1),
                 'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}",
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
@@ -458,9 +461,12 @@ class TradingBot:
                     'ai_selected': len(selected_pairs),
                     'preliminary_signals': len(preliminary_signals),
                     'validated_signals': len(validated),
-                    'rejected_signals': len(rejected)
+                    'rejected_signals': len(rejected),
+                    'processing_speed': round(self.processed_pairs / total_time, 1)
                 },
-                'signals': compact_signals
+                'validated_signals': compact_signals,
+                'rejected_signals': None,  # Не включаем rejected в финальный JSON
+                'validation_stats': validation_stats
             }
 
             # Сохраняем
@@ -493,7 +499,7 @@ class TradingBot:
 async def main():
     """Главная функция"""
     print("=" * 80)
-    print("TRADING BOT v3.1 (IMPROVED)")
+    print("TRADING BOT v4.0 (FINAL - COMPACT OUTPUT)")
     print("=" * 80)
 
     bot = TradingBot()
@@ -505,17 +511,54 @@ async def main():
         print("=" * 80)
         print(f"RESULT: {result['result']}")
         print(f"Time: {result.get('total_time', 0):.1f}s")
+
+        stats = result.get('stats', {})
+        print(f"Pairs scanned: {stats.get('pairs_scanned', 0)}")
+        print(f"Speed: {stats.get('processing_speed', 0):.1f} pairs/sec")
         print("=" * 80)
 
-        if result.get('signals'):
-            print(f"\nSIGNALS ({len(result['signals'])}):")
-            for sig in result['signals']:
+        if result.get('validated_signals'):
+            signals = result['validated_signals']
+            print(f"\n✅ VALIDATED SIGNALS ({len(signals)}):")
+            print("=" * 80)
+
+            for sig in signals:
                 print(f"\n{sig['symbol']}: {sig['signal']} (Confidence: {sig['confidence']}%)")
                 print(f"  Entry: ${sig['entry_price']}")
-                print(f"  Stop: ${sig['stop_loss']}")
-                print(f"  TPs: {sig['take_profit_levels']}")
-                print(f"  Hold: {sig['hold_time_hours']['min']}-{sig['hold_time_hours']['max']}h")
-                print(f"  R/R: 1:{sig['risk_reward']}")
+                print(f"  Stop:  ${sig['stop_loss']}")
+
+                tps = sig['take_profit_levels']
+                if len(tps) >= 3:
+                    print(f"  TP1:   ${tps[0]} (Conservative)")
+                    print(f"  TP2:   ${tps[1]} (Base Target)")
+                    print(f"  TP3:   ${tps[2]} (Extended)")
+                elif len(tps) == 2:
+                    print(f"  TP1:   ${tps[0]}")
+                    print(f"  TP2:   ${tps[1]}")
+                elif len(tps) == 1:
+                    print(f"  TP:    ${tps[0]}")
+
+                hold = sig['hold_time_hours']
+                print(f"  Hold:  {hold['min']}-{hold['max']} hours")
+                print(f"  R/R:   1:{sig['risk_reward_ratio']}")
+
+                # Краткий анализ (первые 150 символов)
+                analysis = sig.get('analysis', '')
+                if len(analysis) > 150:
+                    analysis = analysis[:150] + "..."
+                print(f"  Analysis: {analysis}")
+
+        # Статистика валидации
+        if result.get('validation_stats'):
+            vstats = result['validation_stats']
+            print(f"\n📊 VALIDATION STATISTICS:")
+            print(f"  Approval rate: {vstats.get('approval_rate', 0):.1f}%")
+            print(f"  Avg confidence change: {vstats.get('avg_confidence_change', 0):+.1f}")
+
+            if vstats.get('top_rejection_reasons'):
+                print(f"  Top rejection reasons:")
+                for reason in vstats['top_rejection_reasons'][:3]:
+                    print(f"    - {reason}")
 
     except KeyboardInterrupt:
         print("\nStopped by user")

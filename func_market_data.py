@@ -1,6 +1,6 @@
 """
 Модуль для получения расширенных рыночных данных
-Funding rates, Open Interest, Spread, Order Book, etc.
+ОБНОВЛЕНО: Адаптивная глубина стакана в зависимости от цены актива
 """
 
 import aiohttp
@@ -12,6 +12,75 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+def calculate_adaptive_orderbook_step(current_price: float) -> float:
+    """
+    Рассчитать адекватный шаг для группировки стакана
+
+    Args:
+        current_price: текущая цена актива
+
+    Returns:
+        Оптимальный шаг для группировки уровней
+
+    Примеры:
+        BTC $120,000 -> шаг $10-50 (не $0.01!)
+        SHIB $0.00003 -> шаг $0.0000001 (не $0.1!)
+    """
+    if current_price == 0:
+        return 0.01
+
+    # Определяем порядок величины
+    import math
+    magnitude = math.floor(math.log10(abs(current_price)))
+
+    # Шаг = ~0.01-0.05% от цены
+    if current_price >= 10000:  # BTC, ETH дорогие
+        step = 10 ** (magnitude - 2)  # $100,000 -> $1000 шаг
+    elif current_price >= 100:  # Средние
+        step = 10 ** (magnitude - 2)  # $1000 -> $10 шаг
+    elif current_price >= 1:  # Дешевые
+        step = 10 ** (magnitude - 3)  # $10 -> $0.01 шаг
+    elif current_price >= 0.01:  # Очень дешевые
+        step = 10 ** (magnitude - 3)  # $0.1 -> $0.001 шаг
+    else:  # Мем-коины
+        step = 10 ** (magnitude - 2)  # $0.00001 -> $0.0000001 шаг
+
+    return max(step, 10 ** magnitude * 0.0001)  # Минимум 0.01% от цены
+
+
+def group_orderbook_levels(
+    orders: List[List[float]],
+    step: float,
+    max_levels: int = 10
+) -> List[List[float]]:
+    """
+    Сгруппировать уровни стакана по адаптивному шагу
+
+    Args:
+        orders: [[price, size], ...] исходные заявки
+        step: шаг группировки
+        max_levels: максимум уровней на выходе
+
+    Returns:
+        Сгруппированные уровни [[rounded_price, total_size], ...]
+    """
+    if not orders or step == 0:
+        return orders[:max_levels]
+
+    from collections import defaultdict
+
+    grouped = defaultdict(float)
+
+    for price, size in orders:
+        # Округляем до ближайшего шага
+        rounded_price = round(price / step) * step
+        grouped[rounded_price] += size
+
+    # Сортируем и возвращаем топ
+    sorted_levels = sorted(grouped.items(), key=lambda x: x[0])
+    return [[price, size] for price, size in sorted_levels[:max_levels]]
+
+
 class MarketDataCollector:
     """Сборщик расширенных рыночных данных с Bybit"""
 
@@ -20,16 +89,7 @@ class MarketDataCollector:
         self.base_url = "https://api.bybit.com"
 
     async def get_funding_rate(self, symbol: str) -> Optional[Dict]:
-        """
-        Получить текущий funding rate
-
-        Returns:
-            {
-                'funding_rate': 0.0001,  # Текущий funding rate
-                'next_funding_time': '2025-10-01T16:00:00Z',
-                'predicted_rate': 0.00015  # Прогноз следующего
-            }
-        """
+        """Получить текущий funding rate"""
         try:
             params = {
                 "category": "linear",
@@ -67,22 +127,13 @@ class MarketDataCollector:
             return None
 
     async def get_open_interest(self, symbol: str, interval: str = "1h") -> Optional[Dict]:
-        """
-        Получить Open Interest (открытые позиции)
-
-        Returns:
-            {
-                'open_interest': 150000000,  # В USD
-                'oi_change_24h': 5.2,  # Изменение за 24ч в %
-                'oi_trend': 'GROWING'  # GROWING/DECLINING/STABLE
-            }
-        """
+        """Получить Open Interest"""
         try:
             params = {
                 "category": "linear",
                 "symbol": symbol,
                 "intervalTime": interval,
-                "limit": 24  # 24 часа данных
+                "limit": 24
             }
 
             async with self.session.get(
@@ -111,7 +162,6 @@ class MarketDataCollector:
                 else:
                     oi_change = 0
 
-                # Определяем тренд OI
                 if oi_change > 2:
                     trend = 'GROWING'
                 elif oi_change < -2:
@@ -130,18 +180,14 @@ class MarketDataCollector:
             logger.debug(f"Ошибка получения Open Interest {symbol}: {e}")
             return None
 
-    async def get_orderbook(self, symbol: str, depth: int = 20) -> Optional[Dict]:
+    async def get_orderbook(self, symbol: str, depth: int = 50, current_price: float = None) -> Optional[Dict]:
         """
-        Получить Order Book (стакан заявок)
+        Получить Order Book с АДАПТИВНОЙ группировкой
 
-        Returns:
-            {
-                'bids': [[price, size], ...],  # Топ N bid заявок
-                'asks': [[price, size], ...],  # Топ N ask заявок
-                'mid_price': 50000.5,
-                'spread': 0.5,
-                'spread_pct': 0.001
-            }
+        Args:
+            symbol: торговая пара
+            depth: сколько уровней запросить от биржи
+            current_price: текущая цена для адаптивного шага (опционально)
         """
         try:
             params = {
@@ -166,26 +212,39 @@ class MarketDataCollector:
 
                 result = data.get("result", {})
 
-                bids = [[float(p), float(s)] for p, s in result.get('b', [])]
-                asks = [[float(p), float(s)] for p, s in result.get('a', [])]
+                raw_bids = [[float(p), float(s)] for p, s in result.get('b', [])]
+                raw_asks = [[float(p), float(s)] for p, s in result.get('a', [])]
 
-                if not bids or not asks:
+                if not raw_bids or not raw_asks:
                     return None
 
-                best_bid = bids[0][0]
-                best_ask = asks[0][0]
+                best_bid = raw_bids[0][0]
+                best_ask = raw_asks[0][0]
                 mid_price = (best_bid + best_ask) / 2
+
+                # Используем mid_price если current_price не передан
+                # Используем mid_price если current_price не передан
+                price_for_calc = current_price if current_price else mid_price
+
+                # Рассчитываем адаптивный шаг
+                adaptive_step = calculate_adaptive_orderbook_step(price_for_calc)
+
+                # Группируем уровни
+                grouped_bids = group_orderbook_levels(raw_bids, adaptive_step, max_levels=20)
+                grouped_asks = group_orderbook_levels(raw_asks, adaptive_step, max_levels=20)
+
                 spread = best_ask - best_bid
                 spread_pct = (spread / mid_price) * 100
 
                 return {
-                    'bids': bids,
-                    'asks': asks,
+                    'bids': grouped_bids,
+                    'asks': grouped_asks,
                     'best_bid': best_bid,
                     'best_ask': best_ask,
                     'mid_price': mid_price,
                     'spread': spread,
                     'spread_pct': round(spread_pct, 4),
+                    'adaptive_step': adaptive_step,
                     'symbol': symbol
                 }
 
@@ -194,17 +253,7 @@ class MarketDataCollector:
             return None
 
     async def get_taker_buysell_volume(self, symbol: str, interval: str = "5", limit: int = 20) -> Optional[Dict]:
-        """
-        Получить Taker Buy/Sell Volume (агрессивные покупки vs продажи)
-
-        Returns:
-            {
-                'buy_volume': 1500000,
-                'sell_volume': 1200000,
-                'delta': 300000,
-                'buy_pressure': 0.55  # 55% покупок
-            }
-        """
+        """Получить Taker Buy/Sell Volume"""
         try:
             params = {
                 "category": "linear",
@@ -227,8 +276,6 @@ class MarketDataCollector:
 
                 klines = data.get("result", {}).get("list", [])
 
-                # Bybit не предоставляет прямо taker buy/sell
-                # Но мы можем аппроксимировать через volume и movement
                 total_volume = 0
                 bullish_volume = 0
 
@@ -239,7 +286,6 @@ class MarketDataCollector:
 
                     total_volume += volume
 
-                    # Если свеча зеленая - считаем как покупки
                     if close_price > open_price:
                         bullish_volume += volume
 
@@ -262,16 +308,18 @@ class MarketDataCollector:
             logger.debug(f"Ошибка получения Taker Volume {symbol}: {e}")
             return None
 
-    async def get_market_snapshot(self, symbol: str) -> Dict:
+    async def get_market_snapshot(self, symbol: str, current_price: float = None) -> Dict:
         """
-        Получить полный snapshot рыночных данных для одной пары
+        Получить полный snapshot рыночных данных
 
-        Returns полный набор данных или частичный (что удалось получить)
+        Args:
+            symbol: торговая пара
+            current_price: текущая цена для адаптивного стакана (опционально)
         """
         tasks = [
             self.get_funding_rate(symbol),
             self.get_open_interest(symbol),
-            self.get_orderbook(symbol, depth=20),
+            self.get_orderbook(symbol, depth=50, current_price=current_price),
             self.get_taker_buysell_volume(symbol)
         ]
 
@@ -289,7 +337,7 @@ class MarketDataCollector:
         }
 
     async def batch_get_funding_rates(self, symbols: List[str]) -> Dict[str, Optional[Dict]]:
-        """Массовое получение funding rates для множества пар"""
+        """Массовое получение funding rates"""
         tasks = [self.get_funding_rate(symbol) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -299,7 +347,7 @@ class MarketDataCollector:
         }
 
     async def batch_get_open_interest(self, symbols: List[str]) -> Dict[str, Optional[Dict]]:
-        """Массовое получение Open Interest для множества пар"""
+        """Массовое получение Open Interest"""
         tasks = [self.get_open_interest(symbol) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -312,21 +360,11 @@ class MarketDataCollector:
 # ==================== АНАЛИЗАТОРЫ ДАННЫХ ====================
 
 class MarketDataAnalyzer:
-    """Анализ полученных рыночных данных с выдачей рекомендаций"""
+    """Анализ полученных рыночных данных"""
 
     @staticmethod
     def analyze_funding_rate(funding_data: Optional[Dict]) -> Dict:
-        """
-        Анализ funding rate с выдачей рекомендаций
-
-        Returns:
-            {
-                'status': 'OVERLEVERAGED_LONG' / 'OVERLEVERAGED_SHORT' / 'NEUTRAL',
-                'confidence_adjustment': -15 / 0 / +10,
-                'risk_level': 'HIGH' / 'MEDIUM' / 'LOW',
-                'reasoning': 'Funding rate 0.15% - extreme long leverage, dump risk'
-            }
-        """
+        """Анализ funding rate"""
         if not funding_data or 'funding_rate' not in funding_data:
             return {
                 'status': 'UNKNOWN',
@@ -337,7 +375,6 @@ class MarketDataAnalyzer:
 
         rate = funding_data['funding_rate']
 
-        # Thresholds (funding rate обычно в диапазоне -0.3% до +0.3%)
         if rate > 0.001:  # >0.10%
             return {
                 'status': 'OVERLEVERAGED_LONG',
@@ -369,20 +406,7 @@ class MarketDataAnalyzer:
 
     @staticmethod
     def analyze_open_interest(oi_data: Optional[Dict], price_direction: str) -> Dict:
-        """
-        Анализ Open Interest в контексте движения цены
-
-        Args:
-            oi_data: данные OI
-            price_direction: 'UP' / 'DOWN' / 'FLAT'
-
-        Returns:
-            {
-                'pattern': 'STRONG_TREND' / 'WEAK_RALLY' / 'DISTRIBUTION',
-                'confidence_adjustment': -10 / 0 / +10,
-                'reasoning': '...'
-            }
-        """
+        """Анализ Open Interest в контексте движения цены"""
         if not oi_data or 'oi_trend' not in oi_data:
             return {
                 'pattern': 'UNKNOWN',
@@ -392,12 +416,6 @@ class MarketDataAnalyzer:
 
         oi_trend = oi_data['oi_trend']
         oi_change = oi_data['oi_change_24h']
-
-        # Анализ паттернов:
-        # 1. Price UP + OI UP = Strong uptrend (new longs entering)
-        # 2. Price UP + OI DOWN = Weak rally (shorts covering)
-        # 3. Price DOWN + OI UP = Strong downtrend (new shorts)
-        # 4. Price DOWN + OI DOWN = Weak decline (longs exiting)
 
         if price_direction == 'UP':
             if oi_trend == 'GROWING':
@@ -455,17 +473,7 @@ class MarketDataAnalyzer:
 
     @staticmethod
     def analyze_spread(orderbook_data: Optional[Dict]) -> Dict:
-        """
-        Анализ спреда для определения ликвидности
-
-        Returns:
-            {
-                'liquidity': 'HIGH' / 'MEDIUM' / 'LOW',
-                'tradeable': True / False,
-                'confidence_adjustment': -15 / 0,
-                'reasoning': '...'
-            }
-        """
+        """Анализ спреда для определения ликвидности"""
         if not orderbook_data or 'spread_pct' not in orderbook_data:
             return {
                 'liquidity': 'UNKNOWN',
@@ -500,17 +508,7 @@ class MarketDataAnalyzer:
 
     @staticmethod
     def analyze_orderbook_imbalance(orderbook_data: Optional[Dict]) -> Dict:
-        """
-        Анализ дисбаланса bid/ask в стакане
-
-        Returns:
-            {
-                'imbalance': 'STRONG_BID' / 'STRONG_ASK' / 'BALANCED',
-                'bid_ask_ratio': 1.5,
-                'confidence_adjustment': +8 / -8 / 0,
-                'reasoning': '...'
-            }
-        """
+        """Анализ дисбаланса bid/ask в стакане"""
         if not orderbook_data or not orderbook_data.get('bids') or not orderbook_data.get('asks'):
             return {
                 'imbalance': 'UNKNOWN',
@@ -519,7 +517,6 @@ class MarketDataAnalyzer:
                 'reasoning': 'No orderbook data'
             }
 
-        # Считаем суммарный объем в топ-10 уровнях
         bids = orderbook_data['bids'][:10]
         asks = orderbook_data['asks'][:10]
 
@@ -543,7 +540,7 @@ class MarketDataAnalyzer:
                 'confidence_adjustment': +10,
                 'reasoning': f'Bid/Ask ratio {ratio:.2f} - strong buy pressure in orderbook'
             }
-        elif ratio < 0.67:  # 1/1.5
+        elif ratio < 0.67:
             return {
                 'imbalance': 'STRONG_ASK',
                 'bid_ask_ratio': round(ratio, 2),
@@ -560,17 +557,7 @@ class MarketDataAnalyzer:
 
     @staticmethod
     def analyze_taker_volume(taker_data: Optional[Dict]) -> Dict:
-        """
-        Анализ агрессивных покупок vs продаж
-
-        Returns:
-            {
-                'pressure': 'BUY' / 'SELL' / 'NEUTRAL',
-                'buy_pressure': 0.65,
-                'confidence_adjustment': +10 / -10 / 0,
-                'reasoning': '...'
-            }
-        """
+        """Анализ агрессивных покупок vs продаж"""
         if not taker_data or 'buy_pressure' not in taker_data:
             return {
                 'pressure': 'UNKNOWN',
@@ -581,14 +568,14 @@ class MarketDataAnalyzer:
 
         buy_pressure = taker_data['buy_pressure']
 
-        if buy_pressure > 0.60:  # >60% покупок
+        if buy_pressure > 0.60:
             return {
                 'pressure': 'BUY',
                 'buy_pressure': buy_pressure,
                 'confidence_adjustment': +8,
                 'reasoning': f'Buy pressure {buy_pressure * 100:.1f}% - aggressive buyers dominating'
             }
-        elif buy_pressure < 0.40:  # <40% покупок
+        elif buy_pressure < 0.40:
             return {
                 'pressure': 'SELL',
                 'buy_pressure': buy_pressure,
@@ -609,33 +596,29 @@ class MarketDataAnalyzer:
 async def get_comprehensive_market_data(
         session: aiohttp.ClientSession,
         symbol: str,
-        price_direction: str = 'FLAT'
+        price_direction: str = 'FLAT',
+        current_price: float = None
 ) -> Dict:
     """
-    Получить и проанализировать все рыночные данные для одной пары
+    Получить и проанализировать все рыночные данные
 
     Args:
         session: aiohttp сессия
         symbol: торговая пара
-        price_direction: направление цены ('UP'/'DOWN'/'FLAT')
-
-    Returns:
-        Полный анализ с рекомендациями по confidence adjustment
+        price_direction: направление цены
+        current_price: текущая цена для адаптивного стакана
     """
     collector = MarketDataCollector(session)
     analyzer = MarketDataAnalyzer()
 
-    # Собираем данные
-    snapshot = await collector.get_market_snapshot(symbol)
+    snapshot = await collector.get_market_snapshot(symbol, current_price)
 
-    # Анализируем каждый компонент
     funding_analysis = analyzer.analyze_funding_rate(snapshot['funding_rate'])
     oi_analysis = analyzer.analyze_open_interest(snapshot['open_interest'], price_direction)
     spread_analysis = analyzer.analyze_spread(snapshot['orderbook'])
     imbalance_analysis = analyzer.analyze_orderbook_imbalance(snapshot['orderbook'])
     taker_analysis = analyzer.analyze_taker_volume(snapshot['taker_volume'])
 
-    # Считаем общий confidence adjustment
     total_adjustment = (
             funding_analysis['confidence_adjustment'] +
             oi_analysis['confidence_adjustment'] +
@@ -644,7 +627,6 @@ async def get_comprehensive_market_data(
             taker_analysis['confidence_adjustment']
     )
 
-    # Проверка на блокирующие факторы
     is_tradeable = spread_analysis['tradeable']
 
     return {
