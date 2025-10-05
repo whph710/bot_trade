@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 from config import config
-from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api, get_optimized_session
+from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api, \
+    get_optimized_session
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
 from ai_router import ai_router
 from simple_validator import validate_signals_simple, calculate_validation_stats
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class TradingBot:
-    """Упрощенный торговый бот"""
+    """Торговый бот с UNIFIED анализом"""
 
     def __init__(self):
         self.processed_pairs = 0
@@ -147,13 +148,14 @@ class TradingBot:
 
         return selected_pairs
 
-    async def stage3_claude_full_analysis(self, selected_pairs: List[str]) -> List[Dict]:
+    async def stage3_claude_unified_analysis(self, selected_pairs: List[str]) -> List[Dict]:
         """
-        Stage 3: Claude ПОЛНЫЙ анализ + сбор ВСЕХ данных
+        Stage 3: Claude UNIFIED анализ
+        ОДИН запрос вместо трех (OrderFlow + SMC + Main Analysis)
         """
         start_time = time.time()
         logger.info("=" * 60)
-        logger.info(f"STAGE 3: Claude analysis + full data collection for {len(selected_pairs)} pairs")
+        logger.info(f"STAGE 3: Claude UNIFIED analysis for {len(selected_pairs)} pairs")
         logger.info("=" * 60)
 
         if not selected_pairs:
@@ -192,13 +194,12 @@ class TradingBot:
 
                 current_price = float(klines_1h[-1][4])
 
-                # 3. СОБИРАЕМ ВСЕ РАСШИРЕННЫЕ ДАННЫЕ
-                logger.debug(f"{symbol}: Collecting extended data...")
+                # 3. Собираем расширенные данные (БЕЗ отдельных AI запросов!)
+                logger.debug(f"{symbol}: Collecting market data...")
 
                 from func_market_data import MarketDataCollector
                 from func_correlation import get_comprehensive_correlation_analysis
                 from func_volume_profile import calculate_volume_profile_for_candles, analyze_volume_profile
-                from ai_advanced_analysis import get_ai_orderflow_analysis, get_ai_smc_patterns
 
                 collector = MarketDataCollector(await get_optimized_session())
 
@@ -218,34 +219,6 @@ class TradingBot:
                 vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
                 vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
 
-                # OrderFlow AI
-                orderflow_ai = None
-                try:
-                    if market_snapshot.get('orderbook'):
-                        prices_recent = [float(c[4]) for c in klines_1h[-20:]]
-                        orderflow_ai = await get_ai_orderflow_analysis(
-                            ai_router,
-                            symbol,
-                            market_snapshot['orderbook'],
-                            prices_recent
-                        )
-                except Exception as e:
-                    logger.debug(f"{symbol}: OrderFlow AI error: {e}")
-                    orderflow_ai = None
-
-                # SMC AI
-                smc_ai = None
-                try:
-                    smc_ai = await get_ai_smc_patterns(
-                        ai_router,
-                        symbol,
-                        klines_1h,
-                        current_price
-                    )
-                except Exception as e:
-                    logger.debug(f"{symbol}: SMC AI error: {e}")
-                    smc_ai = None
-
                 # 4. ФОРМИРУЕМ ПОЛНЫЙ ПАКЕТ
                 comprehensive_data = {
                     'symbol': symbol,
@@ -258,21 +231,20 @@ class TradingBot:
                     'correlation_data': corr_analysis,
                     'volume_profile': vp_data,
                     'vp_analysis': vp_analysis,
-                    'orderflow_ai': orderflow_ai,
-                    'smc_ai': smc_ai,
                     'btc_candles_1h': btc_candles_1h,
                     'btc_candles_4h': btc_candles_4h
                 }
 
-                # 5. CLAUDE АНАЛИЗ
-                logger.debug(f"{symbol}: Claude analysis...")
+                # 5. UNIFIED CLAUDE АНАЛИЗ (OrderFlow + SMC + Main в ОДНОМ запросе!)
+                logger.info(f"{symbol}: Claude UNIFIED analysis (1 request)...")
 
                 analysis = await ai_router.analyze_pair_comprehensive(
                     symbol,
                     comprehensive_data
                 )
 
-                logger.debug(f"{symbol}: Analysis result - signal={analysis.get('signal')}, confidence={analysis.get('confidence')}")
+                logger.debug(
+                    f"{symbol}: Result - signal={analysis.get('signal')}, confidence={analysis.get('confidence')}")
 
                 if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
                     # Сохраняем данные для Stage 4
@@ -280,9 +252,14 @@ class TradingBot:
                     analysis['timestamp'] = datetime.now().isoformat()
 
                     final_signals.append(analysis)
-                    logger.info(f"Signal: {symbol} {analysis['signal']} {analysis['confidence']}%")
+
+                    # Красивый вывод
+                    tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
+                    logger.info(f"✅ Signal: {symbol} {analysis['signal']} {analysis['confidence']}%")
+                    logger.info(f"   Entry: ${analysis['entry_price']}, Stop: ${analysis['stop_loss']}")
+                    logger.info(f"   TP: ${tp_levels[0]} / ${tp_levels[1]} / ${tp_levels[2]}")
                 else:
-                    logger.info(f"Skipped: {symbol} - signal={analysis['signal']}, confidence={analysis['confidence']}")
+                    logger.info(f"⏭️  Skipped: {symbol} - {analysis.get('rejection_reason', 'weak setup')}")
 
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}")
@@ -292,14 +269,12 @@ class TradingBot:
 
         elapsed = time.time() - start_time
         logger.info(f"STAGE 3 completed in {elapsed:.1f}s")
-        logger.info(f"  Signals: {len(final_signals)}")
+        logger.info(f"  Signals generated: {len(final_signals)}")
 
         return final_signals
 
     async def stage4_claude_validation(self, preliminary_signals: List[Dict]) -> Dict[str, Any]:
-        """
-        Stage 4: Claude валидация (упрощенная)
-        """
+        """Stage 4: Claude валидация"""
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 4: Claude validation of {len(preliminary_signals)} signals")
@@ -308,7 +283,6 @@ class TradingBot:
         if not preliminary_signals:
             return {'validated': [], 'rejected': []}
 
-        # Используем упрощенный валидатор
         validation_result = await validate_signals_simple(ai_router, preliminary_signals)
 
         validated = validation_result['validated']
@@ -329,7 +303,7 @@ class TradingBot:
         logger.info("=" * 80)
 
         try:
-            # STAGE 1: Базовая фильтрация
+            # STAGE 1
             signal_pairs = await self.stage1_filter_signals()
             if not signal_pairs:
                 return {
@@ -338,7 +312,7 @@ class TradingBot:
                     'pairs_scanned': self.processed_pairs
                 }
 
-            # STAGE 2: DeepSeek отбор
+            # STAGE 2
             selected_pairs = await self.stage2_deepseek_select(signal_pairs)
             if not selected_pairs:
                 return {
@@ -348,8 +322,8 @@ class TradingBot:
                     'pairs_scanned': self.processed_pairs
                 }
 
-            # STAGE 3: Claude анализ + сбор данных
-            preliminary_signals = await self.stage3_claude_full_analysis(selected_pairs)
+            # STAGE 3
+            preliminary_signals = await self.stage3_claude_unified_analysis(selected_pairs)
             if not preliminary_signals:
                 return {
                     'result': 'NO_CLAUDE_SIGNALS',
@@ -359,7 +333,7 @@ class TradingBot:
                     'deepseek_selected': len(selected_pairs)
                 }
 
-            # STAGE 4: Claude валидация
+            # STAGE 4
             validation_result = await self.stage4_claude_validation(preliminary_signals)
             validated = validation_result['validated']
             rejected = validation_result['rejected']
@@ -370,7 +344,6 @@ class TradingBot:
 
             result_type = 'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS'
 
-            # Статистика валидации
             validation_stats = calculate_validation_stats(validated, rejected)
 
             final_result = {
@@ -385,7 +358,8 @@ class TradingBot:
                     'claude_analyzed': len(preliminary_signals),
                     'validated_signals': len(validated),
                     'rejected_signals': len(rejected),
-                    'processing_speed': round(self.processed_pairs / total_time, 1)
+                    'processing_speed': round(self.processed_pairs / total_time, 1),
+                    'claude_requests_saved': len(selected_pairs) * 2  # Экономия запросов!
                 },
                 'validated_signals': validated,
                 'rejected_signals': rejected,
@@ -398,7 +372,7 @@ class TradingBot:
                 json.dump(final_result, f, indent=2, ensure_ascii=False)
 
             logger.info("=" * 80)
-            logger.info(f"CYCLE COMPLETE: {len(validated)} signals validated")
+            logger.info(f"CYCLE COMPLETE: {len(validated)} validated, {len(rejected)} rejected")
             logger.info(f"Result saved: {filename}")
             logger.info("=" * 80)
 
@@ -422,10 +396,10 @@ class TradingBot:
 async def main():
     """Главная функция"""
     print("=" * 80)
-    print("TRADING BOT v4.1 (SIMPLIFIED)")
+    print("TRADING BOT v5.0 (UNIFIED ANALYSIS)")
     print("Stage 1: Base indicators")
     print("Stage 2: DeepSeek selection")
-    print("Stage 3: Claude full analysis + data collection")
+    print("Stage 3: Claude UNIFIED (OrderFlow + SMC + Analysis in ONE request)")
     print("Stage 4: Claude validation")
     print("=" * 80)
 
@@ -445,6 +419,7 @@ async def main():
         print(f"Claude analyzed: {stats.get('claude_analyzed', 0)}")
         print(f"Validated: {stats.get('validated_signals', 0)}")
         print(f"Speed: {stats.get('processing_speed', 0):.1f} pairs/sec")
+        print(f"💰 Claude requests saved: {stats.get('claude_requests_saved', 0)}")
         print("=" * 80)
 
         if result.get('validated_signals'):
@@ -453,30 +428,37 @@ async def main():
             print("=" * 80)
 
             for sig in signals:
+                tp_levels = sig.get('take_profit_levels', [0, 0, 0])
                 print(f"\n{sig['symbol']}: {sig['signal']} (Confidence: {sig['confidence']}%)")
                 print(f"  Entry: ${sig['entry_price']}")
                 print(f"  Stop:  ${sig['stop_loss']}")
-                print(f"  TP:    ${sig['take_profit']}")
+                print(f"  TP1:   ${tp_levels[0]} (conservative)")
+                print(f"  TP2:   ${tp_levels[1]} (target)")
+                print(f"  TP3:   ${tp_levels[2]} (extended)")
                 print(f"  R/R:   1:{sig.get('risk_reward_ratio', 0)}")
-                print(f"  Hold:  {sig.get('hold_duration_minutes', 720)//60}h")
+                print(f"  Hold:  {sig.get('hold_duration_minutes', 720) // 60}h")
 
                 val_notes = sig.get('validation_notes', 'N/A')
                 if len(val_notes) > 100:
                     val_notes = val_notes[:100] + "..."
                 print(f"  Validation: {val_notes}")
 
-                analysis = sig.get('analysis', '')
-                if len(analysis) > 120:
-                    analysis = analysis[:120] + "..."
-                print(f"  Analysis: {analysis}")
-
         if result.get('rejected_signals'):
             rejected = result['rejected_signals']
             print(f"\n❌ REJECTED SIGNALS ({len(rejected)}):")
-            for rej in rejected[:5]:
-                print(f"  {rej['symbol']}: {rej.get('rejection_reason', 'Unknown')}")
+            print("=" * 80)
 
-        # Статистика валидации
+            for rej in rejected:
+                tp_levels = rej.get('take_profit_levels', [0, 0, 0])
+                print(f"\n{rej['symbol']}: {rej.get('signal', 'UNKNOWN')}")
+                print(f"  Entry: ${rej.get('entry_price', 0)}")
+                print(f"  Stop:  ${rej.get('stop_loss', 0)}")
+                print(f"  TP1:   ${tp_levels[0]}")
+                print(f"  TP2:   ${tp_levels[1]}")
+                print(f"  TP3:   ${tp_levels[2]}")
+                print(f"  ❌ Rejection: {rej.get('rejection_reason', 'Unknown')}")
+
+        # Статистика
         if result.get('validation_stats'):
             vstats = result['validation_stats']
             print(f"\n📊 VALIDATION STATS:")

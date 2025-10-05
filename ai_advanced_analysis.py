@@ -1,6 +1,6 @@
 """
-AI модуль для продвинутого анализа
-Order Flow, Smart Money Concepts, Volume Profile interpretation
+AI модуль для продвинутого анализа - UNIFIED VERSION
+Объединяет OrderFlow + SMC + Main Analysis в ОДИН запрос к Claude
 """
 
 import json
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class AIAdvancedAnalyzer:
-    """AI-driven анализ сложных рыночных паттернов"""
+    """AI-driven анализ - UNIFIED подход"""
 
     def __init__(self, ai_router):
         """
@@ -21,480 +21,451 @@ class AIAdvancedAnalyzer:
         """
         self.ai_router = ai_router
 
-    async def analyze_orderbook_flow(
+    async def analyze_comprehensive_unified(
             self,
             symbol: str,
-            orderbook_data: Dict,
-            recent_price_action: List[float]
+            comprehensive_data: Dict
     ) -> Dict:
         """
-        AI анализ Order Flow из стакана заявок
+        UNIFIED анализ - все в одном запросе:
+        - OrderFlow анализ
+        - SMC паттерны
+        - Финальное решение (LONG/SHORT/NO_SIGNAL)
+        - 3 уровня Take Profit
 
         Args:
             symbol: торговая пара
-            orderbook_data: данные стакана (bids, asks)
-            recent_price_action: последние 10-20 цен для контекста
+            comprehensive_data: ВСЕ данные из Stage 3
 
         Returns:
             {
-                'orderflow_direction': 'BULLISH' / 'BEARISH' / 'NEUTRAL',
-                'absorption_detected': True / False,
-                'spoofing_risk': 'HIGH' / 'LOW',
-                'key_levels': [49800, 50200],
-                'confidence_adjustment': +10 / -10 / 0,
-                'reasoning': 'детальное объяснение'
+                'signal': 'LONG' / 'SHORT' / 'NO_SIGNAL',
+                'confidence': 85,
+                'entry_price': 43251.25,
+                'stop_loss': 42980.50,
+                'take_profit_levels': [43892.75, 44500.00, 45200.00],
+                'analysis': 'Подробное объяснение',
+                'orderflow_analysis': {...},
+                'smc_analysis': {...}
             }
         """
-        if not orderbook_data or not orderbook_data.get('bids') or not orderbook_data.get('asks'):
-            return {
-                'orderflow_direction': 'UNKNOWN',
-                'absorption_detected': False,
-                'spoofing_risk': 'UNKNOWN',
-                'key_levels': [],
-                'confidence_adjustment': 0,
-                'reasoning': 'No orderbook data available'
-            }
-
         try:
-            # Форматируем данные для AI
-            bids = orderbook_data['bids'][:20]
-            asks = orderbook_data['asks'][:20]
-            mid_price = orderbook_data['mid_price']
+            # Извлекаем необходимые данные
+            candles_1h = comprehensive_data.get('candles_1h', [])
+            candles_4h = comprehensive_data.get('candles_4h', [])
+            indicators_1h = comprehensive_data.get('indicators_1h', {})
+            indicators_4h = comprehensive_data.get('indicators_4h', {})
+            current_price = comprehensive_data.get('current_price', 0)
+            market_data = comprehensive_data.get('market_data', {})
 
-            # Подготавливаем промпт
-            prompt = f"""Ты institutional orderflow trader с опытом tape reading. Проанализируй стакан заявок для {symbol}.
+            # Подготавливаем компактный датасет
+            orderbook_data = market_data.get('orderbook', {})
 
-ТЕКУЩИЙ СТАКАН:
-Средняя цена: {mid_price}
+            # Форматируем OrderBook для анализа
+            orderbook_formatted = None
+            if orderbook_data and orderbook_data.get('bids') and orderbook_data.get('asks'):
+                bids = orderbook_data['bids'][:20]
+                asks = orderbook_data['asks'][:20]
+                orderbook_formatted = {
+                    'bids': [[float(p), float(s)] for p, s in bids],
+                    'asks': [[float(p), float(s)] for p, s in asks],
+                    'mid_price': orderbook_data.get('mid_price', current_price),
+                    'spread_pct': orderbook_data.get('spread_pct', 0)
+                }
 
-TOP 20 BIDS (покупки):
-{self._format_orderbook_side(bids, 'BID')}
-
-TOP 20 ASKS (продажи):
-{self._format_orderbook_side(asks, 'ASK')}
-
-НЕДАВНЕЕ ДВИЖЕНИЕ ЦЕН (последние свечи):
-{recent_price_action[-10:]}
-
-ЗАДАЧИ:
-1. **ABSORPTION ZONES**: Есть ли крупные "стены" заявок (>3x средний размер)?
-   - Где именно? На каких уровнях?
-   - Это реальное накопление или fake wall (spoofing)?
-
-2. **BID/ASK IMBALANCE**: Кто доминирует - покупатели или продавцы?
-   - Считай суммарный объем в топ-10 уровнях
-
-3. **KEY LEVELS**: Определи критические уровни где сосредоточены заявки
-
-4. **SPOOFING DETECTION**: Признаки фейковых заявок:
-   - Крупные заявки далеко от цены
-   - Симметричные "красивые" числа
-   - Слишком идеальное распределение
-
-5. **ORDERFLOW DIRECTION**: Куда скорее всего пойдет цена?
-   - BULLISH: сильный bid support, weak asks
-   - BEARISH: weak bids, strong ask resistance
-   - NEUTRAL: balanced
-
-6. **CONFIDENCE ADJUSTMENT**: 
-   - +10 если очень четкий orderflow в одну сторону
-   - -10 если противоречивые сигналы или spoofing
-   - 0 если нейтрально
-
-Верни ТОЛЬКО JSON (без markdown):
-{{
-  "orderflow_direction": "BULLISH|BEARISH|NEUTRAL",
-  "absorption_detected": true|false,
-  "absorption_zones": ["49750-49800: strong bids 500k USDT"],
-  "spoofing_risk": "HIGH|MEDIUM|LOW",
-  "key_levels": [49800, 50200],
-  "bid_ask_dominance": "BIDS|ASKS|BALANCED",
-  "confidence_adjustment": -10 to +10,
-  "reasoning": "краткое объяснение ключевых наблюдений (2-3 предложения)"
-}}"""
-
-            # Отправляем в AI
-            response = await self.ai_router.call_ai(
-                prompt=prompt,
-                stage='analysis',
-                max_tokens=1500
-            )
-
-            # Парсим ответ
-            result = self._safe_parse_json(response)
-
-            if not result:
-                return self._get_fallback_orderbook_analysis()
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Ошибка AI анализа orderbook для {symbol}: {e}")
-            return self._get_fallback_orderbook_analysis()
-
-    async def detect_smart_money_concepts(
-            self,
-            symbol: str,
-            candles_1h: List[List],
-            current_price: float
-    ) -> Dict:
-        """
-        AI поиск Smart Money Concepts паттернов
-
-        Args:
-            symbol: торговая пара
-            candles_1h: свечи 1H (последние 50)
-            current_price: текущая цена
-
-        Returns:
-            {
-                'order_blocks': [{'index': 45, 'zone': [49000, 49200], 'type': 'bullish'}],
-                'fair_value_gaps': [...],
-                'liquidity_sweeps': [...],
-                'break_of_structure': {...},
-                'confidence_boost': +15 / 0,
-                'reasoning': '...'
-            }
-        """
-        if not candles_1h or len(candles_1h) < 20:
-            return {
-                'order_blocks': [],
-                'fair_value_gaps': [],
-                'liquidity_sweeps': [],
-                'break_of_structure': None,
-                'confidence_boost': 0,
-                'reasoning': 'Insufficient candle data for SMC analysis'
-            }
-
-        try:
-            # Подготавливаем структурированные данные свечей
-            candle_summary = []
+            # Форматируем свечи для SMC
+            candles_1h_formatted = []
             for i, c in enumerate(candles_1h[-50:]):
-                o, h, l, cl, v = float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])
-                candle_summary.append({
-                    'index': i,
-                    'open': o,
-                    'high': h,
-                    'low': l,
-                    'close': cl,
-                    'volume': v,
-                    'type': 'bullish' if cl > o else 'bearish',
-                    'body_size': abs(cl - o),
-                    'wick_upper': h - max(o, cl),
-                    'wick_lower': min(o, cl) - l
-                })
+                try:
+                    o, h, l, cl, v = float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])
+                    candles_1h_formatted.append({
+                        'index': i,
+                        'open': o,
+                        'high': h,
+                        'low': l,
+                        'close': cl,
+                        'volume': v,
+                        'type': 'bullish' if cl > o else 'bearish'
+                    })
+                except (IndexError, ValueError):
+                    continue
 
-            prompt = f"""Ты Smart Money Concepts (SMC) эксперт. Проанализируй 50 свечей 1H для {symbol}.
+            # Создаем unified датасет
+            unified_data = {
+                'symbol': symbol,
+                'current_price': current_price,
+                'timeframes': {
+                    '1h': {
+                        'candles': candles_1h[-80:],
+                        'indicators': {
+                            'ema5': indicators_1h.get('ema5_history', [])[-80:],
+                            'ema8': indicators_1h.get('ema8_history', [])[-80:],
+                            'ema20': indicators_1h.get('ema20_history', [])[-80:],
+                            'rsi': indicators_1h.get('rsi_history', [])[-80:],
+                            'macd_histogram': indicators_1h.get('macd_histogram_history', [])[-80:],
+                            'volume_ratio': indicators_1h.get('volume_ratio_history', [])[-80:]
+                        }
+                    },
+                    '4h': {
+                        'candles': candles_4h[-40:],
+                        'indicators': {
+                            'ema5': indicators_4h.get('ema5_history', [])[-40:],
+                            'ema8': indicators_4h.get('ema8_history', [])[-40:],
+                            'ema20': indicators_4h.get('ema20_history', [])[-40:],
+                            'rsi': indicators_4h.get('rsi_history', [])[-40:],
+                            'macd_histogram': indicators_4h.get('macd_histogram_history', [])[-40:]
+                        }
+                    }
+                },
+                'current_state': {
+                    'price': current_price,
+                    'atr': indicators_1h.get('current', {}).get('atr', 0),
+                    'rsi_1h': indicators_1h.get('current', {}).get('rsi', 50),
+                    'rsi_4h': indicators_4h.get('current', {}).get('rsi', 50),
+                    'volume_ratio': indicators_1h.get('current', {}).get('volume_ratio', 1.0),
+                    'macd_momentum': indicators_1h.get('current', {}).get('macd_histogram', 0)
+                },
+                'orderbook': orderbook_formatted,
+                'candles_for_smc': candles_1h_formatted,
+                'market_context': self._extract_market_context(comprehensive_data)
+            }
 
-ТЕКУЩАЯ ЦЕНА: {current_price}
+            # UNIFIED PROMPT
+            prompt = self._create_unified_prompt(symbol, unified_data)
 
-ПОСЛЕДНИЕ 20 СВЕЧЕЙ (для контекста, полные данные есть):
-{json.dumps(candle_summary[-20:], indent=2)}
-
-ЗАДАЧИ - найди институциональные паттерны:
-
-1. **ORDER BLOCKS** - зоны институционального интереса:
-   - Последняя противоположная свеча ПЕРЕД сильным импульсом
-   - Если цена резко выросла, найди последнюю bearish свечу перед этим
-   - Зона OB = [low, high] этой свечи
-   - Пример: "Свеча #42 (bearish) перед импульсом вверх на #43-45"
-
-2. **FAIR VALUE GAPS (FVG)** - незаполненные ценовые разрывы:
-   - Когда high свечи [i-1] НЕ пересекается с low свечи [i+1]
-   - Это зона "недоторгованности" которую цена стремится заполнить
-   - Ищи FVG которые ЕЩЕ НЕ заполнены
-
-3. **LIQUIDITY SWEEPS** - ложные пробои для сбора стопов:
-   - Пробой недавнего swing high/low
-   - НО затем БЫСТРЫЙ возврат (в 1-2 свечах)
-   - Классический stop hunt паттерн
-
-4. **BREAK OF STRUCTURE (BOS)** - пробой структуры:
-   - Для uptrend: пробой последнего swing high
-   - Для downtrend: пробой последнего swing low
-   - Это подтверждение продолжения тренда
-
-ОЦЕНКА СИЛЫ:
-- Если найдено 2+ паттерна которые все указывают в одну сторону: +15 к confidence
-- Если Order Block близко к текущей цене (<2%): +10
-- Если паттерны противоречивые: 0
-
-Верни ТОЛЬКО JSON:
-{{
-  "order_blocks": [
-    {{"candle_index": 42, "zone": [49100, 49300], "type": "bullish", "distance_pct": 1.5}}
-  ],
-  "fair_value_gaps": [
-    {{"start_candle": 38, "zone": [48800, 49000], "filled": false}}
-  ],
-  "liquidity_sweeps": [
-    {{"candle_index": 45, "swept_level": 50200, "direction": "upward"}}
-  ],
-  "break_of_structure": {{"detected": true, "type": "bullish", "level": 50100}},
-  "patterns_alignment": "BULLISH|BEARISH|MIXED",
-  "confidence_boost": 0 to +15,
-  "reasoning": "краткое резюме найденных паттернов (3-4 предложения)"
-}}"""
-
+            # Вызываем Claude
             response = await self.ai_router.call_ai(
                 prompt=prompt,
                 stage='analysis',
-                max_tokens=2000
+                max_tokens=4000,
+                temperature=0.7
             )
 
+            # Парсим результат
             result = self._safe_parse_json(response)
 
             if not result:
-                return self._get_fallback_smc_analysis()
+                logger.warning(f"Failed to parse unified analysis for {symbol}")
+                return self._fallback_unified_analysis(symbol, current_price)
 
-            return result
+            # Валидация структуры
+            return self._validate_and_format_result(result, symbol, current_price)
 
         except Exception as e:
-            logger.error(f"Ошибка AI SMC анализа для {symbol}: {e}")
-            return self._get_fallback_smc_analysis()
+            logger.error(f"Unified analysis error for {symbol}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return self._fallback_unified_analysis(symbol, current_price)
 
-    async def interpret_correlation_anomaly(
-            self,
-            symbol: str,
-            symbol_change: float,
-            btc_change: float,
-            correlation: float,
-            sector_data: Optional[Dict] = None
-    ) -> Dict:
-        """
-        AI интерпретация аномалий корреляции
+    def _create_unified_prompt(self, symbol: str, data: Dict) -> str:
+        """Создать unified промпт для Claude"""
 
-        Args:
-            symbol: торговая пара
-            symbol_change: % изменение символа за период
-            btc_change: % изменение BTC за период
-            correlation: историческая корреляция
-            sector_data: опционально - данные по сектору
+        orderbook_str = "No orderbook data"
+        if data.get('orderbook'):
+            ob = data['orderbook']
+            orderbook_str = f"""
+ORDERBOOK DATA:
+Mid Price: ${ob['mid_price']:,.2f}
+Spread: {ob['spread_pct']:.4f}%
 
-        Returns:
-            {
-                'interpretation': 'STRENGTH' / 'WEAKNESS' / 'NOISE',
-                'expected_continuation': True / False,
-                'time_horizon': 'SHORT' / 'MEDIUM',
-                'confidence_adjustment': +10 / -10 / 0,
-                'reasoning': '...'
-            }
-        """
-        try:
-            sector_context = ""
-            if sector_data and sector_data.get('sector'):
-                sector_context = f"""
-СЕКТОР: {sector_data['sector']}
-Тренд сектора: {sector_data.get('sector_trend', 'UNKNOWN')}
-Позиция {symbol}: {sector_data.get('symbol_vs_sector', 'UNKNOWN')}
+TOP 10 BIDS:
+{self._format_orderbook_levels(ob['bids'][:10], 'BID')}
+
+TOP 10 ASKS:
+{self._format_orderbook_levels(ob['asks'][:10], 'ASK')}
 """
 
-            prompt = f"""Ты chief analyst криптофонда. Объясни аномальное поведение {symbol} относительно BTC.
+        smc_candles_str = "No SMC data"
+        if data.get('candles_for_smc'):
+            candles = data['candles_for_smc'][-20:]
+            smc_candles_str = json.dumps(candles, indent=2)
+
+        market_ctx = data.get('market_context', {})
+
+        prompt = f"""Ты institutional trader Jane Street. Задача: ПОЛНЫЙ анализ {symbol} в ОДНОМ ответе.
 
 ДАННЫЕ:
-BTC изменение (1H): {btc_change:+.2f}%
-{symbol} изменение (1H): {symbol_change:+.2f}%
-Историческая корреляция: {correlation:.3f}
+Current Price: ${data['current_price']:,.2f}
+ATR (1H): {data['current_state']['atr']:.2f}
+RSI 1H: {data['current_state']['rsi_1h']:.1f}
+RSI 4H: {data['current_state']['rsi_4h']:.1f}
+Volume Ratio: {data['current_state']['volume_ratio']:.2f}x
+MACD Momentum: {data['current_state']['macd_momentum']:.4f}
 
-{sector_context}
+MARKET CONTEXT:
+Funding Rate: {market_ctx.get('funding_rate', 0):.4f}%
+OI Trend: {market_ctx.get('oi_trend', 'UNKNOWN')}
+Spread: {market_ctx.get('spread_pct', 0):.4f}%
+Buy Pressure: {market_ctx.get('buy_pressure', 0.5):.2%}
 
-КОНТЕКСТ:
-Обычно {symbol} движется {'вместе с' if correlation > 0 else 'против'} BTC (корреляция {correlation:.2f}).
-Но сейчас {symbol} показывает {'сильное' if abs(symbol_change) > abs(btc_change) else 'слабое'} движение.
+{orderbook_str}
 
-АНАЛИЗ:
-1. **ЧТО ПРОИСХОДИТ?**
-   - Это STRENGTH (символ сильнее рынка) или WEAKNESS (отстает)?
-   - Decoupling от BTC - это хорошо или плохо?
+SMC CANDLES (последние 20 свечей 1H):
+{smc_candles_str}
 
-2. **СЕКТОР** (если есть данные):
-   - Весь сектор движется так или только {symbol}?
-   - Если только {symbol} - это индивидуальная сила или риск?
+---
 
-3. **ИСТОРИЧЕСКИЕ АНАЛОГИИ**:
-   - Что обычно происходит после такого расхождения?
-   - Цена возвращается к корреляции или продолжает decoupling?
+ТВОЯ ЗАДАЧА - выполнить 3 АНАЛИЗА В ОДНОМ:
 
-4. **ВРЕМЕННОЙ ГОРИЗОНТ**:
-   - SHORT (1-4 часа) - временная аномалия
-   - MEDIUM (4-24 часа) - начало нового тренда
+═══════════════════════════════════════════════════════════════
+ЧАСТЬ 1: ORDERFLOW ANALYSIS (из стакана)
+═══════════════════════════════════════════════════════════════
 
-5. **ВЕРДИКТ**:
-   - BULLISH для {symbol}: +10 к confidence
-   - BEARISH для {symbol}: -10 к confidence  
-   - NOISE (шум): 0
+Анализируй стакан заявок:
 
-Верни ТОЛЬКО JSON:
+1. BID/ASK IMBALANCE:
+   - Суммарный объем bid vs ask (топ-10 уровней)
+   - Кто доминирует?
+
+2. ABSORPTION ZONES:
+   - Есть ли крупные "стены" (>3x средний размер)?
+   - На каких уровнях?
+
+3. SPOOFING DETECTION:
+   - Фейковые заявки (красивые числа далеко от цены)?
+   - Симметричные паттерны?
+
+4. KEY ORDERBOOK LEVELS:
+   - Критические уровни концентрации ликвидности
+
+ВЫВОД:
+- orderflow_direction: "BULLISH" / "BEARISH" / "NEUTRAL"
+- spoofing_risk: "HIGH" / "MEDIUM" / "LOW"
+- confidence_adjustment: -10 to +10
+
+═══════════════════════════════════════════════════════════════
+ЧАСТЬ 2: SMART MONEY CONCEPTS (SMC) ANALYSIS
+═══════════════════════════════════════════════════════════════
+
+Найди институциональные паттерны на 1H:
+
+1. ORDER BLOCKS:
+   - Последняя противоположная свеча ПЕРЕД импульсом
+   - Зона накопления/распределения
+
+2. FAIR VALUE GAPS (FVG):
+   - Ценовые разрывы (high[i-1] не касается low[i+1])
+   - Незаполненные зоны
+
+3. LIQUIDITY SWEEPS:
+   - Ложные пробои swing high/low с быстрым возвратом
+
+4. BREAK OF STRUCTURE:
+   - Пробой структуры тренда
+
+ВЫВОД:
+- order_blocks: [{{"level": 43100, "type": "bullish"}}]
+- fair_value_gaps: [{{"zone": [43000, 43200]}}]
+- patterns_alignment: "BULLISH" / "BEARISH" / "MIXED"
+- confidence_boost: 0 to +15
+
+═══════════════════════════════════════════════════════════════
+ЧАСТЬ 3: ФИНАЛЬНОЕ РЕШЕНИЕ (Main Analysis)
+═══════════════════════════════════════════════════════════════
+
+Используй результаты из Части 1 и 2 для финального решения.
+
+COMPRESSED SPRING сетап:
+- 4H: паттерн консолидации (треугольник/флаг)
+- 1H: Order Block для точного входа
+- Confluence: все факторы (trend, RSI, volume, orderflow, SMC)
+
+ENTRY ПЛАН:
+LONG: entry = resistance + ATR*0.2 ИЛИ OB_50%
+      stop = swing_low - 0.3%
+SHORT: entry = support - ATR*0.2 ИЛИ OB_50%
+       stop = swing_high + 0.3%
+
+TAKE PROFIT (обязательно 3 уровня!):
+Базовый расчет:
+risk = |entry - stop|
+
+Множители (зависят от силы сетапа):
+СИЛЬНЫЙ (volume >200%, четкий OB, позитивный orderflow): [1.8, 3.0, 5.0]
+СРЕДНИЙ (volume 150-200%): [1.5, 2.5, 4.0]
+СЛАБЫЙ (volume 120-150%): [1.3, 2.0, 3.0]
+
+LONG: tp_levels = [entry + risk*1.5, entry + risk*2.5, entry + risk*4.0]
+SHORT: tp_levels = [entry - risk*1.5, entry - risk*2.5, entry - risk*4.0]
+
+R/R CHECK: (tp2 - entry) / risk >= 2.0
+
+CONFIDENCE (база 50):
++15: compression <2.5%
++15: ATR squeeze
++12: четкий паттерн
++10: Order Block
++12: volume spike >150%
++8: SMC alignment
++8: orderflow aligned
+
+-15: funding против
+-10: OI против
+-10: spoofing HIGH
+
+MINIMUM: 70
+
+REJECTION если:
+- confidence <70
+- R/R <2.0
+- противоречия
+- нет четкого OB
+
+═══════════════════════════════════════════════════════════════
+ФОРМАТ ОТВЕТА (СТРОГО JSON)
+═══════════════════════════════════════════════════════════════
+
+Верни ТОЛЬКО JSON (без markdown):
+
 {{
-  "interpretation": "STRENGTH|WEAKNESS|NOISE",
-  "is_decoupling": true|false,
-  "expected_continuation": true|false,
-  "time_horizon": "SHORT|MEDIUM",
-  "verdict": "BULLISH|BEARISH|NEUTRAL",
-  "confidence_adjustment": -10 to +10,
-  "reasoning": "объяснение что происходит и почему (3-4 предложения)"
-}}"""
+  "orderflow_analysis": {{
+    "orderflow_direction": "BULLISH",
+    "absorption_zones": ["49750-49800: strong bids 500k"],
+    "spoofing_risk": "LOW",
+    "key_levels": [49800, 50200],
+    "confidence_adjustment": 8
+  }},
+  "smc_analysis": {{
+    "order_blocks": [{{"level": 43100, "type": "bullish", "zone": [43050, 43150]}}],
+    "fair_value_gaps": [{{"zone": [42800, 43000], "filled": false}}],
+    "liquidity_sweeps": [],
+    "patterns_alignment": "BULLISH",
+    "confidence_boost": 12
+  }},
+  "signal": "LONG",
+  "confidence": 82,
+  "entry_price": 43251.25,
+  "stop_loss": 42980.50,
+  "take_profit_levels": [43892.75, 44500.00, 45200.00],
+  "analysis": "Bull flag 4H compression 1.8%. OB 1H $43100. Volume spike 170%. Orderflow: strong bid support. SMC: bullish OB confirmed. R/R 2.4:1. Hold 4-24h.",
+  "rejection_reason": null
+}}
 
-            response = await self.ai_router.call_ai(
-                prompt=prompt,
-                stage='analysis',
-                max_tokens=1500
-            )
-
-            result = self._safe_parse_json(response)
-
-            if not result:
-                return {
-                    'interpretation': 'UNKNOWN',
-                    'expected_continuation': False,
-                    'time_horizon': 'SHORT',
-                    'confidence_adjustment': 0,
-                    'reasoning': 'AI analysis failed, using neutral interpretation'
-                }
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Ошибка AI интерпретации корреляции для {symbol}: {e}")
-            return {
-                'interpretation': 'UNKNOWN',
-                'expected_continuation': False,
-                'time_horizon': 'SHORT',
-                'confidence_adjustment': 0,
-                'reasoning': f'Error: {str(e)}'
-            }
-
-    async def interpret_volume_profile(
-            self,
-            symbol: str,
-            volume_profile_data: Dict,
-            current_price: float,
-            price_direction: str
-    ) -> Dict:
-        """
-        AI интерпретация Volume Profile
-
-        Args:
-            symbol: торговая пара
-            volume_profile_data: {poc: price, value_area: [low, high], profile: {price: volume}}
-            current_price: текущая цена
-            price_direction: 'UP' / 'DOWN' / 'FLAT'
-
-        Returns:
-            {
-                'poc_significance': 'STRONG_MAGNET' / 'WEAK' / 'EXPIRED',
-                'value_area_position': 'ABOVE' / 'INSIDE' / 'BELOW',
-                'expected_behavior': 'PULLBACK_TO_POC' / 'BREAKOUT' / 'RANGING',
-                'confidence_adjustment': +8 / 0,
-                'reasoning': '...'
-            }
-        """
-        try:
-            poc = volume_profile_data.get('poc', 0)
-            value_area = volume_profile_data.get('value_area', [0, 0])
-
-            poc_distance_pct = abs((current_price - poc) / current_price * 100) if current_price > 0 else 0
-
-            # Позиция относительно Value Area
-            if current_price > value_area[1]:
-                va_position = 'ABOVE'
-            elif current_price < value_area[0]:
-                va_position = 'BELOW'
-            else:
-                va_position = 'INSIDE'
-
-            prompt = f"""Ты специалист по Volume Profile анализу. Интерпретируй ситуацию для {symbol}.
-
-ДАННЫЕ:
-Текущая цена: {current_price}
-POC (Point of Control): {poc}
-Value Area: [{value_area[0]}, {value_area[1]}]
-Дистанция до POC: {poc_distance_pct:.2f}%
-Позиция относительно VA: {va_position}
-Направление движения: {price_direction}
-
-КОНТЕКСТ:
-POC - уровень где торговался максимальный объем (это "магнит" для цены).
-Value Area - зона где прошло 70% объема торгов.
-
-АНАЛИЗ:
-1. **ЗНАЧИМОСТЬ POC**:
-   - Если цена близко к POC (<1%) - это сильный магнит?
-   - Если далеко (>3%) - POC еще актуален или уже "протух"?
-
-2. **ПОЗИЦИЯ ОТНОСИТЕЛЬНО VALUE AREA**:
-   - ABOVE VA: цена перекуплена или это сила?
-   - BELOW VA: перепродана или слабость?
-   - INSIDE VA: нормальная торговая зона
-
-3. **ОЖИДАЕМОЕ ПОВЕДЕНИЕ**:
-   - PULLBACK_TO_POC: цена вернется к POC
-   - BREAKOUT: цена продолжит движение от VA
-   - RANGING: будет торговаться в VA
-
-4. **ТОРГОВЫЕ РЕКОМЕНДАЦИИ**:
-   - Если цена далеко от POC и движется к нему: +8 к confidence (хороший setup)
-   - Если в LVN (Low Volume Node) зоне: 0 (быстрое прохождение)
-   - Если протух POC: 0
-
-Верни ТОЛЬКО JSON:
+Если ОТКЛОНЯЕШЬ сигнал:
 {{
-  "poc_significance": "STRONG_MAGNET|WEAK|EXPIRED",
-  "poc_distance_assessment": "CLOSE|MODERATE|FAR",
-  "value_area_position": "{va_position}",
-  "market_condition": "OVEREXTENDED|NORMAL|UNDEREXTENDED",
-  "expected_behavior": "PULLBACK_TO_POC|BREAKOUT|RANGING",
-  "optimal_entry_zone": "price level or 'current'",
-  "confidence_adjustment": 0 to +8,
-  "reasoning": "интерпретация ситуации (2-3 предложения)"
-}}"""
+  "signal": "NO_SIGNAL",
+  "confidence": 45,
+  "entry_price": 0,
+  "stop_loss": 0,
+  "take_profit_levels": [],
+  "analysis": "Reason for rejection",
+  "rejection_reason": "Weak compression 4.5%, no clear OB, funding against position",
+  "orderflow_analysis": {{...}},
+  "smc_analysis": {{...}}
+}}
 
-            response = await self.ai_router.call_ai(
-                prompt=prompt,
-                stage='analysis',
-                max_tokens=1200
-            )
+ВАЖНО:
+- take_profit_levels ВСЕГДА массив из 3 чисел [tp1, tp2, tp3]
+- Если NO_SIGNAL, всё равно заполни orderflow_analysis и smc_analysis
+- analysis максимум 150 слов
+"""
 
-            result = self._safe_parse_json(response)
+        return prompt
 
-            if not result:
-                return {
-                    'poc_significance': 'UNKNOWN',
-                    'value_area_position': va_position,
-                    'expected_behavior': 'RANGING',
-                    'confidence_adjustment': 0,
-                    'reasoning': 'AI analysis failed'
-                }
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Ошибка AI интерпретации VP для {symbol}: {e}")
-            return {
-                'poc_significance': 'UNKNOWN',
-                'value_area_position': 'UNKNOWN',
-                'expected_behavior': 'RANGING',
-                'confidence_adjustment': 0,
-                'reasoning': f'Error: {str(e)}'
-            }
-
-    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
-
-    def _format_orderbook_side(self, orders: List[List[float]], side: str) -> str:
-        """Форматирование стакана для промпта"""
+    def _format_orderbook_levels(self, orders: List[List[float]], side: str) -> str:
+        """Форматирование уровней стакана"""
         lines = []
-        for i, (price, size) in enumerate(orders[:20]):
-            size_indicator = '█' * min(int(size / 1000), 20)  # Визуальная индикация размера
-            lines.append(f"{i + 1}. ${price:,.2f} | {size:,.0f} | {size_indicator}")
+        for i, (price, size) in enumerate(orders[:10]):
+            size_indicator = '█' * min(int(size / 1000), 20)
+            lines.append(f"{i+1}. ${price:,.2f} | {size:,.0f} | {size_indicator}")
         return '\n'.join(lines)
 
-    def _safe_parse_json(self, response: str) -> Optional[Dict]:
-        """Безопасный парсинг JSON из AI ответа"""
+    def _extract_market_context(self, data: Dict) -> Dict:
+        """Извлечь market context"""
+        market_data = data.get('market_data', {})
+        return {
+            'funding_rate': market_data.get('funding_rate', {}).get('funding_rate', 0) * 100 if market_data.get('funding_rate') else 0,
+            'oi_trend': market_data.get('open_interest', {}).get('oi_trend', 'UNKNOWN') if market_data.get('open_interest') else 'UNKNOWN',
+            'spread_pct': market_data.get('orderbook', {}).get('spread_pct', 0) if market_data.get('orderbook') else 0,
+            'buy_pressure': market_data.get('taker_volume', {}).get('buy_pressure', 0.5) if market_data.get('taker_volume') else 0.5
+        }
+
+    def _validate_and_format_result(self, result: Dict, symbol: str, current_price: float) -> Dict:
+        """Валидация и форматирование результата"""
         try:
-            # Удаляем markdown если есть
+            signal = str(result.get('signal', 'NO_SIGNAL')).upper()
+            confidence = max(0, min(100, int(float(result.get('confidence', 0)))))
+
+            # Entry/Stop/TP
+            entry_price = float(result.get('entry_price', 0) or 0)
+            stop_loss = float(result.get('stop_loss', 0) or 0)
+
+            # TP Levels - ВАЖНО!
+            tp_levels_raw = result.get('take_profit_levels', [])
+
+            if isinstance(tp_levels_raw, list) and len(tp_levels_raw) >= 3:
+                take_profit_levels = [float(tp) for tp in tp_levels_raw[:3]]
+            elif isinstance(tp_levels_raw, list) and len(tp_levels_raw) > 0:
+                # Если меньше 3, дополняем
+                base_tp = float(tp_levels_raw[0])
+                take_profit_levels = [base_tp, base_tp * 1.1, base_tp * 1.2]
+            else:
+                # Fallback расчет
+                if signal in ['LONG', 'SHORT'] and entry_price > 0 and stop_loss > 0:
+                    risk = abs(entry_price - stop_loss)
+                    if signal == 'LONG':
+                        take_profit_levels = [
+                            round(entry_price + risk * 1.5, 2),
+                            round(entry_price + risk * 2.5, 2),
+                            round(entry_price + risk * 4.0, 2)
+                        ]
+                    else:
+                        take_profit_levels = [
+                            round(entry_price - risk * 1.5, 2),
+                            round(entry_price - risk * 2.5, 2),
+                            round(entry_price - risk * 4.0, 2)
+                        ]
+                else:
+                    take_profit_levels = [0, 0, 0]
+
+            analysis = str(result.get('analysis', 'Claude unified analysis'))
+            rejection_reason = result.get('rejection_reason')
+
+            # OrderFlow & SMC analyses
+            orderflow = result.get('orderflow_analysis', {})
+            smc = result.get('smc_analysis', {})
+
+            return {
+                'symbol': symbol,
+                'signal': signal,
+                'confidence': confidence,
+                'entry_price': entry_price if entry_price > 0 else current_price,
+                'stop_loss': stop_loss,
+                'take_profit_levels': take_profit_levels,
+                'analysis': analysis,
+                'rejection_reason': rejection_reason,
+                'orderflow_analysis': orderflow,
+                'smc_analysis': smc,
+                'ai_generated': True,
+                'stage': 3
+            }
+
+        except Exception as e:
+            logger.error(f"Error validating unified result for {symbol}: {e}")
+            return self._fallback_unified_analysis(symbol, current_price)
+
+    def _fallback_unified_analysis(self, symbol: str, current_price: float) -> Dict:
+        """Fallback если Claude не сработал"""
+        return {
+            'symbol': symbol,
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'entry_price': current_price,
+            'stop_loss': 0,
+            'take_profit_levels': [0, 0, 0],
+            'analysis': 'Unified analysis failed',
+            'rejection_reason': 'AI analysis unavailable',
+            'orderflow_analysis': {},
+            'smc_analysis': {},
+            'ai_generated': False,
+            'stage': 3
+        }
+
+    def _safe_parse_json(self, response: str) -> Optional[Dict]:
+        """Безопасный парсинг JSON"""
+        try:
             response = response.strip()
             if response.startswith('```'):
-                # Извлекаем JSON из markdown блока
                 lines = response.split('\n')
                 json_lines = []
                 in_json = False
@@ -508,136 +479,48 @@ Value Area - зона где прошло 70% объема торгов.
                         json_lines.append(line)
                 response = '\n'.join(json_lines)
 
-            # Парсим JSON
-            result = json.loads(response)
-            return result
+            start_idx = response.find('{')
+            if start_idx == -1:
+                return None
+
+            brace_count = 0
+            for i, char in enumerate(response[start_idx:], start_idx):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_str = response[start_idx:i + 1]
+                        return json.loads(json_str)
+
+            return None
 
         except json.JSONDecodeError as e:
-            logger.warning(f"Ошибка парсинга JSON от AI: {e}")
-            logger.debug(f"Ответ AI: {response[:500]}")
+            logger.warning(f"JSON parsing error: {e}")
+            logger.debug(f"Response: {response[:500]}")
             return None
         except Exception as e:
-            logger.error(f"Неожиданная ошибка парсинга: {e}")
+            logger.error(f"Unexpected parsing error: {e}")
             return None
 
-    def _get_fallback_orderbook_analysis(self) -> Dict:
-        """Fallback если AI не отвечает"""
-        return {
-            'orderflow_direction': 'NEUTRAL',
-            'absorption_detected': False,
-            'spoofing_risk': 'UNKNOWN',
-            'key_levels': [],
-            'confidence_adjustment': 0,
-            'reasoning': 'AI analysis unavailable, using neutral assessment'
-        }
 
-    def _get_fallback_smc_analysis(self) -> Dict:
-        """Fallback для SMC анализа"""
-        return {
-            'order_blocks': [],
-            'fair_value_gaps': [],
-            'liquidity_sweeps': [],
-            'break_of_structure': None,
-            'confidence_boost': 0,
-            'reasoning': 'AI analysis unavailable'
-        }
+# ==================== ИНТЕГРАЦИОННАЯ ФУНКЦИЯ ====================
 
-
-# ==================== ИНТЕГРАЦИОННЫЕ ФУНКЦИИ ====================
-
-async def get_ai_orderflow_analysis(
+async def get_unified_analysis(
         ai_router,
         symbol: str,
-        orderbook_data: Dict,
-        recent_prices: List[float]
+        comprehensive_data: Dict
 ) -> Dict:
     """
-    Удобная функция для получения AI анализа Order Flow
+    Удобная функция для unified анализа
 
     Args:
-        ai_router: твой AIRouter
+        ai_router: AIRouter instance
         symbol: торговая пара
-        orderbook_data: данные стакана
-        recent_prices: последние цены
+        comprehensive_data: полный датасет из Stage 3
 
     Returns:
-        Результат анализа с confidence_adjustment
+        Полный результат анализа с 3 TP уровнями
     """
     analyzer = AIAdvancedAnalyzer(ai_router)
-    return await analyzer.analyze_orderbook_flow(symbol, orderbook_data, recent_prices)
-
-
-async def get_ai_smc_patterns(
-        ai_router,
-        symbol: str,
-        candles_1h: List[List],
-        current_price: float
-) -> Dict:
-    """
-    Удобная функция для получения AI анализа Smart Money Concepts
-
-    Args:
-        ai_router: твой AIRouter
-        symbol: торговая пара
-        candles_1h: свечи 1H
-        current_price: текущая цена
-
-    Returns:
-        Найденные SMC паттерны с confidence_boost
-    """
-    analyzer = AIAdvancedAnalyzer(ai_router)
-    return await analyzer.detect_smart_money_concepts(symbol, candles_1h, current_price)
-
-
-async def get_ai_correlation_interpretation(
-        ai_router,
-        symbol: str,
-        symbol_change: float,
-        btc_change: float,
-        correlation: float,
-        sector_data: Optional[Dict] = None
-) -> Dict:
-    """
-    Удобная функция для AI интерпретации корреляций
-
-    Args:
-        ai_router: твой AIRouter
-        symbol: торговая пара
-        symbol_change: % изменение
-        btc_change: % изменение BTC
-        correlation: корреляция
-        sector_data: опционально - данные сектора
-
-    Returns:
-        Интерпретация аномалии
-    """
-    analyzer = AIAdvancedAnalyzer(ai_router)
-    return await analyzer.interpret_correlation_anomaly(
-        symbol, symbol_change, btc_change, correlation, sector_data
-    )
-
-
-async def get_ai_volume_profile_interpretation(
-        ai_router,
-        symbol: str,
-        vp_data: Dict,
-        current_price: float,
-        price_direction: str
-) -> Dict:
-    """
-    Удобная функция для AI интерпретации Volume Profile
-
-    Args:
-        ai_router: твой AIRouter
-        symbol: торговая пара
-        vp_data: данные Volume Profile
-        current_price: текущая цена
-        price_direction: направление
-
-    Returns:
-        Интерпретация VP
-    """
-    analyzer = AIAdvancedAnalyzer(ai_router)
-    return await analyzer.interpret_volume_profile(
-        symbol, vp_data, current_price, price_direction
-    )
+    return await analyzer.analyze_comprehensive_unified(symbol, comprehensive_data)
