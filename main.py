@@ -149,10 +149,7 @@ class TradingBot:
         return selected_pairs
 
     async def stage3_claude_unified_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """
-        Stage 3: Claude UNIFIED анализ
-        ОДИН запрос вместо трех (OrderFlow + SMC + Main Analysis)
-        """
+        """Stage 3: Claude UNIFIED анализ"""
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 3: Claude UNIFIED analysis for {len(selected_pairs)} pairs")
@@ -161,7 +158,7 @@ class TradingBot:
         if not selected_pairs:
             return []
 
-        # Загружаем BTC для корреляций
+        # Загружаем BTC
         logger.info("Loading BTC data...")
         btc_candles_1h = await fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
         btc_candles_4h = await fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
@@ -172,7 +169,7 @@ class TradingBot:
             try:
                 logger.debug(f"Analyzing {symbol}...")
 
-                # 1. Свечи
+                # Свечи
                 klines_1h = await fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
                 klines_4h = await fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
 
@@ -184,7 +181,7 @@ class TradingBot:
                     logger.warning(f"{symbol}: Invalid candles")
                     continue
 
-                # 2. Индикаторы
+                # Индикаторы
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
                 indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
 
@@ -194,7 +191,7 @@ class TradingBot:
 
                 current_price = float(klines_1h[-1][4])
 
-                # 3. Собираем расширенные данные (БЕЗ отдельных AI запросов!)
+                # Расширенные данные
                 logger.debug(f"{symbol}: Collecting market data...")
 
                 from func_market_data import MarketDataCollector
@@ -219,7 +216,7 @@ class TradingBot:
                 vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
                 vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
 
-                # 4. ФОРМИРУЕМ ПОЛНЫЙ ПАКЕТ
+                # Полный пакет
                 comprehensive_data = {
                     'symbol': symbol,
                     'candles_1h': klines_1h,
@@ -235,31 +232,32 @@ class TradingBot:
                     'btc_candles_4h': btc_candles_4h
                 }
 
-                # 5. UNIFIED CLAUDE АНАЛИЗ (OrderFlow + SMC + Main в ОДНОМ запросе!)
-                logger.info(f"{symbol}: Claude UNIFIED analysis (1 request)...")
+                # UNIFIED CLAUDE АНАЛИЗ
+                logger.info(f"{symbol}: Claude UNIFIED analysis...")
 
                 analysis = await ai_router.analyze_pair_comprehensive(
                     symbol,
                     comprehensive_data
                 )
 
-                logger.debug(
-                    f"{symbol}: Result - signal={analysis.get('signal')}, confidence={analysis.get('confidence')}")
+                signal_type = analysis.get('signal', 'NO_SIGNAL')
+                confidence = analysis.get('confidence', 0)
+                rejection = analysis.get('rejection_reason')
 
-                if analysis['signal'] != 'NO_SIGNAL' and analysis['confidence'] >= config.MIN_CONFIDENCE:
-                    # Сохраняем данные для Stage 4
+                logger.debug(f"{symbol}: signal={signal_type}, confidence={confidence}")
+
+                if signal_type != 'NO_SIGNAL' and confidence >= config.MIN_CONFIDENCE:
                     analysis['comprehensive_data'] = comprehensive_data
                     analysis['timestamp'] = datetime.now().isoformat()
 
                     final_signals.append(analysis)
 
-                    # Красивый вывод
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
-                    logger.info(f"✅ Signal: {symbol} {analysis['signal']} {analysis['confidence']}%")
-                    logger.info(f"   Entry: ${analysis['entry_price']}, Stop: ${analysis['stop_loss']}")
-                    logger.info(f"   TP: ${tp_levels[0]} / ${tp_levels[1]} / ${tp_levels[2]}")
+                    logger.info(f"[SIGNAL] {symbol} {signal_type} {confidence}%")
+                    logger.info(f"  Entry: ${analysis['entry_price']}, Stop: ${analysis['stop_loss']}")
+                    logger.info(f"  TP: ${tp_levels[0]} / ${tp_levels[1]} / ${tp_levels[2]}")
                 else:
-                    logger.info(f"⏭️  Skipped: {symbol} - {analysis.get('rejection_reason', 'weak setup')}")
+                    logger.info(f"[SKIPPED] {symbol} - {rejection if rejection else 'weak setup'}")
 
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}")
@@ -359,7 +357,7 @@ class TradingBot:
                     'validated_signals': len(validated),
                     'rejected_signals': len(rejected),
                     'processing_speed': round(self.processed_pairs / total_time, 1),
-                    'claude_requests_saved': len(selected_pairs) * 2  # Экономия запросов!
+                    'claude_requests_saved': len(selected_pairs) * 2
                 },
                 'validated_signals': validated,
                 'rejected_signals': rejected,
@@ -419,12 +417,12 @@ async def main():
         print(f"Claude analyzed: {stats.get('claude_analyzed', 0)}")
         print(f"Validated: {stats.get('validated_signals', 0)}")
         print(f"Speed: {stats.get('processing_speed', 0):.1f} pairs/sec")
-        print(f"💰 Claude requests saved: {stats.get('claude_requests_saved', 0)}")
+        print(f"Claude requests saved: {stats.get('claude_requests_saved', 0)}")
         print("=" * 80)
 
         if result.get('validated_signals'):
             signals = result['validated_signals']
-            print(f"\n✅ VALIDATED SIGNALS ({len(signals)}):")
+            print(f"\nVALIDATED SIGNALS ({len(signals)}):")
             print("=" * 80)
 
             for sig in signals:
@@ -445,7 +443,7 @@ async def main():
 
         if result.get('rejected_signals'):
             rejected = result['rejected_signals']
-            print(f"\n❌ REJECTED SIGNALS ({len(rejected)}):")
+            print(f"\nREJECTED SIGNALS ({len(rejected)}):")
             print("=" * 80)
 
             for rej in rejected:
@@ -456,12 +454,12 @@ async def main():
                 print(f"  TP1:   ${tp_levels[0]}")
                 print(f"  TP2:   ${tp_levels[1]}")
                 print(f"  TP3:   ${tp_levels[2]}")
-                print(f"  ❌ Rejection: {rej.get('rejection_reason', 'Unknown')}")
+                print(f"  Rejection: {rej.get('rejection_reason', 'Unknown')}")
 
         # Статистика
         if result.get('validation_stats'):
             vstats = result['validation_stats']
-            print(f"\n📊 VALIDATION STATS:")
+            print(f"\nVALIDATION STATS:")
             print(f"  Approval rate: {vstats.get('approval_rate', 0)}%")
             print(f"  Avg R/R: 1:{vstats.get('avg_risk_reward', 0)}")
             if vstats.get('top_rejection_reasons'):
