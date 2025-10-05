@@ -1,60 +1,27 @@
 """
-Маршрутизатор для выбора AI провайдера на каждом этапе
-ОБНОВЛЕНО: Добавлен метод analyze_pair_comprehensive для Stage 3
+AI Router - упрощенная версия
+Stage 2: DeepSeek
+Stage 3 & 4: Claude (Anthropic)
 """
 
 import logging
-from typing import List, Dict, Optional
-from config import config, get_available_ai_providers
+import json
+import asyncio
+from typing import List, Dict
+from config import config
 
 logger = logging.getLogger(__name__)
 
-# Импорты AI клиентов
-try:
-    from deepseek import (
-        ai_select_pairs_deepseek,
-        ai_analyze_pair_deepseek,
-        ai_validate_signals_deepseek,
-        create_fallback_selection,
-        create_fallback_validation,
-        create_fallback_analysis
-    )
-except ImportError as e:
-    logger.error(f"Ошибка импорта DeepSeek: {e}")
-
-try:
-    from anthropic_ai import anthropic_client
-except ImportError as e:
-    logger.error(f"Ошибка импорта Anthropic: {e}")
+# Импорты
+from deepseek import ai_select_pairs_deepseek, load_prompt_cached, extract_json_optimized
+from anthropic_ai import anthropic_client
 
 
 class AIRouter:
-    """Маршрутизатор AI провайдеров для разных этапов"""
+    """Упрощенный роутер: DeepSeek для отбора, Claude для анализа"""
 
     def __init__(self):
-        self.providers = get_available_ai_providers()
-        logger.info(f"Доступные AI провайдеры: {[k for k, v in self.providers.items() if v]}")
-
-    def _get_provider_for_stage(self, stage: str) -> str:
-        """Получить провайдера для конкретного этапа с fallback"""
-        stage_mapping = {
-            'selection': config.AI_STAGE_SELECTION,
-            'analysis': config.AI_STAGE_ANALYSIS,
-            'validation': config.AI_STAGE_VALIDATION
-        }
-
-        preferred_provider = stage_mapping.get(stage, 'fallback')
-
-        if preferred_provider != 'fallback' and self.providers.get(preferred_provider, False):
-            return preferred_provider
-
-        for provider in ['deepseek', 'anthropic']:
-            if self.providers.get(provider, False):
-                logger.warning(f"Этап {stage}: переключение с {preferred_provider} на {provider}")
-                return provider
-
-        logger.warning(f"Этап {stage}: используется fallback режим")
-        return 'fallback'
+        pass
 
     async def call_ai(
             self,
@@ -64,87 +31,28 @@ class AIRouter:
             temperature: float = 0.7
     ) -> str:
         """
-        Универсальный метод для вызова AI с произвольным промптом
+        Универсальный метод для вызова AI
+        Используется в ai_advanced_analysis.py
         """
-        provider = self._get_provider_for_stage(stage)
-        logger.debug(f"call_ai через {provider}")
-
         try:
-            if provider == 'deepseek':
-                import asyncio
-                from openai import AsyncOpenAI
+            messages = [{"role": "user", "content": prompt}]
 
-                client = AsyncOpenAI(
-                    api_key=config.DEEPSEEK_API_KEY,
-                    base_url=config.DEEPSEEK_URL
-                )
+            response_text = await anthropic_client._make_request(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(
-                        model=config.DEEPSEEK_MODEL,
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=max_tokens,
-                        temperature=temperature
-                    ),
-                    timeout=config.API_TIMEOUT
-                )
-
-                return response.choices[0].message.content
-
-            elif provider == 'anthropic':
-                messages = [{"role": "user", "content": prompt}]
-                return await anthropic_client._make_request(
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature
-                )
-
-            else:
-                logger.warning("call_ai: fallback mode, returning empty response")
-                return "{}"
+            return response_text if response_text else "{}"
 
         except Exception as e:
-            logger.error(f"Ошибка call_ai через {provider}: {e}")
+            logger.error(f"call_ai error: {e}")
             return "{}"
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
-        """Отбор пар через выбранный AI провайдер"""
-        provider = self._get_provider_for_stage('selection')
-        logger.info(f"Этап отбора: используется {provider}")
-
-        try:
-            if provider == 'deepseek':
-                return await ai_select_pairs_deepseek(pairs_data)
-            elif provider == 'anthropic':
-                return await anthropic_client.select_pairs(pairs_data)
-            else:
-                return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
-
-        except Exception as e:
-            logger.error(f"Ошибка отбора пар через {provider}: {e}")
-            logger.info("Переключение на fallback режим")
-            return create_fallback_selection(pairs_data, config.MAX_FINAL_PAIRS)
-
-    async def analyze_pair(self, symbol: str, data_5m: List, data_15m: List,
-                           indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-        """Анализ пары через выбранный AI провайдер (старый метод)"""
-        provider = self._get_provider_for_stage('analysis')
-        logger.debug(f"Анализ {symbol}: используется {provider}")
-
-        try:
-            if provider == 'deepseek':
-                return await ai_analyze_pair_deepseek(symbol, data_5m, data_15m, indicators_5m, indicators_15m)
-            elif provider == 'anthropic':
-                return await anthropic_client.analyze_pair(symbol, data_5m, data_15m, indicators_5m, indicators_15m)
-            else:
-                current_price = indicators_5m.get('current', {}).get('price', 0)
-                return create_fallback_analysis(symbol, indicators_5m)
-
-        except Exception as e:
-            logger.error(f"Ошибка анализа {symbol} через {provider}: {e}")
-            logger.info("Переключение на fallback режим")
-            current_price = indicators_5m.get('current', {}).get('price', 0)
-            return create_fallback_analysis(symbol, indicators_5m)
+        """Stage 2: DeepSeek отбор"""
+        logger.info("Stage 2: DeepSeek selection")
+        return await ai_select_pairs_deepseek(pairs_data)
 
     async def analyze_pair_comprehensive(
             self,
@@ -152,164 +60,26 @@ class AIRouter:
             comprehensive_data: Dict
     ) -> Dict:
         """
-        НОВЫЙ метод для Stage 3 - анализ с ПОЛНЫМИ данными
+        Stage 3: Claude ПОЛНЫЙ анализ
 
         Args:
-            symbol: торговая пара
-            comprehensive_data: все собранные данные включая market_data, correlations, VP, etc.
-
-        Returns:
-            Полный результат анализа с сигналом
+            symbol: пара
+            comprehensive_data: ВСЕ данные (свечи, индикаторы, market_data, корреляции, VP, AI анализы)
         """
-        provider = self._get_provider_for_stage('analysis')
-        logger.debug(f"Comprehensive анализ {symbol}: используется {provider}")
+        logger.debug(f"Stage 3: Claude comprehensive analysis for {symbol}")
 
         try:
-            # Извлекаем базовые данные
-            candles_1h = comprehensive_data.get('candles_1h', [])
-            candles_4h = comprehensive_data.get('candles_4h', [])
-            indicators_1h = comprehensive_data.get('indicators_1h', {})
-            indicators_4h = comprehensive_data.get('indicators_4h', {})
-            current_price = comprehensive_data.get('current_price', 0)
+            # Формируем компактный JSON для Claude
+            ai_input = self._prepare_analysis_input(symbol, comprehensive_data)
 
-            # Извлекаем расширенные данные
-            market_data = comprehensive_data.get('market_data', {})
-            corr_data = comprehensive_data.get('correlation_data', {})
-            vp_data = comprehensive_data.get('volume_profile', {})
-            orderflow_ai = comprehensive_data.get('orderflow_ai', {})
-            smc_ai = comprehensive_data.get('smc_ai', {})
-
-            # Формируем КОМПАКТНЫЙ пакет для AI (без избыточных данных)
-            ai_input = {
-                'symbol': symbol,
-                'current_price': current_price,
-                'timeframes': {
-                    '1h': {
-                        'candles': candles_1h[-80:],  # Последние 80 свечей
-                        'indicators': {
-                            'ema5': indicators_1h.get('ema5_history', [])[-80:],
-                            'ema8': indicators_1h.get('ema8_history', [])[-80:],
-                            'ema20': indicators_1h.get('ema20_history', [])[-80:],
-                            'rsi': indicators_1h.get('rsi_history', [])[-80:],
-                            'macd_histogram': indicators_1h.get('macd_histogram_history', [])[-80:],
-                            'volume_ratio': indicators_1h.get('volume_ratio_history', [])[-80:]
-                        }
-                    },
-                    '4h': {
-                        'candles': candles_4h[-40:],  # Последние 40 свечей
-                        'indicators': {
-                            'ema5': indicators_4h.get('ema5_history', [])[-40:],
-                            'ema8': indicators_4h.get('ema8_history', [])[-40:],
-                            'ema20': indicators_4h.get('ema20_history', [])[-40:],
-                            'rsi': indicators_4h.get('rsi_history', [])[-40:],
-                            'macd_histogram': indicators_4h.get('macd_histogram_history', [])[-40:]
-                        }
-                    }
-                },
-                'current_state': {
-                    'price': current_price,
-                    'atr': indicators_1h.get('current', {}).get('atr', 0),
-                    'trend_1h': self._determine_trend(indicators_1h),
-                    'trend_4h': self._determine_trend(indicators_4h),
-                    'rsi_1h': indicators_1h.get('current', {}).get('rsi', 50),
-                    'rsi_4h': indicators_4h.get('current', {}).get('rsi', 50),
-                    'volume_ratio': indicators_1h.get('current', {}).get('volume_ratio', 1.0),
-                    'macd_momentum': indicators_1h.get('current', {}).get('macd_histogram', 0)
-                },
-                # Добавляем КРАТКУЮ информацию из расширенных данных
-                'market_context': {
-                    'funding_rate': market_data.get('funding_rate', {}).get('funding_rate', 0) if market_data.get('funding_rate') else 0,
-                    'oi_trend': market_data.get('open_interest', {}).get('oi_trend', 'UNKNOWN') if market_data.get('open_interest') else 'UNKNOWN',
-                    'spread_pct': market_data.get('orderbook', {}).get('spread_pct', 0) if market_data.get('orderbook') else 0,
-                    'buy_pressure': market_data.get('taker_volume', {}).get('buy_pressure', 0.5) if market_data.get('taker_volume') else 0.5
-                },
-                'correlation_context': {
-                    'btc_correlation': corr_data.get('btc_correlation', {}).get('correlation', 0) if corr_data else 0,
-                    'btc_trend': corr_data.get('btc_trend', 'UNKNOWN') if corr_data else 'UNKNOWN'
-                },
-                'volume_profile_context': {
-                    'poc': vp_data.get('poc', 0) if vp_data else 0,
-                    'value_area': [vp_data.get('value_area_low', 0), vp_data.get('value_area_high', 0)] if vp_data else [0, 0]
-                },
-                'orderflow_context': {
-                    'direction': orderflow_ai.get('orderflow_direction', 'UNKNOWN') if orderflow_ai else 'UNKNOWN',
-                    'spoofing_risk': orderflow_ai.get('spoofing_risk', 'UNKNOWN') if orderflow_ai else 'UNKNOWN'
-                },
-                'smc_context': {
-                    'order_blocks': len(smc_ai.get('order_blocks', [])) if smc_ai else 0,
-                    'patterns_alignment': smc_ai.get('patterns_alignment', 'MIXED') if smc_ai else 'MIXED'
-                }
-            }
-
-            # Вызываем AI с компактными данными
-            if provider == 'deepseek':
-                return await self._analyze_comprehensive_deepseek(symbol, ai_input)
-            elif provider == 'anthropic':
-                return await self._analyze_comprehensive_anthropic(symbol, ai_input)
-            else:
-                return create_fallback_analysis(symbol, indicators_1h)
-
-        except Exception as e:
-            logger.error(f"Ошибка comprehensive анализа {symbol}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return create_fallback_analysis(symbol, comprehensive_data.get('indicators_1h', {}))
-
-    async def _analyze_comprehensive_deepseek(self, symbol: str, ai_input: Dict) -> Dict:
-        """DeepSeek реализация comprehensive анализа"""
-        import asyncio
-        import json
-        from openai import AsyncOpenAI
-        from deepseek import load_prompt_cached, extract_json_optimized, safe_float_conversion
-
-        try:
-            client = AsyncOpenAI(
-                api_key=config.DEEPSEEK_API_KEY,
-                base_url=config.DEEPSEEK_URL
-            )
-
-            prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
-            data_json = json.dumps(ai_input, separators=(',', ':'))
-
-            response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=config.DEEPSEEK_MODEL,
-                    messages=[
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": data_json}
-                    ],
-                    response_format={"type": "json_object"},
-                    max_tokens=config.AI_MAX_TOKENS_ANALYZE,
-                    temperature=config.AI_TEMPERATURE_ANALYZE
-                ),
-                timeout=config.API_TIMEOUT
-            )
-
-            result_text = response.choices[0].message.content
-            json_result = extract_json_optimized(result_text)
-
-            if json_result:
-                return self._format_analysis_result(symbol, json_result, ai_input['current_price'])
-            else:
-                return create_fallback_analysis(symbol, {'current': {'price': ai_input['current_price']}})
-
-        except Exception as e:
-            logger.error(f"DeepSeek comprehensive error for {symbol}: {e}")
-            return create_fallback_analysis(symbol, {'current': {'price': ai_input['current_price']}})
-
-    async def _analyze_comprehensive_anthropic(self, symbol: str, ai_input: Dict) -> Dict:
-        """Anthropic реализация comprehensive анализа"""
-        import json
-        from deepseek import load_prompt_cached
-
-        try:
+            # Загружаем промпт
             prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
             data_json = json.dumps(ai_input, separators=(',', ':'))
 
             messages = [
                 {
                     "role": "user",
-                    "content": f"{prompt}\n\nДанные для анализа:\n{data_json}\n\nВерни JSON с анализом."
+                    "content": f"{prompt}\n\nДанные для анализа:\n{data_json}\n\nВерни JSON с полным анализом."
                 }
             ]
 
@@ -321,92 +91,273 @@ class AIRouter:
 
             result = anthropic_client.extract_json(response_text)
 
-            if result:
-                return self._format_analysis_result(symbol, result, ai_input['current_price'])
+            if result and isinstance(result, dict):
+                # Проверяем что есть обязательные поля
+                if 'signal' in result:
+                    return self._format_analysis_result(symbol, result, comprehensive_data['current_price'])
+                else:
+                    logger.warning(f"Claude result missing 'signal' field for {symbol}")
+                    return self._fallback_analysis(symbol, comprehensive_data['current_price'])
             else:
-                return create_fallback_analysis(symbol, {'current': {'price': ai_input['current_price']}})
+                logger.warning(f"Claude returned no valid JSON for {symbol}, response: {response_text[:200]}")
+                return self._fallback_analysis(symbol, comprehensive_data['current_price'])
 
         except Exception as e:
-            logger.error(f"Anthropic comprehensive error for {symbol}: {e}")
-            return create_fallback_analysis(symbol, {'current': {'price': ai_input['current_price']}})
+            logger.error(f"Claude analysis error for {symbol}: {e}")
+            return self._fallback_analysis(symbol, comprehensive_data['current_price'])
 
-    def _format_analysis_result(self, symbol: str, ai_result: Dict, current_price: float) -> Dict:
-        """Форматирование результата AI анализа"""
-        from deepseek import safe_float_conversion
+    async def validate_signal_with_stage3_data(
+            self,
+            signal: Dict,
+            comprehensive_data: Dict
+    ) -> Dict:
+        """
+        Stage 4: Claude валидация
 
-        signal = str(ai_result.get('signal', 'NO_SIGNAL')).upper()
-        confidence = max(0, min(100, int(safe_float_conversion(ai_result.get('confidence', 0)))))
-        entry_price = safe_float_conversion(ai_result.get('entry_price', current_price))
-        stop_loss = safe_float_conversion(ai_result.get('stop_loss', 0))
-        take_profit = safe_float_conversion(ai_result.get('take_profit', 0))
-        analysis = str(ai_result.get('analysis', 'AI analysis'))
+        Args:
+            signal: результат Stage 3
+            comprehensive_data: те же данные что были в Stage 3
+        """
+        symbol = signal['symbol']
+        logger.debug(f"Stage 4: Claude validation for {symbol}")
 
-        # Валидация уровней
-        if signal in ['LONG', 'SHORT'] and entry_price > 0:
-            if stop_loss <= 0:
-                stop_loss = entry_price * (0.98 if signal == 'LONG' else 1.02)
-            if take_profit <= 0:
-                risk = abs(entry_price - stop_loss)
-                take_profit = entry_price + (risk * 2 if signal == 'LONG' else -risk * 2)
+        try:
+            # Формируем validation input
+            validation_input = {
+                'signal': signal,
+                'comprehensive_data': {
+                    'market_data': comprehensive_data.get('market_data', {}),
+                    'correlation_data': comprehensive_data.get('correlation_data', {}),
+                    'volume_profile': comprehensive_data.get('volume_profile', {}),
+                    'vp_analysis': comprehensive_data.get('vp_analysis', {}),
+                    'orderflow_ai': comprehensive_data.get('orderflow_ai', {}),
+                    'smc_ai': comprehensive_data.get('smc_ai', {}),
+                    'current_price': comprehensive_data.get('current_price', 0)
+                }
+            }
+
+            prompt = load_prompt_cached(config.VALIDATION_PROMPT)
+            data_json = json.dumps(validation_input, separators=(',', ':'))
+
+            messages = [
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nДанные для валидации:\n{data_json}\n\nВерни JSON с результатом валидации."
+                }
+            ]
+
+            response_text = await anthropic_client._make_request(
+                messages=messages,
+                max_tokens=config.AI_MAX_TOKENS_VALIDATE,
+                temperature=config.AI_TEMPERATURE_VALIDATE
+            )
+
+            result = anthropic_client.extract_json(response_text)
+
+            if result and 'final_signals' in result:
+                # Claude вернул валидацию
+                final_signals = result.get('final_signals', [])
+                if final_signals:
+                    validated = final_signals[0]  # Берем первый (наш символ)
+                    validated['validation_method'] = 'claude'
+                    return validated
+                else:
+                    # Rejected
+                    rejected_info = result.get('rejected_signals', [{}])[0]
+                    return {
+                        'symbol': symbol,
+                        'approved': False,
+                        'rejection_reason': rejected_info.get('reason', 'Claude rejected'),
+                        'validation_method': 'claude'
+                    }
+            else:
+                # Fallback если Claude не вернул корректный формат
+                return self._fallback_validation(signal)
+
+        except Exception as e:
+            logger.error(f"Claude validation error for {symbol}: {e}")
+            return self._fallback_validation(signal)
+
+    def _prepare_analysis_input(self, symbol: str, comprehensive_data: Dict) -> Dict:
+        """Подготовка компактного JSON для Stage 3"""
+        candles_1h = comprehensive_data.get('candles_1h', [])
+        candles_4h = comprehensive_data.get('candles_4h', [])
+        indicators_1h = comprehensive_data.get('indicators_1h', {})
+        indicators_4h = comprehensive_data.get('indicators_4h', {})
+        current_price = comprehensive_data.get('current_price', 0)
 
         return {
             'symbol': symbol,
-            'signal': signal,
-            'confidence': confidence,
-            'entry_price': entry_price,
-            'stop_loss': stop_loss,
-            'take_profit': take_profit,
-            'analysis': analysis,
-            'ai_generated': True
+            'current_price': current_price,
+            'timeframes': {
+                '1h': {
+                    'candles': candles_1h[-80:],
+                    'indicators': {
+                        'ema5': indicators_1h.get('ema5_history', [])[-80:],
+                        'ema8': indicators_1h.get('ema8_history', [])[-80:],
+                        'ema20': indicators_1h.get('ema20_history', [])[-80:],
+                        'rsi': indicators_1h.get('rsi_history', [])[-80:],
+                        'macd_histogram': indicators_1h.get('macd_histogram_history', [])[-80:],
+                        'volume_ratio': indicators_1h.get('volume_ratio_history', [])[-80:]
+                    }
+                },
+                '4h': {
+                    'candles': candles_4h[-40:],
+                    'indicators': {
+                        'ema5': indicators_4h.get('ema5_history', [])[-40:],
+                        'ema8': indicators_4h.get('ema8_history', [])[-40:],
+                        'ema20': indicators_4h.get('ema20_history', [])[-40:],
+                        'rsi': indicators_4h.get('rsi_history', [])[-40:],
+                        'macd_histogram': indicators_4h.get('macd_histogram_history', [])[-40:]
+                    }
+                }
+            },
+            'current_state': {
+                'price': current_price,
+                'atr': indicators_1h.get('current', {}).get('atr', 0),
+                'trend_1h': self._determine_trend(indicators_1h),
+                'trend_4h': self._determine_trend(indicators_4h),
+                'rsi_1h': indicators_1h.get('current', {}).get('rsi', 50),
+                'rsi_4h': indicators_4h.get('current', {}).get('rsi', 50),
+                'volume_ratio': indicators_1h.get('current', {}).get('volume_ratio', 1.0),
+                'macd_momentum': indicators_1h.get('current', {}).get('macd_histogram', 0)
+            },
+            # Краткая инфа из расширенных данных
+            'market_context': self._extract_market_context(comprehensive_data),
+            'correlation_context': self._extract_correlation_context(comprehensive_data),
+            'volume_profile_context': self._extract_vp_context(comprehensive_data),
+            'orderflow_context': self._extract_orderflow_context(comprehensive_data),
+            'smc_context': self._extract_smc_context(comprehensive_data)
+        }
+
+    def _extract_market_context(self, data: Dict) -> Dict:
+        """Извлечь краткий market context"""
+        market_data = data.get('market_data', {})
+        return {
+            'funding_rate': market_data.get('funding_rate', {}).get('funding_rate', 0) if market_data.get('funding_rate') else 0,
+            'oi_trend': market_data.get('open_interest', {}).get('oi_trend', 'UNKNOWN') if market_data.get('open_interest') else 'UNKNOWN',
+            'spread_pct': market_data.get('orderbook', {}).get('spread_pct', 0) if market_data.get('orderbook') else 0,
+            'buy_pressure': market_data.get('taker_volume', {}).get('buy_pressure', 0.5) if market_data.get('taker_volume') else 0.5
+        }
+
+    def _extract_correlation_context(self, data: Dict) -> Dict:
+        """Извлечь correlation context"""
+        corr_data = data.get('correlation_data', {})
+        return {
+            'btc_correlation': corr_data.get('btc_correlation', {}).get('correlation', 0) if corr_data else 0,
+            'btc_trend': corr_data.get('btc_trend', 'UNKNOWN') if corr_data else 'UNKNOWN'
+        }
+
+    def _extract_vp_context(self, data: Dict) -> Dict:
+        """Извлечь Volume Profile context"""
+        vp_data = data.get('volume_profile', {})
+        return {
+            'poc': vp_data.get('poc', 0) if vp_data else 0,
+            'value_area': [vp_data.get('value_area_low', 0), vp_data.get('value_area_high', 0)] if vp_data else [0, 0]
+        }
+
+    def _extract_orderflow_context(self, data: Dict) -> Dict:
+        """Извлечь OrderFlow context"""
+        orderflow = data.get('orderflow_ai', {})
+        return {
+            'direction': orderflow.get('orderflow_direction', 'UNKNOWN') if orderflow else 'UNKNOWN',
+            'spoofing_risk': orderflow.get('spoofing_risk', 'UNKNOWN') if orderflow else 'UNKNOWN'
+        }
+
+    def _extract_smc_context(self, data: Dict) -> Dict:
+        """Извлечь SMC context"""
+        smc = data.get('smc_ai', {})
+        return {
+            'order_blocks': len(smc.get('order_blocks', [])) if smc else 0,
+            'patterns_alignment': smc.get('patterns_alignment', 'MIXED') if smc else 'MIXED'
         }
 
     def _determine_trend(self, indicators: Dict) -> str:
-        """Определить тренд по индикаторам"""
+        """Определить тренд"""
         if not indicators or 'current' not in indicators:
             return 'UNKNOWN'
-
         current = indicators['current']
         ema5 = current.get('ema5', 0)
         ema20 = current.get('ema20', 0)
-
         if ema5 > 0 and ema20 > 0:
             return 'UP' if ema5 > ema20 else 'DOWN'
         return 'FLAT'
 
-    async def validate_signals(self, preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
-        """Валидация сигналов через выбранный AI провайдер"""
-        provider = self._get_provider_for_stage('validation')
-        logger.info(f"Этап валидации: используется {provider}")
-
+    def _format_analysis_result(self, symbol: str, ai_result: Dict, current_price: float) -> Dict:
+        """Форматирование результата Claude анализа"""
         try:
-            if provider == 'deepseek':
-                return await ai_validate_signals_deepseek(preliminary_signals, market_data)
-            elif provider == 'anthropic':
-                return await anthropic_client.validate_signals(preliminary_signals, market_data)
-            else:
-                return create_fallback_validation(preliminary_signals)
+            signal = str(ai_result.get('signal', 'NO_SIGNAL')).upper()
+            confidence = max(0, min(100, int(float(ai_result.get('confidence', 0)))))
+            entry_price = float(ai_result.get('entry_price', current_price) or current_price)
+            stop_loss = float(ai_result.get('stop_loss', 0) or 0)
+            take_profit = float(ai_result.get('take_profit', 0) or 0)
+            analysis = str(ai_result.get('analysis', 'Claude analysis'))
 
-        except Exception as e:
-            logger.error(f"Ошибка валидации через {provider}: {e}")
-            logger.info("Переключение на fallback режим")
-            return create_fallback_validation(preliminary_signals)
+            # Валидация уровней
+            if signal in ['LONG', 'SHORT'] and entry_price > 0:
+                if stop_loss <= 0:
+                    stop_loss = entry_price * (0.98 if signal == 'LONG' else 1.02)
+                if take_profit <= 0:
+                    risk = abs(entry_price - stop_loss)
+                    take_profit = entry_price + (risk * 2 if signal == 'LONG' else -risk * 2)
 
-    def get_status(self) -> Dict:
-        """Получить статус всех провайдеров"""
-        return {
-            'providers_available': self.providers,
-            'stage_assignments': {
-                'selection': config.AI_STAGE_SELECTION,
-                'analysis': config.AI_STAGE_ANALYSIS,
-                'validation': config.AI_STAGE_VALIDATION
-            },
-            'effective_providers': {
-                'selection': self._get_provider_for_stage('selection'),
-                'analysis': self._get_provider_for_stage('analysis'),
-                'validation': self._get_provider_for_stage('validation')
+            return {
+                'symbol': symbol,
+                'signal': signal,
+                'confidence': confidence,
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'analysis': analysis,
+                'ai_generated': True,
+                'stage': 3
             }
+        except Exception as e:
+            logger.error(f"Error formatting Claude result for {symbol}: {e}")
+            return self._fallback_analysis(symbol, current_price)
+
+    def _fallback_analysis(self, symbol: str, current_price: float) -> Dict:
+        """Fallback если Claude не сработал"""
+        return {
+            'symbol': symbol,
+            'signal': 'NO_SIGNAL',
+            'confidence': 0,
+            'entry_price': current_price,
+            'stop_loss': 0,
+            'take_profit': 0,
+            'analysis': 'Claude analysis failed',
+            'ai_generated': False,
+            'stage': 3
+        }
+
+    def _fallback_validation(self, signal: Dict) -> Dict:
+        """Fallback валидация"""
+        entry = signal.get('entry_price', 0)
+        stop = signal.get('stop_loss', 0)
+        profit = signal.get('take_profit', 0)
+
+        if entry > 0 and stop > 0 and profit > 0:
+            risk = abs(entry - stop)
+            reward = abs(profit - entry)
+            if risk > 0:
+                rr_ratio = round(reward / risk, 2)
+                if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
+                    return {
+                        'symbol': signal['symbol'],
+                        'approved': True,
+                        'final_confidence': signal['confidence'],
+                        'risk_reward_ratio': rr_ratio,
+                        'validation_method': 'fallback',
+                        'validation_notes': f'Fallback validation: R/R {rr_ratio}'
+                    }
+
+        return {
+            'symbol': signal['symbol'],
+            'approved': False,
+            'rejection_reason': 'Fallback validation failed',
+            'validation_method': 'fallback'
         }
 
 
-# Создаем глобальный роутер
+# Глобальный экземпляр
 ai_router = AIRouter()
