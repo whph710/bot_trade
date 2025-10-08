@@ -1,10 +1,9 @@
 """
-Модуль индикаторов и торговой логики
-Упрощённый, без кэширования
+Technical indicators and trading logic
 """
 
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from config import config
 import logging
 
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def safe_float(value) -> float:
-    """Безопасное преобразование в float"""
+    """Safe float conversion"""
     try:
         if isinstance(value, np.ndarray):
             value = value[-1] if len(value) > 0 else 0.0
@@ -27,7 +26,7 @@ def safe_float(value) -> float:
 
 
 def validate_candles(candles: List[List[str]], min_length: int = 10) -> bool:
-    """Валидация свечных данных"""
+    """Validate candle data"""
     if not candles or len(candles) < min_length:
         return False
 
@@ -63,7 +62,7 @@ def validate_candles(candles: List[List[str]], min_length: int = 10) -> bool:
 
 
 def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
-    """Расчёт EMA"""
+    """Calculate EMA"""
     if len(prices) < period:
         return np.full_like(prices, prices[0] if len(prices) > 0 else 0)
 
@@ -88,7 +87,7 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
 
 
 def calculate_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
-    """Расчёт RSI"""
+    """Calculate RSI"""
     if len(prices) < period + 1:
         return np.full_like(prices, 50.0)
 
@@ -132,7 +131,7 @@ def calculate_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
 
 
 def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, np.ndarray]:
-    """Расчёт MACD"""
+    """Calculate MACD"""
     zero_array = np.zeros_like(prices)
 
     if len(prices) < max(fast, slow):
@@ -153,7 +152,7 @@ def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: i
 
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
-    """Расчёт ATR"""
+    """Calculate ATR"""
     if not validate_candles(candles, period + 1):
         return 0.0
 
@@ -187,7 +186,7 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
 
 
 def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray:
-    """Расчёт отношения объёмов"""
+    """Calculate volume ratios"""
     try:
         volumes = np.array([safe_float(v) for v in volumes])
 
@@ -210,7 +209,7 @@ def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray
 
 
 def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
-    """Базовые индикаторы (для быстрого сканирования)"""
+    """Calculate basic indicators for quick scanning"""
     if not validate_candles(candles, 20):
         return {}
 
@@ -249,7 +248,7 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
 
 
 def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Dict[str, Any]:
-    """Индикаторы с историей для AI анализа"""
+    """Calculate indicators with history for AI analysis"""
     if not validate_candles(candles, max(history_length, 20)):
         return {}
 
@@ -268,7 +267,7 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
         volume_ratios = calculate_volume_ratios(volumes)
 
         def safe_history(arr, length):
-            """Безопасное извлечение истории"""
+            """Safe history extraction"""
             try:
                 if len(arr) >= length:
                     return [safe_float(x) for x in arr[-length:]]
@@ -308,7 +307,7 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
 
 
 def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
-    """Проверка базового сигнала"""
+    """Check for basic trading signal"""
     if not indicators:
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
@@ -330,26 +329,21 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
 
         conditions = []
 
-        # EMA alignment
         if price > ema5 and ema5 > ema8 and ema8 > ema20:
             conditions.append(('LONG', 25))
 
         if price < ema5 and ema5 < ema8 and ema8 < ema20:
             conditions.append(('SHORT', 25))
 
-        # RSI
         if 30.0 < rsi < 70.0:
             conditions.append(('ANY', 15))
 
-        # MACD
         if abs(macd_hist) > 0.001:
             conditions.append(('ANY', 15))
 
-        # Volume
         if volume_ratio >= config.MIN_VOLUME_RATIO:
             conditions.append(('ANY', 20))
 
-        # ATR
         if atr > 0.001:
             conditions.append(('ANY', 10))
 

@@ -113,9 +113,9 @@ SMC Patterns (из unified analysis):
       "risk_reward_ratio": 2.4,
       "hold_duration_minutes": 720,
       "action": "APPROVED",
-      "validation_notes": "Strong trend alignment, good R/R 2.4:1, neutral funding 0.015%, BTC correlation 0.82 supports LONG, orderflow bullish",
-      "market_conditions": "Favorable: tight spread 0.05%, neutral funding, BTC uptrend aligned, strong bid support",
-      "key_levels": "Entry at $43251 (OB zone), Stop $42980 (below swing low), TP1 $43892 (1.5R), TP2 $44500 (2.5R), TP3 $45200 (4R)"
+      "validation_notes": "Сильное совпадение тренда, хорошее соотношение риск/прибыль 2.4:1, нейтральное финансирование 0.015%, корреляция BTC 0.82 поддерживает LONG, ордерфлоу бычий",
+      "market_conditions": "Благоприятные: узкий спред 0.05%, нейтральное финансирование, тренд BTC восходящий, сильная поддержка покупок",
+      "key_levels": "Вход по $43251 (зона ордер-блока), Стоп $42980 (ниже локального минимума), TP1 $43892 (1.5R), TP2 $44500 (2.5R), TP3 $45200 (4R)"
     }
   ],
   "rejected_signals": []
@@ -127,9 +127,10 @@ SMC Patterns (из unified analysis):
   "rejected_signals": [
     {
       "symbol": "ETHUSDT",
-      "reason": "R/R ratio 1.3 below minimum 2.0, funding rate 0.12% extreme (overleveraged longs)"
+      "reason": "Соотношение риск/прибыль 1.3 ниже минимального 2.0, ставка финансирования 0.12% экстремальная (чрезмерно зашорченные лонги)"
     }
   ]
+}
 }
 
 ЕСЛИ СИГНАЛ ОТКЛОНЕН - ВАЖНО:
@@ -162,3 +163,4 @@ SMC Patterns (из unified analysis):
 6. При rejection всё равно верни entry/stop/tp для полной отчетности
 
 Ты финальный гейткипер. Только лучшие сигналы проходят через тебя.
+!!!ВСЕ КОММЕНТАРИИ ПИШИ НА РУССКОМ!!!

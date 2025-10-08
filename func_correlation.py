@@ -1,6 +1,5 @@
 """
-Модуль корреляционного анализа
-BTC correlation, sector analysis, anomaly detection
+Correlation analysis module
 """
 
 import numpy as np
@@ -13,9 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class CorrelationAnalyzer:
-    """Анализ корреляций между криптовалютами"""
+    """Correlation analysis between cryptocurrencies"""
 
-    # Определение секторов
     SECTORS = {
         'LAYER1': ['ETHUSDT', 'SOLUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'ATOMUSDT', 'NEARUSDT'],
         'DEFI': ['AAVEUSDT', 'UNIUSDT', 'SUSHIUSDT', 'CRVUSDT', 'COMPUSDT', 'MKRUSDT', 'SNXUSDT'],
@@ -27,17 +25,17 @@ class CorrelationAnalyzer:
     }
 
     def __init__(self):
-        self.price_cache = {}  # {symbol: [prices]}
+        self.price_cache = {}
 
     def get_sector(self, symbol: str) -> Optional[str]:
-        """Определить сектор монеты"""
+        """Get sector for symbol"""
         for sector, symbols in self.SECTORS.items():
             if symbol in symbols:
                 return sector
         return None
 
     def get_sector_peers(self, symbol: str, max_peers: int = 5) -> List[str]:
-        """Получить пары из того же сектора"""
+        """Get peers from same sector"""
         sector = self.get_sector(symbol)
         if not sector:
             return []
@@ -46,25 +44,18 @@ class CorrelationAnalyzer:
         return peers[:max_peers]
 
     def cache_prices(self, symbol: str, prices: List[float]):
-        """Кешировать ценовые данные для корреляционного анализа"""
+        """Cache price data"""
         self.price_cache[symbol] = prices
 
     def calculate_correlation(self, prices1: List[float], prices2: List[float]) -> float:
-        """
-        Рассчитать корреляцию Пирсона между двумя ценовыми рядами
-
-        Returns:
-            correlation coefficient (-1 to 1)
-        """
+        """Calculate Pearson correlation"""
         if len(prices1) != len(prices2) or len(prices1) < 10:
             return 0.0
 
         try:
-            # Используем numpy для точности
             arr1 = np.array(prices1, dtype=np.float64)
             arr2 = np.array(prices2, dtype=np.float64)
 
-            # Убираем NaN и inf
             mask = np.isfinite(arr1) & np.isfinite(arr2)
             arr1 = arr1[mask]
             arr2 = arr2[mask]
@@ -81,7 +72,7 @@ class CorrelationAnalyzer:
             return float(correlation)
 
         except Exception as e:
-            logger.debug(f"Ошибка расчета корреляции: {e}")
+            logger.debug(f"Correlation calculation error: {e}")
             return 0.0
 
     def calculate_btc_correlation(
@@ -91,38 +82,20 @@ class CorrelationAnalyzer:
             btc_prices: List[float],
             window: int = 24
     ) -> Dict:
-        """
-        Рассчитать корреляцию с BTC
-
-        Args:
-            symbol: торговая пара
-            symbol_prices: цены символа (закрытия свечей)
-            btc_prices: цены BTC (закрытия свечей)
-            window: окно для корреляции (количество свечей)
-
-        Returns:
-            {
-                'correlation': 0.85,
-                'correlation_strength': 'STRONG' / 'MODERATE' / 'WEAK',
-                'is_correlated': True / False,
-                'reasoning': '...'
-            }
-        """
+        """Calculate correlation with BTC"""
         if len(symbol_prices) < window or len(btc_prices) < window:
             return {
                 'correlation': 0.0,
                 'correlation_strength': 'UNKNOWN',
                 'is_correlated': False,
-                'reasoning': 'Insufficient data for correlation'
+                'reasoning': 'Insufficient data'
             }
 
-        # Берем последние N свечей
         recent_symbol = symbol_prices[-window:]
         recent_btc = btc_prices[-window:]
 
         corr = self.calculate_correlation(recent_symbol, recent_btc)
 
-        # Определяем силу корреляции
         abs_corr = abs(corr)
 
         if abs_corr > 0.7:
@@ -151,60 +124,37 @@ class CorrelationAnalyzer:
             btc_change_pct: float,
             correlation: float
     ) -> Dict:
-        """
-        Определить аномалию в корреляции (расхождение движений)
-
-        Args:
-            symbol: торговая пара
-            symbol_change_pct: изменение цены символа за период (%)
-            btc_change_pct: изменение цены BTC за период (%)
-            correlation: текущая корреляция
-
-        Returns:
-            {
-                'anomaly_detected': True / False,
-                'anomaly_type': 'DECOUPLING_STRENGTH' / 'DECOUPLING_WEAKNESS' / 'NONE',
-                'expected_direction': 'UP' / 'DOWN' / 'NEUTRAL',
-                'confidence_adjustment': +10 / -10 / 0,
-                'reasoning': '...'
-            }
-        """
-        # Если корреляция слабая, аномалий не отслеживаем
+        """Detect correlation anomaly"""
         if abs(correlation) < 0.5:
             return {
                 'anomaly_detected': False,
                 'anomaly_type': 'NONE',
                 'expected_direction': 'NEUTRAL',
                 'confidence_adjustment': 0,
-                'reasoning': f'Weak correlation {correlation:.2f}, no anomaly tracking'
+                'reasoning': f'Weak correlation {correlation:.2f}'
             }
 
-        # Определяем ожидаемое направление на основе BTC
-        if correlation > 0.5:  # Положительная корреляция
+        if correlation > 0.5:
             expected_move_sign = np.sign(btc_change_pct)
-        elif correlation < -0.5:  # Отрицательная корреляция
+        elif correlation < -0.5:
             expected_move_sign = -np.sign(btc_change_pct)
         else:
             expected_move_sign = 0
 
         actual_move_sign = np.sign(symbol_change_pct)
 
-        # Проверяем расхождение
         if expected_move_sign != 0 and actual_move_sign != 0:
-            # Если знаки совпадают - нормально
             if expected_move_sign == actual_move_sign:
-                # Проверяем силу движения
                 expected_magnitude = abs(btc_change_pct) * abs(correlation)
                 actual_magnitude = abs(symbol_change_pct)
 
                 if actual_magnitude > expected_magnitude * 1.5:
-                    # Символ двигается сильнее чем ожидалось
                     return {
                         'anomaly_detected': True,
                         'anomaly_type': 'DECOUPLING_STRENGTH',
                         'expected_direction': 'UP' if actual_move_sign > 0 else 'DOWN',
                         'confidence_adjustment': +10,
-                        'reasoning': f'{symbol} moving {actual_magnitude:.1f}% vs expected {expected_magnitude:.1f}% (stronger than BTC)'
+                        'reasoning': f'{symbol} moving {actual_magnitude:.1f}% vs expected {expected_magnitude:.1f}%'
                     }
                 else:
                     return {
@@ -215,13 +165,12 @@ class CorrelationAnalyzer:
                         'reasoning': f'{symbol} following BTC normally'
                     }
             else:
-                # Знаки НЕ совпадают - аномалия!
                 return {
                     'anomaly_detected': True,
                     'anomaly_type': 'DECOUPLING_WEAKNESS',
                     'expected_direction': 'NEUTRAL',
                     'confidence_adjustment': -15,
-                    'reasoning': f'{symbol} {symbol_change_pct:+.1f}% vs BTC {btc_change_pct:+.1f}% - divergence, risky'
+                    'reasoning': f'{symbol} {symbol_change_pct:+.1f}% vs BTC {btc_change_pct:+.1f}% divergence'
                 }
 
         return {
@@ -237,22 +186,7 @@ class CorrelationAnalyzer:
             symbol: str,
             sector_prices_data: Dict[str, List[float]]
     ) -> Dict:
-        """
-        Анализ производительности сектора
-
-        Args:
-            symbol: анализируемая пара
-            sector_prices_data: {symbol: [prices]} для всех пар сектора
-
-        Returns:
-            {
-                'sector': 'LAYER1',
-                'sector_trend': 'UP' / 'DOWN' / 'NEUTRAL',
-                'symbol_vs_sector': 'LEADING' / 'LAGGING' / 'INLINE',
-                'confidence_adjustment': +8 / -8 / 0,
-                'reasoning': '...'
-            }
-        """
+        """Analyze sector performance"""
         sector = self.get_sector(symbol)
 
         if not sector or not sector_prices_data:
@@ -261,10 +195,9 @@ class CorrelationAnalyzer:
                 'sector_trend': 'UNKNOWN',
                 'symbol_vs_sector': 'UNKNOWN',
                 'confidence_adjustment': 0,
-                'reasoning': 'Sector data not available'
+                'reasoning': 'No sector data'
             }
 
-        # Рассчитываем средний % изменения по сектору
         sector_changes = []
 
         for peer_symbol, prices in sector_prices_data.items():
@@ -280,12 +213,11 @@ class CorrelationAnalyzer:
                 'sector_trend': 'UNKNOWN',
                 'symbol_vs_sector': 'UNKNOWN',
                 'confidence_adjustment': 0,
-                'reasoning': 'Insufficient sector peer data'
+                'reasoning': 'Insufficient peer data'
             }
 
         avg_sector_change = np.mean(sector_changes)
 
-        # Определяем тренд сектора
         if avg_sector_change > 1.0:
             sector_trend = 'UP'
         elif avg_sector_change < -1.0:
@@ -293,7 +225,6 @@ class CorrelationAnalyzer:
         else:
             sector_trend = 'NEUTRAL'
 
-        # Определяем позицию символа относительно сектора
         symbol_prices = sector_prices_data.get(symbol)
         if not symbol_prices or len(symbol_prices) < 2:
             return {
@@ -301,24 +232,23 @@ class CorrelationAnalyzer:
                 'sector_trend': sector_trend,
                 'symbol_vs_sector': 'UNKNOWN',
                 'confidence_adjustment': 0,
-                'reasoning': f'Sector {sector} trend: {sector_trend}, but no symbol data'
+                'reasoning': f'Sector {sector} trend: {sector_trend}'
             }
 
         symbol_change = ((symbol_prices[-1] - symbol_prices[0]) / symbol_prices[0]) * 100
 
-        # Сравниваем с сектором
         if symbol_change > avg_sector_change + 0.5:
             position = 'LEADING'
             adjustment = +8
-            reasoning = f'{symbol} {symbol_change:+.1f}% outperforming {sector} sector avg {avg_sector_change:+.1f}%'
+            reasoning = f'{symbol} {symbol_change:+.1f}% outperforming {sector} {avg_sector_change:+.1f}%'
         elif symbol_change < avg_sector_change - 0.5:
             position = 'LAGGING'
             adjustment = -8
-            reasoning = f'{symbol} {symbol_change:+.1f}% underperforming {sector} sector avg {avg_sector_change:+.1f}%'
+            reasoning = f'{symbol} {symbol_change:+.1f}% underperforming {sector} {avg_sector_change:+.1f}%'
         else:
             position = 'INLINE'
             adjustment = 0
-            reasoning = f'{symbol} {symbol_change:+.1f}% moving inline with {sector} sector {avg_sector_change:+.1f}%'
+            reasoning = f'{symbol} {symbol_change:+.1f}% inline with {sector} {avg_sector_change:+.1f}%'
 
         return {
             'sector': sector,
@@ -335,70 +265,52 @@ class CorrelationAnalyzer:
             btc_trend: str,
             correlation: float
     ) -> Dict:
-        """
-        Проверить выравнивание сигнала с трендом BTC
-
-        Args:
-            symbol: торговая пара
-            signal_direction: 'LONG' / 'SHORT'
-            btc_trend: 'UP' / 'DOWN' / 'FLAT'
-            correlation: корреляция с BTC
-
-        Returns:
-            {
-                'aligned': True / False,
-                'should_block': True / False,
-                'confidence_adjustment': -20 / 0,
-                'reasoning': '...'
-            }
-        """
-        # Если корреляция слабая, BTC не критичен
+        """Check signal alignment with BTC trend"""
         if abs(correlation) < 0.5:
             return {
                 'aligned': True,
                 'should_block': False,
                 'confidence_adjustment': 0,
-                'reasoning': f'Weak BTC correlation {correlation:.2f}, independent movement ok'
+                'reasoning': f'Weak BTC correlation {correlation:.2f}'
             }
 
-        # Сильная корреляция - проверяем alignment
-        if correlation > 0.5:  # Положительная корреляция
+        if correlation > 0.5:
             if signal_direction == 'LONG' and btc_trend == 'UP':
                 return {
                     'aligned': True,
                     'should_block': False,
                     'confidence_adjustment': +5,
-                    'reasoning': 'LONG aligned with BTC uptrend, good'
+                    'reasoning': 'LONG aligned with BTC uptrend'
                 }
             elif signal_direction == 'SHORT' and btc_trend == 'DOWN':
                 return {
                     'aligned': True,
                     'should_block': False,
                     'confidence_adjustment': +5,
-                    'reasoning': 'SHORT aligned with BTC downtrend, good'
+                    'reasoning': 'SHORT aligned with BTC downtrend'
                 }
             else:
                 return {
                     'aligned': False,
                     'should_block': True,
                     'confidence_adjustment': -20,
-                    'reasoning': f'{signal_direction} against BTC {btc_trend} trend, high correlation {correlation:.2f}, BLOCK'
+                    'reasoning': f'{signal_direction} against BTC {btc_trend}, correlation {correlation:.2f}, BLOCK'
                 }
 
-        elif correlation < -0.5:  # Отрицательная корреляция
+        elif correlation < -0.5:
             if signal_direction == 'LONG' and btc_trend == 'DOWN':
                 return {
                     'aligned': True,
                     'should_block': False,
                     'confidence_adjustment': +5,
-                    'reasoning': 'LONG with negative BTC correlation during BTC down, aligned'
+                    'reasoning': 'LONG with negative BTC correlation during BTC down'
                 }
             elif signal_direction == 'SHORT' and btc_trend == 'UP':
                 return {
                     'aligned': True,
                     'should_block': False,
                     'confidence_adjustment': +5,
-                    'reasoning': 'SHORT with negative BTC correlation during BTC up, aligned'
+                    'reasoning': 'SHORT with negative BTC correlation during BTC up'
                 }
             else:
                 return {
@@ -412,14 +324,12 @@ class CorrelationAnalyzer:
             'aligned': True,
             'should_block': False,
             'confidence_adjustment': 0,
-            'reasoning': 'Moderate correlation, acceptable'
+            'reasoning': 'Moderate correlation'
         }
 
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-
 def extract_prices_from_candles(candles: List[List]) -> List[float]:
-    """Извлечь цены закрытия из свечей"""
+    """Extract close prices from candles"""
     try:
         return [float(candle[4]) for candle in candles]
     except (IndexError, ValueError, TypeError):
@@ -427,12 +337,7 @@ def extract_prices_from_candles(candles: List[List]) -> List[float]:
 
 
 def calculate_price_change(prices: List[float], window: int = 24) -> float:
-    """
-    Рассчитать % изменения цены за окно
-
-    Returns:
-        percentage change (e.g., 2.5 for +2.5%)
-    """
+    """Calculate price change percentage"""
     if len(prices) < window:
         window = len(prices)
 
@@ -453,12 +358,7 @@ def calculate_price_change(prices: List[float], window: int = 24) -> float:
 
 
 def determine_trend(prices: List[float], window: int = 20) -> str:
-    """
-    Определить тренд по ценам
-
-    Returns:
-        'UP' / 'DOWN' / 'FLAT'
-    """
+    """Determine price trend"""
     if len(prices) < window:
         window = len(prices)
 
@@ -468,7 +368,6 @@ def determine_trend(prices: List[float], window: int = 20) -> str:
     try:
         recent_prices = prices[-window:]
 
-        # Простой метод: сравниваем первую и последнюю треть
         first_third = np.mean(recent_prices[:window // 3])
         last_third = np.mean(recent_prices[-window // 3:])
 
@@ -491,43 +390,27 @@ async def get_comprehensive_correlation_analysis(
         signal_direction: str,
         sector_candles: Dict[str, List[List]] = None
 ) -> Dict:
-    """
-    Полный корреляционный анализ для одной пары
-
-    Args:
-        symbol: анализируемая пара
-        symbol_candles: свечи символа
-        btc_candles: свечи BTC
-        signal_direction: направление сигнала ('LONG'/'SHORT')
-        sector_candles: опционально - свечи пар из сектора
-
-    Returns:
-        Полный анализ корреляций с рекомендациями
-    """
+    """Comprehensive correlation analysis"""
     analyzer = CorrelationAnalyzer()
 
-    # Извлекаем цены
     symbol_prices = extract_prices_from_candles(symbol_candles)
     btc_prices = extract_prices_from_candles(btc_candles)
 
     if len(symbol_prices) < 24 or len(btc_prices) < 24:
         return {
             'symbol': symbol,
-            'error': 'Insufficient price data',
+            'error': 'Insufficient data',
             'total_confidence_adjustment': 0,
             'should_block_signal': False
         }
 
-    # 1. BTC Correlation
     btc_corr_result = analyzer.calculate_btc_correlation(
         symbol, symbol_prices, btc_prices, window=24
     )
 
-    # 2. Price changes
     symbol_change_1h = calculate_price_change(symbol_prices, window=1)
     btc_change_1h = calculate_price_change(btc_prices, window=1)
 
-    # 3. Correlation anomaly
     anomaly_result = analyzer.detect_correlation_anomaly(
         symbol,
         symbol_change_1h,
@@ -535,10 +418,8 @@ async def get_comprehensive_correlation_analysis(
         btc_corr_result['correlation']
     )
 
-    # 4. BTC trend
     btc_trend = determine_trend(btc_prices, window=20)
 
-    # 5. BTC alignment check
     alignment_result = analyzer.check_btc_alignment(
         symbol,
         signal_direction,
@@ -546,7 +427,6 @@ async def get_comprehensive_correlation_analysis(
         btc_corr_result['correlation']
     )
 
-    # 6. Sector analysis (если данные есть)
     sector_result = {'confidence_adjustment': 0, 'reasoning': 'No sector data'}
 
     if sector_candles:
@@ -561,14 +441,12 @@ async def get_comprehensive_correlation_analysis(
             sector_prices_data
         )
 
-    # Суммируем adjustments
     total_adjustment = (
             anomaly_result['confidence_adjustment'] +
             alignment_result['confidence_adjustment'] +
             sector_result['confidence_adjustment']
     )
 
-    # Определяем блокировку
     should_block = alignment_result['should_block']
 
     return {

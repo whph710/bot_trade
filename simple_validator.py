@@ -1,6 +1,5 @@
 """
-Упрощенный валидатор - UPDATED
-Поддержка 3 TP уровней + полная информация об отклоненных сигналах
+Simple validator with full level support
 """
 
 import logging
@@ -10,20 +9,8 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-async def validate_signals_simple(
-        ai_router,
-        preliminary_signals: List[Dict]
-) -> Dict:
-    """
-    Простая валидация через Claude
-
-    Args:
-        ai_router: роутер для вызова Claude
-        preliminary_signals: сигналы из Stage 3 (с comprehensive_data)
-
-    Returns:
-        {'validated': [...], 'rejected': [...]}
-    """
+async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
+    """Simple validation through AI"""
     if not preliminary_signals:
         return {'validated': [], 'rejected': []}
 
@@ -37,26 +24,21 @@ async def validate_signals_simple(
 
             logger.debug(f"Validating {symbol}...")
 
-            # Claude валидация
             validation_result = await ai_router.validate_signal_with_stage3_data(
                 signal,
                 comprehensive_data
             )
 
-            # Извлекаем TP levels
             tp_levels = validation_result.get('take_profit_levels', signal.get('take_profit_levels', [0, 0, 0]))
 
-            # Убеждаемся что это список
             if not isinstance(tp_levels, list):
                 tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
             elif len(tp_levels) < 3:
-                # Дополняем до 3
                 while len(tp_levels) < 3:
                     last_tp = tp_levels[-1] if tp_levels else 0
                     tp_levels.append(last_tp * 1.1)
 
             if validation_result.get('approved', False):
-                # Approved
                 validated_signal = {
                     'symbol': symbol,
                     'signal': signal['signal'],
@@ -70,13 +52,12 @@ async def validate_signals_simple(
                     'validation_notes': validation_result.get('validation_notes', ''),
                     'market_conditions': validation_result.get('market_conditions', ''),
                     'key_levels': validation_result.get('key_levels', ''),
-                    'validation_method': 'claude',
+                    'validation_method': validation_result.get('validation_method', 'ai'),
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
                 validated.append(validated_signal)
-                logger.info(f"✓ {symbol} VALIDATED")
+                logger.info(f"Validated {symbol}")
             else:
-                # Rejected - СОХРАНЯЕМ ВСЕ УРОВНИ!
                 rejected_signal = {
                     'symbol': symbol,
                     'signal': signal.get('signal', 'UNKNOWN'),
@@ -84,16 +65,15 @@ async def validate_signals_simple(
                     'entry_price': validation_result.get('entry_price', signal.get('entry_price', 0)),
                     'stop_loss': validation_result.get('stop_loss', signal.get('stop_loss', 0)),
                     'take_profit_levels': tp_levels,
-                    'rejection_reason': validation_result.get('rejection_reason', 'Claude validation failed'),
+                    'rejection_reason': validation_result.get('rejection_reason', 'Validation failed'),
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
                 rejected.append(rejected_signal)
-                logger.info(f"✗ {symbol} REJECTED: {rejected_signal['rejection_reason']}")
+                logger.info(f"Rejected {symbol}: {rejected_signal['rejection_reason']}")
 
         except Exception as e:
             logger.error(f"Validation error for {signal['symbol']}: {e}")
 
-            # Даже при ошибке сохраняем уровни
             tp_levels = signal.get('take_profit_levels', [0, 0, 0])
             if not isinstance(tp_levels, list):
                 tp_levels = [0, 0, 0]
@@ -117,7 +97,7 @@ async def validate_signals_simple(
 
 
 def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> Dict:
-    """Простая статистика валидации"""
+    """Calculate validation statistics"""
     total = len(validated) + len(rejected)
 
     if total == 0:
@@ -132,11 +112,9 @@ def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> D
 
     approval_rate = (len(validated) / total) * 100 if total > 0 else 0
 
-    # Средний R/R
     rr_ratios = [sig.get('risk_reward_ratio', 0) for sig in validated if sig.get('risk_reward_ratio', 0) > 0]
     avg_rr = sum(rr_ratios) / len(rr_ratios) if rr_ratios else 0
 
-    # Топ причины отклонения
     rejection_reasons = {}
     for rej in rejected:
         reason = rej.get('rejection_reason', 'Unknown')

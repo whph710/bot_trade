@@ -1,5 +1,5 @@
 """
-Клиент для работы с Anthropic Claude API
+Anthropic Claude API client
 """
 
 import asyncio
@@ -13,18 +13,28 @@ logger = logging.getLogger(__name__)
 
 
 class AnthropicClient:
-    """Асинхронный клиент для Anthropic Claude API"""
+    """Async Anthropic Claude API client"""
 
     def __init__(self):
         self.api_key = config.ANTHROPIC_API_KEY
         self.model = config.ANTHROPIC_MODEL
         self.base_url = "https://api.anthropic.com/v1/messages"
         self.timeout = config.API_TIMEOUT
+        self.use_thinking = config.ANTHROPIC_THINKING
 
-    async def _make_request(self, messages: List[Dict], max_tokens: int = 1000, temperature: float = 0.7) -> Optional[str]:
-        """Базовый запрос к Anthropic API"""
+    async def call(
+            self,
+            prompt: str,
+            max_tokens: int = 1000,
+            temperature: float = 0.7,
+            use_thinking: bool = None
+    ) -> str:
+        """Make API request"""
         if not self.api_key:
-            raise ValueError("Anthropic API key не найден")
+            raise ValueError("Anthropic API key not found")
+
+        if use_thinking is None:
+            use_thinking = self.use_thinking
 
         headers = {
             "x-api-key": self.api_key,
@@ -36,8 +46,11 @@ class AnthropicClient:
             "model": self.model,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "messages": messages
+            "messages": [{"role": "user", "content": prompt}]
         }
+
+        if use_thinking:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": 1000}
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -49,54 +62,39 @@ class AnthropicClient:
 
                 response.raise_for_status()
                 data = response.json()
-
                 return data["content"][0]["text"]
 
         except httpx.TimeoutException:
-            logger.error("Таймаут запроса к Anthropic API")
+            logger.error("Anthropic API timeout")
             raise asyncio.TimeoutError("Anthropic API timeout")
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.error(f"Anthropic API 404: возможно неправильная версия API или модель {self.model}")
-                logger.error(f"URL: {self.base_url}")
-                logger.error(f"Попробуйте обновить модель в конфигурации")
-            logger.error(f"HTTP ошибка Anthropic API: {e}")
-            raise
-        except httpx.HTTPError as e:
-            logger.error(f"HTTP ошибка Anthropic API: {e}")
+            logger.error(f"Anthropic HTTP error: {e.response.status_code}")
             raise
         except Exception as e:
-            logger.error(f"Общая ошибка Anthropic API: {e}")
+            logger.error(f"Anthropic error: {e}")
             raise
 
     def extract_json(self, text: str) -> Optional[Dict]:
-        """Извлечение JSON из ответа Claude"""
+        """Extract JSON from response"""
         if not text:
             return None
 
         try:
-            # Убираем markdown блоки
             if '```json' in text:
                 start = text.find('```json') + 7
                 end = text.find('```', start)
                 if end != -1:
                     text = text[start:end].strip()
             elif '```' in text:
-                # Ищем JSON между любыми ``` блоками
                 parts = text.split('```')
                 for part in parts:
-                    try:
-                        if part.strip().startswith('{'):
-                            return json.loads(part.strip())
-                    except:
-                        continue
+                    if part.strip().startswith('{'):
+                        return json.loads(part.strip())
 
-            # Поиск JSON объекта в тексте
             start_idx = text.find('{')
             if start_idx == -1:
                 return None
 
-            # Подсчет скобок для нахождения полного JSON
             brace_count = 0
             for i, char in enumerate(text[start_idx:], start_idx):
                 if char == '{':
@@ -110,30 +108,20 @@ class AnthropicClient:
             return None
 
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON от Claude: {e}")
+            logger.error(f"JSON parsing error: {e}")
             return None
         except Exception as e:
-            logger.error(f"Общая ошибка извлечения JSON: {e}")
+            logger.error(f"JSON extraction error: {e}")
             return None
 
-    def safe_float_conversion(self, value) -> float:
-        """Безопасное преобразование в float с обработкой None"""
-        if value is None:
-            return 0.0
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
-
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
-        """Отбор пар через Claude"""
+        """Select pairs for analysis"""
         if not pairs_data:
             return []
 
         try:
             from deepseek import load_prompt_cached
 
-            # Подготавливаем компактные данные
             compact_data = {}
             for item in pairs_data[:config.MAX_BULK_PAIRS]:
                 symbol = item['symbol']
@@ -169,15 +157,8 @@ class AnthropicClient:
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             data_json = json.dumps(compact_data, separators=(',', ':'))
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": f"{prompt}\n\nДанные для анализа:\n{data_json}\n\nВерни JSON с выбранными парами."
-                }
-            ]
-
-            response_text = await self._make_request(
-                messages=messages,
+            response_text = await self.call(
+                prompt=f"{prompt}\n\nData:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_SELECT,
                 temperature=config.AI_TEMPERATURE_SELECT
             )
@@ -185,159 +166,46 @@ class AnthropicClient:
             result = self.extract_json(response_text)
             if result and 'selected_pairs' in result:
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
-                logger.info(f"Claude выбрал {len(selected_pairs)} пар")
+                logger.info(f"Claude selected {len(selected_pairs)} pairs")
                 return selected_pairs
 
-            logger.warning("Claude не вернул корректный результат отбора")
+            logger.warning("Claude returned no pairs")
             return []
 
         except Exception as e:
-            logger.error(f"Ошибка отбора пар через Claude: {e}")
+            logger.error(f"Claude pair selection error: {e}")
             return []
 
-    async def analyze_pair(self, symbol: str, data_5m: List, data_15m: List,
-                           indicators_5m: Dict, indicators_15m: Dict) -> Dict:
-        """Анализ пары через Claude с улучшенной обработкой ошибок"""
+    async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
+        """Validate trading signal"""
         try:
             from deepseek import load_prompt_cached
 
-            # Безопасное извлечение текущей цены
-            current_price = None
-
-            # Попытка 1: из indicators_5m
-            if indicators_5m and 'current' in indicators_5m:
-                current_price = indicators_5m['current'].get('price')
-
-            # Попытка 2: из indicators_15m
-            if current_price is None and indicators_15m and 'current' in indicators_15m:
-                current_price = indicators_15m['current'].get('price')
-
-            # Попытка 3: из последней свечи 5m
-            if current_price is None and data_5m and len(data_5m) > 0:
-                try:
-                    current_price = float(data_5m[-1][4])  # close price
-                except (IndexError, ValueError, TypeError):
-                    pass
-
-            current_price = self.safe_float_conversion(current_price)
-            if current_price <= 0:
-                return self._create_fallback_analysis(symbol, current_price)
-
-            analysis_data = {
-                'symbol': symbol,
-                'current_price': current_price,
-                'timeframes': {
-                    '5m': {
-                        'candles': data_5m[-80:],
-                        'indicators': {
-                            'ema5': indicators_5m.get('ema5_history', [])[-80:],
-                            'ema8': indicators_5m.get('ema8_history', [])[-80:],
-                            'ema20': indicators_5m.get('ema20_history', [])[-80:],
-                            'rsi': indicators_5m.get('rsi_history', [])[-80:],
-                            'macd_histogram': indicators_5m.get('macd_histogram_history', [])[-80:],
-                            'volume_ratio': indicators_5m.get('volume_ratio_history', [])[-80:]
-                        }
-                    },
-                    '15m': {
-                        'candles': data_15m[-40:],
-                        'indicators': {
-                            'ema5': indicators_15m.get('ema5_history', [])[-40:],
-                            'ema8': indicators_15m.get('ema8_history', [])[-40:],
-                            'ema20': indicators_15m.get('ema20_history', [])[-40:],
-                            'rsi': indicators_15m.get('rsi_history', [])[-40:],
-                            'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-40:]
-                        }
-                    }
+            validation_input = {
+                'signal': {
+                    'symbol': signal['symbol'],
+                    'signal': signal['signal'],
+                    'confidence': signal['confidence'],
+                    'entry_price': signal['entry_price'],
+                    'stop_loss': signal['stop_loss'],
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'analysis': signal.get('analysis', '')
                 },
-                'current_state': {
-                    'price': current_price,
-                    'atr': self.safe_float_conversion(indicators_5m.get('current', {}).get('atr', 0)),
-                    'trend_5m': 'UP' if self.safe_float_conversion(indicators_5m.get('current', {}).get('ema5', 0)) > self.safe_float_conversion(indicators_5m.get('current', {}).get('ema20', 0)) else 'DOWN',
-                    'trend_15m': 'UP' if self.safe_float_conversion(indicators_15m.get('current', {}).get('ema5', 0)) > self.safe_float_conversion(indicators_15m.get('current', {}).get('ema20', 0)) else 'DOWN',
-                    'rsi_5m': self.safe_float_conversion(indicators_5m.get('current', {}).get('rsi', 50)),
-                    'rsi_15m': self.safe_float_conversion(indicators_15m.get('current', {}).get('rsi', 50)),
-                    'volume_ratio': self.safe_float_conversion(indicators_5m.get('current', {}).get('volume_ratio', 1.0)),
-                    'macd_momentum': self.safe_float_conversion(indicators_5m.get('current', {}).get('macd_histogram', 0))
+                'comprehensive_data': {
+                    'market_data': comprehensive_data.get('market_data', {}),
+                    'correlation_data': comprehensive_data.get('correlation_data', {}),
+                    'volume_profile': comprehensive_data.get('volume_profile', {}),
+                    'orderflow_analysis': signal.get('orderflow_analysis', {}),
+                    'smc_analysis': signal.get('smc_analysis', {}),
+                    'current_price': comprehensive_data.get('current_price', 0)
                 }
-            }
-
-            prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
-            data_json = json.dumps(analysis_data, separators=(',', ':'))
-
-            messages = [
-                {
-                    "role": "user",
-                    "content": f"{prompt}\n\nДанные для анализа:\n{data_json}\n\nВерни JSON с анализом."
-                }
-            ]
-
-            response_text = await self._make_request(
-                messages=messages,
-                max_tokens=config.AI_MAX_TOKENS_ANALYZE,
-                temperature=config.AI_TEMPERATURE_ANALYZE
-            )
-
-            result = self.extract_json(response_text)
-
-            if result:
-                signal = str(result.get('signal', 'NO_SIGNAL')).upper()
-                confidence = max(0, min(100, int(self.safe_float_conversion(result.get('confidence', 0)))))
-                entry_price = self.safe_float_conversion(result.get('entry_price', current_price))
-                stop_loss = self.safe_float_conversion(result.get('stop_loss', 0))
-                take_profit = self.safe_float_conversion(result.get('take_profit', 0))
-                analysis = str(result.get('analysis', 'Анализ от Claude'))
-
-                # Валидация уровней
-                if signal in ['LONG', 'SHORT'] and entry_price > 0:
-                    if stop_loss <= 0:
-                        stop_loss = entry_price * (0.98 if signal == 'LONG' else 1.02)
-                    if take_profit <= 0:
-                        risk = abs(entry_price - stop_loss)
-                        take_profit = entry_price + (risk * 2 if signal == 'LONG' else -risk * 2)
-
-                return {
-                    'symbol': symbol,
-                    'signal': signal,
-                    'confidence': confidence,
-                    'entry_price': entry_price,
-                    'stop_loss': stop_loss,
-                    'take_profit': take_profit,
-                    'analysis': analysis,
-                    'ai_generated': True
-                }
-
-            return self._create_fallback_analysis(symbol, current_price)
-
-        except Exception as e:
-            logger.error(f"Ошибка анализа {symbol} через Claude: {e}")
-            current_price = self.safe_float_conversion(indicators_5m.get('current', {}).get('price', 0))
-            return self._create_fallback_analysis(symbol, current_price)
-
-    async def validate_signals(self, preliminary_signals: List[Dict], market_data: Dict) -> List[Dict]:
-        """Валидация сигналов через Claude"""
-        if not preliminary_signals:
-            return []
-
-        try:
-            from deepseek import load_prompt_cached
-
-            validation_data = {
-                'preliminary_signals': preliminary_signals,
-                'market_data': market_data
             }
 
             prompt = load_prompt_cached(config.VALIDATION_PROMPT)
-            data_json = json.dumps(validation_data, separators=(',', ':'))
+            data_json = json.dumps(validation_input, separators=(',', ':'))
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": f"{prompt}\n\nДанные для валидации:\n{data_json}\n\nВерни JSON с результатами валидации."
-                }
-            ]
-
-            response_text = await self._make_request(
-                messages=messages,
+            response_text = await self.call(
+                prompt=f"{prompt}\n\nValidation data:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_VALIDATE,
                 temperature=config.AI_TEMPERATURE_VALIDATE
             )
@@ -346,60 +214,81 @@ class AnthropicClient:
 
             if result and 'final_signals' in result:
                 final_signals = result.get('final_signals', [])
-                rejected_count = len(result.get('rejected_signals', []))
-                logger.info(f"Claude валидация: подтверждено {len(final_signals)}, отклонено {rejected_count}")
-                return final_signals
+                if final_signals:
+                    validated = final_signals[0]
+                    tp_levels = validated.get('take_profit_levels', signal.get('take_profit_levels', [0, 0, 0]))
 
-            logger.warning("Claude не вернул корректный результат валидации")
-            return self._create_fallback_validation(preliminary_signals)
+                    if not isinstance(tp_levels, list):
+                        tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
+
+                    return {
+                        'approved': True,
+                        'final_confidence': validated.get('confidence', signal['confidence']),
+                        'entry_price': validated.get('entry_price', signal['entry_price']),
+                        'stop_loss': validated.get('stop_loss', signal['stop_loss']),
+                        'take_profit_levels': tp_levels,
+                        'risk_reward_ratio': validated.get('risk_reward_ratio', 0),
+                        'hold_duration_minutes': validated.get('hold_duration_minutes', 720),
+                        'validation_notes': validated.get('validation_notes', ''),
+                        'market_conditions': validated.get('market_conditions', ''),
+                        'key_levels': validated.get('key_levels', ''),
+                        'validation_method': 'claude'
+                    }
+                else:
+                    rejected_info = result.get('rejected_signals', [{}])[0]
+                    return {
+                        'approved': False,
+                        'rejection_reason': rejected_info.get('reason', 'Claude rejected'),
+                        'entry_price': signal.get('entry_price', 0),
+                        'stop_loss': signal.get('stop_loss', 0),
+                        'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                        'final_confidence': signal.get('confidence', 0),
+                        'validation_method': 'claude'
+                    }
+
+            return self._fallback_validation(signal)
 
         except Exception as e:
-            logger.error(f"Ошибка валидации через Claude: {e}")
-            return self._create_fallback_validation(preliminary_signals)
+            logger.error(f"Claude validation error: {e}")
+            return self._fallback_validation(signal)
 
-    def _create_fallback_analysis(self, symbol: str, current_price: float) -> Dict:
-        """Fallback анализ"""
+    def _fallback_validation(self, signal: Dict) -> Dict:
+        """Fallback validation"""
+        entry = signal.get('entry_price', 0)
+        stop = signal.get('stop_loss', 0)
+        tp_levels = signal.get('take_profit_levels', [0, 0, 0])
+
+        if not isinstance(tp_levels, list):
+            tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
+
+        if entry > 0 and stop > 0 and tp_levels and tp_levels[0] > 0:
+            risk = abs(entry - stop)
+            reward = abs(tp_levels[1] - entry) if len(tp_levels) > 1 else abs(tp_levels[0] - entry)
+
+            if risk > 0:
+                rr_ratio = round(reward / risk, 2)
+                if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
+                    return {
+                        'approved': True,
+                        'final_confidence': signal['confidence'],
+                        'entry_price': entry,
+                        'stop_loss': stop,
+                        'take_profit_levels': tp_levels,
+                        'risk_reward_ratio': rr_ratio,
+                        'hold_duration_minutes': 720,
+                        'validation_method': 'fallback',
+                        'validation_notes': f'Fallback validation: R/R {rr_ratio}'
+                    }
+
         return {
-            'symbol': symbol,
-            'signal': 'NO_SIGNAL',
-            'confidence': 0,
-            'entry_price': current_price,
-            'stop_loss': 0,
-            'take_profit': 0,
-            'analysis': 'Claude анализ недоступен - fallback режим',
-            'ai_generated': False
+            'approved': False,
+            'rejection_reason': 'Fallback validation failed',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback'
         }
 
-    def _create_fallback_validation(self, preliminary_signals: List[Dict]) -> List[Dict]:
-        """Fallback валидация"""
-        validated_signals = []
 
-        for signal in preliminary_signals:
-            entry = self.safe_float_conversion(signal.get('entry_price', 0))
-            stop = self.safe_float_conversion(signal.get('stop_loss', 0))
-            profit = self.safe_float_conversion(signal.get('take_profit', 0))
-
-            if entry > 0 and stop > 0 and profit > 0:
-                risk = abs(entry - stop)
-                reward = abs(profit - entry)
-
-                if risk > 0:
-                    rr_ratio = round(reward / risk, 2)
-                    if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
-                        validated_signal = signal.copy()
-                        validated_signal.update({
-                            'risk_reward_ratio': rr_ratio,
-                            'hold_duration_minutes': 30,
-                            'validation_notes': f'Fallback валидация: R/R {rr_ratio}',
-                            'action': 'APPROVED',
-                            'market_conditions': 'Автоматическая оценка',
-                            'key_levels': f'Вход: {entry}, Стоп: {stop}, Профит: {profit}'
-                        })
-                        validated_signals.append(validated_signal)
-
-        logger.info(f"Fallback валидация Claude: подтверждено {len(validated_signals)} сигналов")
-        return validated_signals
-
-
-# Создаем глобальный экземпляр
 anthropic_client = AnthropicClient()

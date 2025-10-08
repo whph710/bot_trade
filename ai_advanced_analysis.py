@@ -1,5 +1,5 @@
 """
-AI модуль для продвинутого анализа - UNIFIED VERSION (FIXED)
+AI advanced analysis module
 """
 
 import json
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class AIAdvancedAnalyzer:
-    """AI-driven анализ - UNIFIED подход"""
+    """AI-driven unified analysis"""
 
     def __init__(self, ai_router):
         self.ai_router = ai_router
@@ -20,9 +20,7 @@ class AIAdvancedAnalyzer:
             symbol: str,
             comprehensive_data: Dict
     ) -> Dict:
-        """
-        UNIFIED анализ - все в одном запросе
-        """
+        """Unified analysis in one request"""
         try:
             candles_1h = comprehensive_data.get('candles_1h', [])
             candles_4h = comprehensive_data.get('candles_4h', [])
@@ -31,7 +29,6 @@ class AIAdvancedAnalyzer:
             current_price = comprehensive_data.get('current_price', 0)
             market_data = comprehensive_data.get('market_data', {})
 
-            # OrderBook
             orderbook_data = market_data.get('orderbook', {})
             orderbook_formatted = None
 
@@ -45,7 +42,6 @@ class AIAdvancedAnalyzer:
                     'spread_pct': orderbook_data.get('spread_pct', 0)
                 }
 
-            # SMC Candles
             candles_1h_formatted = []
             for i, c in enumerate(candles_1h[-50:]):
                 try:
@@ -62,7 +58,6 @@ class AIAdvancedAnalyzer:
                 except (IndexError, ValueError):
                     continue
 
-            # Unified dataset
             unified_data = {
                 'symbol': symbol,
                 'current_price': current_price,
@@ -114,20 +109,17 @@ class AIAdvancedAnalyzer:
             result = self._safe_parse_json(response)
 
             if not result:
-                logger.warning(f"Failed to parse unified analysis for {symbol}")
-                logger.debug(f"Claude response (first 500 chars): {response[:500]}")
+                logger.warning(f"Failed to parse analysis for {symbol}")
                 return self._fallback_unified_analysis(symbol, current_price)
 
             return self._validate_and_format_result(result, symbol, current_price)
 
         except Exception as e:
             logger.error(f"Unified analysis error for {symbol}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return self._fallback_unified_analysis(symbol, current_price)
 
     def _create_unified_prompt(self, symbol: str, data: Dict) -> str:
-        """Создать unified промпт для Claude"""
+        """Create unified prompt"""
 
         orderbook_str = "No orderbook data"
         if data.get('orderbook'):
@@ -274,14 +266,14 @@ CRITICAL:
         return prompt
 
     def _format_orderbook_levels(self, orders: List[List[float]]) -> str:
-        """Форматирование уровней стакана"""
+        """Format orderbook levels"""
         lines = []
         for i, (price, size) in enumerate(orders[:10]):
             lines.append(f"{i+1}. ${price:,.2f} | {size:,.0f}")
         return '\n'.join(lines)
 
     def _extract_market_context(self, data: Dict) -> Dict:
-        """Извлечь market context"""
+        """Extract market context"""
         market_data = data.get('market_data', {})
         return {
             'funding_rate': market_data.get('funding_rate', {}).get('funding_rate', 0) * 100 if market_data.get('funding_rate') else 0,
@@ -291,7 +283,7 @@ CRITICAL:
         }
 
     def _validate_and_format_result(self, result: Dict, symbol: str, current_price: float) -> Dict:
-        """Валидация и форматирование результата"""
+        """Validate and format result"""
         try:
             signal = str(result.get('signal', 'NO_SIGNAL')).upper()
             confidence = max(0, min(100, int(float(result.get('confidence', 0)))))
@@ -299,7 +291,6 @@ CRITICAL:
             entry_price = float(result.get('entry_price', 0) or 0)
             stop_loss = float(result.get('stop_loss', 0) or 0)
 
-            # TP Levels
             tp_levels_raw = result.get('take_profit_levels', [])
 
             if isinstance(tp_levels_raw, list) and len(tp_levels_raw) >= 3:
@@ -325,7 +316,7 @@ CRITICAL:
                 else:
                     take_profit_levels = [0, 0, 0]
 
-            analysis = str(result.get('analysis', 'Claude unified analysis'))
+            analysis = str(result.get('analysis', 'AI unified analysis'))
             rejection_reason = result.get('rejection_reason')
 
             orderflow = result.get('orderflow_analysis', {})
@@ -347,11 +338,11 @@ CRITICAL:
             }
 
         except Exception as e:
-            logger.error(f"Error validating unified result for {symbol}: {e}")
+            logger.error(f"Error validating result for {symbol}: {e}")
             return self._fallback_unified_analysis(symbol, current_price)
 
     def _fallback_unified_analysis(self, symbol: str, current_price: float) -> Dict:
-        """Fallback если Claude не сработал"""
+        """Fallback if AI failed"""
         return {
             'symbol': symbol,
             'signal': 'NO_SIGNAL',
@@ -368,11 +359,10 @@ CRITICAL:
         }
 
     def _safe_parse_json(self, response: str) -> Optional[Dict]:
-        """Безопасный парсинг JSON"""
+        """Safe JSON parsing"""
         try:
             response = response.strip()
 
-            # Удаляем markdown блоки
             if '```json' in response:
                 start = response.find('```json') + 7
                 end = response.find('```', start)
@@ -392,7 +382,6 @@ CRITICAL:
                         json_lines.append(line)
                 response = '\n'.join(json_lines)
 
-            # Ищем JSON объект
             start_idx = response.find('{')
             if start_idx == -1:
                 return None
@@ -411,10 +400,9 @@ CRITICAL:
 
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parsing error: {e}")
-            logger.debug(f"Response: {response[:500]}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected parsing error: {e}")
+            logger.error(f"Parsing error: {e}")
             return None
 
 
@@ -423,6 +411,6 @@ async def get_unified_analysis(
         symbol: str,
         comprehensive_data: Dict
 ) -> Dict:
-    """Удобная функция для unified анализа"""
+    """Convenience function for unified analysis"""
     analyzer = AIAdvancedAnalyzer(ai_router)
     return await analyzer.analyze_comprehensive_unified(symbol, comprehensive_data)
