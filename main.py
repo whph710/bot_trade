@@ -1,5 +1,5 @@
 """
-Trading Bot v5.0 - Production Ready
+Trading Bot v5.0 - Production Ready - OPTIMIZED VERSION
 """
 
 import asyncio
@@ -143,7 +143,7 @@ class TradingBot:
         return selected_pairs
 
     async def stage3_unified_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """Stage 3: Unified analysis"""
+        """Stage 3: Unified analysis - OPTIMIZED with parallel loading"""
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis for {len(selected_pairs)} pairs")
@@ -152,9 +152,12 @@ class TradingBot:
         if not selected_pairs:
             return []
 
-        logger.info("Loading BTC data...")
-        btc_candles_1h = await fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
-        btc_candles_4h = await fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+        # КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Параллельная загрузка BTC данных
+        logger.info("Loading BTC data (parallel)...")
+        btc_candles_1h, btc_candles_4h = await asyncio.gather(
+            fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
+            fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+        )
 
         final_signals = []
 
@@ -162,8 +165,11 @@ class TradingBot:
             try:
                 logger.debug(f"Analyzing {symbol}...")
 
-                klines_1h = await fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES)
-                klines_4h = await fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+                # КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Параллельная загрузка 1H и 4H свечей
+                klines_1h, klines_4h = await asyncio.gather(
+                    fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
+                    fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+                )
 
                 if not klines_1h or not klines_4h:
                     logger.warning(f"{symbol}: Failed to load candles")
@@ -190,6 +196,7 @@ class TradingBot:
 
                 collector = MarketDataCollector(await get_optimized_session())
 
+                # Market data уже параллелится внутри get_market_snapshot
                 market_snapshot = await collector.get_market_snapshot(symbol, current_price)
 
                 corr_analysis = await get_comprehensive_correlation_analysis(
@@ -368,10 +375,10 @@ class TradingBot:
 async def main():
     """Main function"""
     print("=" * 80)
-    print("TRADING BOT v5.0")
+    print("TRADING BOT v5.0 - OPTIMIZED")
     print(f"Stage 1: Base indicators")
     print(f"Stage 2: {config.STAGE2_PROVIDER.upper()} selection")
-    print(f"Stage 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
+    print(f"Stage 3: {config.STAGE3_PROVIDER.upper()} unified analysis (PARALLEL)")
     print(f"Stage 4: {config.STAGE4_PROVIDER.upper()} validation")
     print("=" * 80)
 

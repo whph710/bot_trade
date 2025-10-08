@@ -1,5 +1,5 @@
 """
-DeepSeek API client
+DeepSeek API client - FIXED VERSION
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import os
 from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 from config import config
+from utils import fallback_validation, extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -34,42 +35,6 @@ def load_prompt_cached(filename: str) -> str:
     except Exception as e:
         logger.error(f"Error loading prompt {filename}: {e}")
         raise
-
-
-def extract_json_optimized(text: str) -> Optional[Dict]:
-    """Extract JSON from AI response"""
-    if not text or len(text) < 10:
-        return None
-
-    try:
-        if '```json' in text:
-            start = text.find('```json') + 7
-            end = text.find('```', start)
-            if end != -1:
-                text = text[start:end].strip()
-        elif '```' in text:
-            text = text.replace('```', '').strip()
-
-        start_idx = text.find('{')
-        if start_idx == -1:
-            return None
-
-        brace_count = 0
-        for i, char in enumerate(text[start_idx:], start_idx):
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    json_str = text[start_idx:i+1]
-                    return json.loads(json_str)
-
-        return json.loads(text[start_idx:])
-
-    except json.JSONDecodeError:
-        return None
-    except Exception:
-        return None
 
 
 def safe_float_conversion(value) -> float:
@@ -188,7 +153,7 @@ class DeepSeekClient:
                 temperature=config.AI_TEMPERATURE_SELECT
             )
 
-            result = extract_json_optimized(response)
+            result = extract_json_from_response(response)
 
             if result and 'selected_pairs' in result:
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
@@ -230,13 +195,12 @@ class DeepSeekClient:
             data_json = json.dumps(validation_input, separators=(',', ':'))
 
             response = await self.call(
+                prompt=f"{prompt}\n\nValidation data:\n{data_json}",
+                max_tokens=config.AI_MAX_TOKENS_VALIDATE,
+                temperature=config.AI_TEMPERATURE_VALIDATE
+            )
 
-                prompt = f"{prompt}\n\nValidation data:\n{data_json}",
-                max_tokens = config.AI_MAX_TOKENS_VALIDATE,
-                temperature = config.AI_TEMPERATURE_VALIDATE
-                )
-
-            result = extract_json_optimized(response)
+            result = extract_json_from_response(response)
 
             if result and 'final_signals' in result:
                 final_signals = result.get('final_signals', [])
@@ -270,45 +234,8 @@ class DeepSeekClient:
                         'validation_method': 'deepseek'
                     }
 
-            return self._fallback_validation(signal)
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
         except Exception as e:
             logger.error(f"DeepSeek validation error: {e}")
-            return self._fallback_validation(signal)
-
-def _fallback_validation(self, signal: Dict) -> Dict:
-            """Fallback validation"""
-            entry = signal.get('entry_price', 0)
-            stop = signal.get('stop_loss', 0)
-            tp_levels = signal.get('take_profit_levels', [0, 0, 0])
-
-            if not isinstance(tp_levels, list):
-                tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
-
-            if entry > 0 and stop > 0 and tp_levels and tp_levels[0] > 0:
-                risk = abs(entry - stop)
-                reward = abs(tp_levels[1] - entry) if len(tp_levels) > 1 else abs(tp_levels[0] - entry)
-
-                if risk > 0:
-                    rr_ratio = round(reward / risk, 2)
-                    if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
-                        return {
-                            'approved': True,
-                            'final_confidence': signal['confidence'],
-                            'entry_price': entry,
-                            'stop_loss': stop,
-                            'take_profit_levels': tp_levels,
-                            'risk_reward_ratio': rr_ratio,
-                            'hold_duration_minutes': 720,
-                            'validation_method': 'fallback'
-                        }
-
-            return {
-                'approved': False,
-                'rejection_reason': 'Fallback validation failed',
-                'entry_price': entry,
-                'stop_loss': stop,
-                'take_profit_levels': tp_levels,
-                'final_confidence': signal.get('confidence', 0),
-                'validation_method': 'fallback'
-            }
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)

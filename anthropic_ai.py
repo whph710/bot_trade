@@ -1,5 +1,5 @@
 """
-Anthropic Claude API client
+Anthropic Claude API client - FIXED VERSION
 """
 
 import asyncio
@@ -8,6 +8,7 @@ import logging
 from typing import List, Dict, Optional
 import httpx
 from config import config
+from utils import fallback_validation, extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -19,22 +20,35 @@ class AnthropicClient:
         self.api_key = config.ANTHROPIC_API_KEY
         self.model = config.ANTHROPIC_MODEL
         self.base_url = "https://api.anthropic.com/v1/messages"
-        self.timeout = config.API_TIMEOUT
         self.use_thinking = config.ANTHROPIC_THINKING
+
+    def _get_timeout_for_stage(self, stage: str = None) -> float:
+        """Get dynamic timeout based on stage"""
+        if stage == 'analysis':
+            return getattr(config, 'API_TIMEOUT_ANALYSIS', 180)
+        elif stage == 'selection':
+            return getattr(config, 'API_TIMEOUT_SELECTION', 90)
+        elif stage == 'validation':
+            return getattr(config, 'API_TIMEOUT_VALIDATION', 120)
+        else:
+            return config.API_TIMEOUT
 
     async def call(
             self,
             prompt: str,
             max_tokens: int = 1000,
             temperature: float = 0.7,
-            use_thinking: bool = None
+            use_thinking: bool = None,
+            stage: str = None
     ) -> str:
-        """Make API request"""
+        """Make API request with dynamic timeout"""
         if not self.api_key:
             raise ValueError("Anthropic API key not found")
 
         if use_thinking is None:
             use_thinking = self.use_thinking
+
+        timeout = self._get_timeout_for_stage(stage)
 
         headers = {
             "x-api-key": self.api_key,
@@ -53,7 +67,7 @@ class AnthropicClient:
             payload["thinking"] = {"type": "enabled", "budget_tokens": 1000}
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     self.base_url,
                     headers=headers,
@@ -65,54 +79,14 @@ class AnthropicClient:
                 return data["content"][0]["text"]
 
         except httpx.TimeoutException:
-            logger.error("Anthropic API timeout")
-            raise asyncio.TimeoutError("Anthropic API timeout")
+            logger.error(f"Anthropic API timeout (stage: {stage}, timeout: {timeout}s)")
+            raise asyncio.TimeoutError(f"Anthropic API timeout after {timeout}s")
         except httpx.HTTPStatusError as e:
             logger.error(f"Anthropic HTTP error: {e.response.status_code}")
             raise
         except Exception as e:
             logger.error(f"Anthropic error: {e}")
             raise
-
-    def extract_json(self, text: str) -> Optional[Dict]:
-        """Extract JSON from response"""
-        if not text:
-            return None
-
-        try:
-            if '```json' in text:
-                start = text.find('```json') + 7
-                end = text.find('```', start)
-                if end != -1:
-                    text = text[start:end].strip()
-            elif '```' in text:
-                parts = text.split('```')
-                for part in parts:
-                    if part.strip().startswith('{'):
-                        return json.loads(part.strip())
-
-            start_idx = text.find('{')
-            if start_idx == -1:
-                return None
-
-            brace_count = 0
-            for i, char in enumerate(text[start_idx:], start_idx):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_str = text[start_idx:i + 1]
-                        return json.loads(json_str)
-
-            return None
-
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing error: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"JSON extraction error: {e}")
-            return None
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
         """Select pairs for analysis"""
@@ -160,10 +134,11 @@ class AnthropicClient:
             response_text = await self.call(
                 prompt=f"{prompt}\n\nData:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_SELECT,
-                temperature=config.AI_TEMPERATURE_SELECT
+                temperature=config.AI_TEMPERATURE_SELECT,
+                stage='selection'
             )
 
-            result = self.extract_json(response_text)
+            result = extract_json_from_response(response_text)
             if result and 'selected_pairs' in result:
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
                 logger.info(f"Claude selected {len(selected_pairs)} pairs")
@@ -207,10 +182,11 @@ class AnthropicClient:
             response_text = await self.call(
                 prompt=f"{prompt}\n\nValidation data:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_VALIDATE,
-                temperature=config.AI_TEMPERATURE_VALIDATE
+                temperature=config.AI_TEMPERATURE_VALIDATE,
+                stage='validation'
             )
 
-            result = self.extract_json(response_text)
+            result = extract_json_from_response(response_text)
 
             if result and 'final_signals' in result:
                 final_signals = result.get('final_signals', [])
@@ -246,49 +222,11 @@ class AnthropicClient:
                         'validation_method': 'claude'
                     }
 
-            return self._fallback_validation(signal)
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
         except Exception as e:
             logger.error(f"Claude validation error: {e}")
-            return self._fallback_validation(signal)
-
-    def _fallback_validation(self, signal: Dict) -> Dict:
-        """Fallback validation"""
-        entry = signal.get('entry_price', 0)
-        stop = signal.get('stop_loss', 0)
-        tp_levels = signal.get('take_profit_levels', [0, 0, 0])
-
-        if not isinstance(tp_levels, list):
-            tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
-
-        if entry > 0 and stop > 0 and tp_levels and tp_levels[0] > 0:
-            risk = abs(entry - stop)
-            reward = abs(tp_levels[1] - entry) if len(tp_levels) > 1 else abs(tp_levels[0] - entry)
-
-            if risk > 0:
-                rr_ratio = round(reward / risk, 2)
-                if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
-                    return {
-                        'approved': True,
-                        'final_confidence': signal['confidence'],
-                        'entry_price': entry,
-                        'stop_loss': stop,
-                        'take_profit_levels': tp_levels,
-                        'risk_reward_ratio': rr_ratio,
-                        'hold_duration_minutes': 720,
-                        'validation_method': 'fallback',
-                        'validation_notes': f'Fallback validation: R/R {rr_ratio}'
-                    }
-
-        return {
-            'approved': False,
-            'rejection_reason': 'Fallback validation failed',
-            'entry_price': entry,
-            'stop_loss': stop,
-            'take_profit_levels': tp_levels,
-            'final_confidence': signal.get('confidence', 0),
-            'validation_method': 'fallback'
-        }
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
 
 anthropic_client = AnthropicClient()

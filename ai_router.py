@@ -1,11 +1,12 @@
 """
-AI Router with provider selection
+AI Router with provider selection - FIXED VERSION
 """
 
 import logging
 import json
 from typing import List, Dict
 from config import config
+from utils import fallback_validation
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,8 @@ class AIRouter:
                     prompt=prompt,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    use_thinking=use_reasoning
+                    use_thinking=use_reasoning,
+                    stage=stage
                 )
             else:
                 return await self.deepseek_client.call(
@@ -135,7 +137,7 @@ class AIRouter:
 
         except Exception as e:
             logger.error(f"Validation error for {symbol}: {e}")
-            return self._fallback_validation(signal)
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
     def _fallback_analysis(self, symbol: str, current_price: float) -> Dict:
         """Fallback analysis result"""
@@ -151,44 +153,6 @@ class AIRouter:
             'smc_analysis': {},
             'ai_generated': False,
             'stage': 3
-        }
-
-    def _fallback_validation(self, signal: Dict) -> Dict:
-        """Fallback validation result"""
-        entry = signal.get('entry_price', 0)
-        stop = signal.get('stop_loss', 0)
-        tp_levels = signal.get('take_profit_levels', [0, 0, 0])
-
-        if not isinstance(tp_levels, list):
-            tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
-
-        if entry > 0 and stop > 0 and tp_levels and tp_levels[0] > 0:
-            risk = abs(entry - stop)
-            reward = abs(tp_levels[1] - entry) if len(tp_levels) > 1 else abs(tp_levels[0] - entry)
-
-            if risk > 0:
-                rr_ratio = round(reward / risk, 2)
-                if rr_ratio >= config.MIN_RISK_REWARD_RATIO:
-                    return {
-                        'approved': True,
-                        'final_confidence': signal['confidence'],
-                        'entry_price': entry,
-                        'stop_loss': stop,
-                        'take_profit_levels': tp_levels,
-                        'risk_reward_ratio': rr_ratio,
-                        'hold_duration_minutes': 720,
-                        'validation_method': 'fallback',
-                        'validation_notes': f'Fallback validation: R/R {rr_ratio}'
-                    }
-
-        return {
-            'approved': False,
-            'rejection_reason': 'Fallback validation failed',
-            'entry_price': entry,
-            'stop_loss': stop,
-            'take_profit_levels': tp_levels,
-            'final_confidence': signal.get('confidence', 0),
-            'validation_method': 'fallback'
         }
 
 

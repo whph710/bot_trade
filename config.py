@@ -1,5 +1,5 @@
 """
-Trading bot configuration
+Trading bot configuration - UPDATED WITH DYNAMIC TIMEOUTS
 """
 
 import os
@@ -71,9 +71,14 @@ class Config:
     # Performance
     BATCH_SIZE = 50
     MAX_CONCURRENT = 10
-    API_TIMEOUT = 120
     MAX_FINAL_PAIRS = 5
     MAX_BULK_PAIRS = 15
+
+    # API Timeouts - НОВОЕ: Динамические таймауты
+    API_TIMEOUT = 120  # Базовый таймаут
+    API_TIMEOUT_SELECTION = int(os.getenv('API_TIMEOUT_SELECTION', '90'))    # Stage 2
+    API_TIMEOUT_ANALYSIS = int(os.getenv('API_TIMEOUT_ANALYSIS', '180'))     # Stage 3
+    API_TIMEOUT_VALIDATION = int(os.getenv('API_TIMEOUT_VALIDATION', '120')) # Stage 4
 
     # Prompts
     SELECTION_PROMPT = 'prompt_select.txt'
@@ -87,6 +92,12 @@ class Config:
     AI_MAX_TOKENS_SELECT = int(os.getenv('AI_MAX_TOKENS_SELECT', '2000'))
     AI_MAX_TOKENS_ANALYZE = int(os.getenv('AI_MAX_TOKENS_ANALYZE', '3000'))
     AI_MAX_TOKENS_VALIDATE = int(os.getenv('AI_MAX_TOKENS_VALIDATE', '3500'))
+
+    # Market Data Thresholds - НОВОЕ: Вынесенные hardcoded значения
+    OI_CHANGE_GROWING_THRESHOLD = float(os.getenv('OI_CHANGE_GROWING_THRESHOLD', '2.0'))
+    OI_CHANGE_DECLINING_THRESHOLD = float(os.getenv('OI_CHANGE_DECLINING_THRESHOLD', '-2.0'))
+    SPREAD_ILLIQUID_THRESHOLD = float(os.getenv('SPREAD_ILLIQUID_THRESHOLD', '0.15'))
+    SPREAD_WARNING_THRESHOLD = float(os.getenv('SPREAD_WARNING_THRESHOLD', '0.08'))
 
 
 config = Config()
