@@ -1,5 +1,6 @@
 """
-Trading Bot v5.0 - Production Ready - OPTIMIZED VERSION
+Trading Bot v5.0 - Production Ready - FULLY OPTIMIZED VERSION
+Fixed: processed_pairs counter
 """
 
 import asyncio
@@ -57,16 +58,24 @@ class TradingBot:
             logger.error("Failed to get trading pairs")
             return []
 
+        logger.info(f"Found {len(pairs)} trading pairs, loading candles...")
         candles_map = await self.load_candles_batch(pairs, config.TIMEFRAME_LONG, config.QUICK_SCAN_CANDLES)
         logger.info(f"Loaded candles for {len(candles_map)} pairs")
 
+        if not candles_map:
+            logger.error("No valid candles loaded!")
+            return []
+
         pairs_with_signals = []
-        processed = 0
 
         for symbol, candles in candles_map.items():
             try:
+                # Increment counter IMMEDIATELY
+                self.processed_pairs += 1
+
                 indicators = calculate_basic_indicators(candles)
                 if not indicators:
+                    logger.debug(f"{symbol}: No indicators")
                     continue
 
                 signal_check = check_basic_signal(indicators)
@@ -78,8 +87,7 @@ class TradingBot:
                         'direction': signal_check['direction'],
                         'base_indicators': indicators
                     })
-
-                processed += 1
+                    logger.debug(f"{symbol}: Signal {signal_check['direction']} conf={signal_check['confidence']}")
 
             except Exception as e:
                 logger.debug(f"Error processing {symbol}: {e}")
@@ -88,10 +96,9 @@ class TradingBot:
         pairs_with_signals.sort(key=lambda x: x['confidence'], reverse=True)
 
         elapsed = time.time() - start_time
-        self.processed_pairs = processed
 
         logger.info(f"Stage 1 completed in {elapsed:.1f}s")
-        logger.info(f"Processed: {processed}, Signals: {len(pairs_with_signals)}")
+        logger.info(f"Processed: {self.processed_pairs}, Signals: {len(pairs_with_signals)}")
 
         return pairs_with_signals
 
@@ -103,6 +110,7 @@ class TradingBot:
         logger.info("=" * 60)
 
         if not signal_pairs:
+            logger.warning("No signal pairs to select from")
             return []
 
         symbols = [p['symbol'] for p in signal_pairs]
@@ -113,12 +121,14 @@ class TradingBot:
         for pair_data in signal_pairs:
             symbol = pair_data['symbol']
             if symbol not in candles_map:
+                logger.debug(f"{symbol}: No candles for AI selection")
                 continue
 
             candles = candles_map[symbol]
             indicators = calculate_ai_indicators(candles, config.AI_INDICATORS_HISTORY)
 
             if not indicators:
+                logger.debug(f"{symbol}: No indicators for AI selection")
                 continue
 
             ai_input_data.append({
@@ -130,7 +140,7 @@ class TradingBot:
             })
 
         if not ai_input_data:
-            logger.error("No data for AI selection")
+            logger.error("No data prepared for AI selection")
             return []
 
         logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER.upper()}")
@@ -140,32 +150,47 @@ class TradingBot:
         logger.info(f"Stage 2 completed in {elapsed:.1f}s")
         logger.info(f"Selected: {len(selected_pairs)} pairs")
 
+        if not selected_pairs:
+            logger.warning("AI selected 0 pairs - check AI selection logic")
+
         return selected_pairs
 
     async def stage3_unified_analysis(self, selected_pairs: List[str]) -> List[Dict]:
-        """Stage 3: Unified analysis - OPTIMIZED with parallel loading"""
+        """
+        Stage 3: Unified analysis - FULLY OPTIMIZED
+
+        OPTIMIZATIONS APPLIED:
+        1. ✅ Parallel BTC data loading (1h + 4h together)
+        2. ✅ Parallel pair candles loading (1h + 4h together)
+        3. ✅ Market data collection already parallelized in MarketDataCollector
+        """
         start_time = time.time()
         logger.info("=" * 60)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis for {len(selected_pairs)} pairs")
         logger.info("=" * 60)
 
         if not selected_pairs:
+            logger.warning("No pairs to analyze")
             return []
 
-        # КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Параллельная загрузка BTC данных
+        # OPTIMIZATION #1: Parallel BTC data loading
         logger.info("Loading BTC data (parallel)...")
         btc_candles_1h, btc_candles_4h = await asyncio.gather(
             fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
             fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
         )
 
+        if not btc_candles_1h or not btc_candles_4h:
+            logger.error("Failed to load BTC candles!")
+            return []
+
         final_signals = []
 
         for symbol in selected_pairs:
             try:
-                logger.debug(f"Analyzing {symbol}...")
+                logger.info(f"Analyzing {symbol}...")
 
-                # КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Параллельная загрузка 1H и 4H свечей
+                # OPTIMIZATION #2: Parallel pair candles loading (1h + 4h)
                 klines_1h, klines_4h = await asyncio.gather(
                     fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
                     fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
@@ -196,7 +221,7 @@ class TradingBot:
 
                 collector = MarketDataCollector(await get_optimized_session())
 
-                # Market data уже параллелится внутри get_market_snapshot
+                # OPTIMIZATION #3: Market data already parallelized inside get_market_snapshot
                 market_snapshot = await collector.get_market_snapshot(symbol, current_price)
 
                 corr_analysis = await get_comprehensive_correlation_analysis(
@@ -247,7 +272,7 @@ class TradingBot:
                     logger.info(f"[SKIPPED] {symbol} - {rejection if rejection else 'weak setup'}")
 
             except Exception as e:
-                logger.error(f"Error analyzing {symbol}: {e}")
+                logger.error(f"Error analyzing {symbol}: {e}", exc_info=True)
                 continue
 
         elapsed = time.time() - start_time
@@ -264,6 +289,7 @@ class TradingBot:
         logger.info("=" * 60)
 
         if not preliminary_signals:
+            logger.warning("No signals to validate")
             return {'validated': [], 'rejected': []}
 
         validation_result = await validate_signals_simple(ai_router, preliminary_signals)
@@ -288,26 +314,32 @@ class TradingBot:
         try:
             signal_pairs = await self.stage1_filter_signals()
             if not signal_pairs:
+                total_time = time.time() - cycle_start
+                logger.warning(f"Stage 1 found no signal pairs (processed {self.processed_pairs} pairs)")
                 return {
                     'result': 'NO_SIGNAL_PAIRS',
-                    'total_time': time.time() - cycle_start,
+                    'total_time': total_time,
                     'pairs_scanned': self.processed_pairs
                 }
 
             selected_pairs = await self.stage2_ai_select(signal_pairs)
             if not selected_pairs:
+                total_time = time.time() - cycle_start
+                logger.warning(f"Stage 2 selected no pairs from {len(signal_pairs)} candidates")
                 return {
                     'result': 'NO_AI_SELECTION',
-                    'total_time': time.time() - cycle_start,
+                    'total_time': total_time,
                     'signal_pairs': len(signal_pairs),
                     'pairs_scanned': self.processed_pairs
                 }
 
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
             if not preliminary_signals:
+                total_time = time.time() - cycle_start
+                logger.warning(f"Stage 3 produced no signals from {len(selected_pairs)} pairs")
                 return {
                     'result': 'NO_ANALYSIS_SIGNALS',
-                    'total_time': time.time() - cycle_start,
+                    'total_time': total_time,
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs': len(signal_pairs),
                     'ai_selected': len(selected_pairs)
@@ -341,7 +373,7 @@ class TradingBot:
                     'analyzed': len(preliminary_signals),
                     'validated_signals': len(validated),
                     'rejected_signals': len(rejected),
-                    'processing_speed': round(self.processed_pairs / total_time, 1)
+                    'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
                 },
                 'validated_signals': validated,
                 'rejected_signals': rejected,
@@ -360,11 +392,12 @@ class TradingBot:
             return final_result
 
         except Exception as e:
-            logger.error(f"Critical cycle error: {e}")
+            logger.error(f"Critical cycle error: {e}", exc_info=True)
             return {
                 'result': 'ERROR',
                 'error': str(e),
-                'total_time': time.time() - cycle_start
+                'total_time': time.time() - cycle_start,
+                'pairs_scanned': self.processed_pairs
             }
 
     async def cleanup(self):
@@ -375,7 +408,7 @@ class TradingBot:
 async def main():
     """Main function"""
     print("=" * 80)
-    print("TRADING BOT v5.0 - OPTIMIZED")
+    print("TRADING BOT v5.0 - FULLY OPTIMIZED")
     print(f"Stage 1: Base indicators")
     print(f"Stage 2: {config.STAGE2_PROVIDER.upper()} selection")
     print(f"Stage 3: {config.STAGE3_PROVIDER.upper()} unified analysis (PARALLEL)")

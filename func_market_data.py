@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime
 import math
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +132,10 @@ class MarketDataCollector:
                 else:
                     oi_change = 0
 
-                if oi_change > 2:
+                # Use config thresholds instead of hardcoded values
+                if oi_change > config.OI_CHANGE_GROWING_THRESHOLD:
                     trend = 'GROWING'
-                elif oi_change < -2:
+                elif oi_change < config.OI_CHANGE_DECLINING_THRESHOLD:
                     trend = 'DECLINING'
                 else:
                     trend = 'STABLE'
