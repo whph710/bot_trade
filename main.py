@@ -1,19 +1,21 @@
 """
-Trading Bot v5.0 - Production Ready - FIXED STATS & LOGGING
+Trading Bot v5.0 - Production Ready - CLEAN SHUTDOWN
 """
 
 import asyncio
 import logging
 import time
 import json
+import sys
 from datetime import datetime
 from typing import List, Dict, Any
+import pytz
 
 from config import config
 from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api, get_optimized_session
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
 from ai_router import ai_router
-from simple_validator import validate_signals_simple, calculate_validation_stats
+from simple_validator import validate_signals_simple, calculate_validation_stats, check_trading_hours
 
 # Configure logging with rotating file handler
 from logging.handlers import RotatingFileHandler
@@ -23,8 +25,8 @@ log_filename = "bot_trading.log"
 # Create rotating file handler (max 10MB, keep 5 backup files)
 file_handler = RotatingFileHandler(
     log_filename,
-    maxBytes=10 * 1024 * 1024,  # 10 MB
-    backupCount=5,  # Keep 5 old log files
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
     encoding='utf-8'
 )
 file_handler.setLevel(logging.INFO)
@@ -52,6 +54,14 @@ class TradingBot:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.session_start = time.time()
+
+    def _print_time_info(self):
+        """Вывести текущее время в разных таймзонах"""
+        utc_now = datetime.now(pytz.UTC)
+        perm_tz = pytz.timezone('Asia/Yekaterinburg')
+        perm_now = utc_now.astimezone(perm_tz)
+
+        logger.info(f"⏰ UTC: {utc_now.strftime('%H:%M:%S')} | Пермь: {perm_now.strftime('%H:%M:%S')}")
 
     async def load_candles_batch(self, pairs: List[str], interval: str, limit: int) -> Dict[str, List]:
         """Batch load candles"""
@@ -301,6 +311,10 @@ class TradingBot:
 
         validation_result = await validate_signals_simple(ai_router, preliminary_signals)
 
+        if validation_result.get('validation_skipped_reason'):
+            logger.warning(validation_result['validation_skipped_reason'])
+            return validation_result
+
         validated = validation_result['validated']
         rejected = validation_result['rejected']
 
@@ -314,7 +328,10 @@ class TradingBot:
         """Run full trading cycle"""
         cycle_start = time.time()
 
+        logger.info("=" * 60)
         logger.info("STARTING FULL CYCLE")
+        self._print_time_info()
+        logger.info("=" * 60)
 
         try:
             signal_pairs = await self.stage1_filter_signals()
@@ -374,6 +391,23 @@ class TradingBot:
             validation_result = await self.stage4_validation(preliminary_signals)
             validated = validation_result['validated']
             rejected = validation_result['rejected']
+
+            if validation_result.get('validation_skipped_reason'):
+                total_time = time.time() - cycle_start
+                return {
+                    'result': 'VALIDATION_SKIPPED',
+                    'reason': validation_result['validation_skipped_reason'],
+                    'total_time': total_time,
+                    'stats': {
+                        'pairs_scanned': self.processed_pairs,
+                        'signal_pairs_found': self.signal_pairs_count,
+                        'ai_selected': self.ai_selected_count,
+                        'analyzed': self.analyzed_count,
+                        'validated_signals': 0,
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
+                    }
+                }
 
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -437,23 +471,35 @@ class TradingBot:
         await cleanup_api()
 
 
+def print_clean_separator():
+    """Чистый разделитель"""
+    print()
+
+
 async def main():
     """Main function"""
+    print("\n" + "=" * 60)
     print("TRADING BOT v5.0 - FULLY OPTIMIZED")
+    print("=" * 60)
     print(f"Stage 1: Base indicators")
     print(f"Stage 2: {config.STAGE2_PROVIDER.upper()} selection")
-    print(f"Stage 3: {config.STAGE3_PROVIDER.upper()} unified analysis (PARALLEL)")
+    print(f"Stage 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
     print(f"Stage 4: {config.STAGE4_PROVIDER.upper()} validation")
     print(f"Logs: {log_filename}")
-    print()
+    print("=" * 60 + "\n")
+
+    time_allowed, time_reason = check_trading_hours()
+    print(time_reason + "\n")
 
     bot = TradingBot()
 
     try:
         result = await bot.run_full_cycle()
 
-        print()
+        print_clean_separator()
+        print("=" * 60)
         print("RESULT: " + result['result'])
+        print("=" * 60)
         print(f"Time: {result.get('total_time', 0):.1f}s")
 
         stats = result.get('stats', {})
@@ -465,53 +511,59 @@ async def main():
         print(f"Speed: {stats.get('processing_speed', 0):.1f} pairs/sec")
         print()
 
+        if result.get('result') == 'VALIDATION_SKIPPED':
+            print(f"⏰ {result.get('reason', 'Валидация пропущена')}")
+            print()
+            return
+
         if result.get('validated_signals'):
             signals = result['validated_signals']
-            print(f"VALIDATED SIGNALS ({len(signals)}):")
+            print(f"✅ VALIDATED SIGNALS ({len(signals)}):")
 
             for sig in signals:
                 tp_levels = sig.get('take_profit_levels', [0, 0, 0])
                 print(f"\n{sig['symbol']}: {sig['signal']} (Confidence: {sig['confidence']}%)")
                 print(f"  Entry: ${sig['entry_price']:.2f}")
                 print(f"  Stop:  ${sig['stop_loss']:.2f}")
-                print(f"  TP1:   ${tp_levels[0]:.2f} (conservative)")
-                print(f"  TP2:   ${tp_levels[1]:.2f} (target)")
-                print(f"  TP3:   ${tp_levels[2]:.2f} (extended)")
+                print(f"  TP1:   ${tp_levels[0]:.2f}")
+                print(f"  TP2:   ${tp_levels[1]:.2f}")
+                print(f"  TP3:   ${tp_levels[2]:.2f}")
                 print(f"  R/R:   1:{sig.get('risk_reward_ratio', 0):.1f}")
-                print(f"  Hold:  {sig.get('hold_duration_minutes', 720) // 60}h")
-
-                val_notes = sig.get('validation_notes', 'N/A')
-                if len(val_notes) > 100:
-                    val_notes = val_notes[:100] + "..."
-                print(f"  Validation: {val_notes}")
 
         if result.get('rejected_signals'):
             rejected = result['rejected_signals']
-            print(f"\nREJECTED SIGNALS ({len(rejected)}):")
+            print(f"\n❌ REJECTED SIGNALS ({len(rejected)}):")
 
-            for rej in rejected:
-                tp_levels = rej.get('take_profit_levels', [0, 0, 0])
-                print(f"\n{rej['symbol']}: {rej.get('signal', 'UNKNOWN')}")
-                print(f"  Entry: ${rej.get('entry_price', 0):.2f}")
-                print(f"  Stop:  ${rej.get('stop_loss', 0):.2f}")
-                print(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
-                print(f"  Rejection: {rej.get('rejection_reason', 'Unknown')}")
+            for rej in rejected[:5]:  # Показываем только первые 5
+                print(f"\n{rej['symbol']}: {rej.get('rejection_reason', 'Unknown')}")
 
         if result.get('validation_stats'):
             vstats = result['validation_stats']
-            print(f"\nVALIDATION STATS:")
+            print(f"\n📊 VALIDATION STATS:")
             print(f"  Approval rate: {vstats.get('approval_rate', 0)}%")
             print(f"  Avg R/R: 1:{vstats.get('avg_risk_reward', 0):.1f}")
-            if vstats.get('top_rejection_reasons'):
-                print(f"  Top rejections:")
-                for reason in vstats['top_rejection_reasons']:
-                    print(f"    - {reason}")
 
     except KeyboardInterrupt:
-        print("\nStopped by user")
+        # ✅ ЧИСТАЯ ОСТАНОВКА БЕЗ ЛИШНЕГО
+        print("\n" + "=" * 60)
+        print("⏹️  BOT STOPPED BY USER")
+        print("=" * 60)
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print(f"❌ ERROR: {e}")
+        print("=" * 60)
+        logger.error("Unexpected error: %s", e, exc_info=True)
     finally:
         await bot.cleanup()
+        print()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("=" * 60)
+        print("⏹️  BOT STOPPED")
+        print("=" * 60)
+        sys.exit(0)
