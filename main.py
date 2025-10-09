@@ -1,5 +1,5 @@
 """
-Trading Bot v5.0 - Production Ready - FIXED STATS & LOGGING
+Trading Bot v5.0 - Production Ready - FIXED STATS & LOGGING & TIME CHECKS
 """
 
 import asyncio
@@ -8,12 +8,13 @@ import time
 import json
 from datetime import datetime
 from typing import List, Dict, Any
+import pytz
 
 from config import config
 from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api, get_optimized_session
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
 from ai_router import ai_router
-from simple_validator import validate_signals_simple, calculate_validation_stats
+from simple_validator import validate_signals_simple, calculate_validation_stats, check_trading_hours
 
 # Configure logging with rotating file handler
 from logging.handlers import RotatingFileHandler
@@ -52,6 +53,14 @@ class TradingBot:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.session_start = time.time()
+
+    def _print_time_info(self):
+        """Вывести текущее время в разных таймзонах"""
+        utc_now = datetime.now(pytz.UTC)
+        perm_tz = pytz.timezone('Asia/Yekaterinburg')
+        perm_now = utc_now.astimezone(perm_tz)
+
+        logger.info(f"⏰ UTC: {utc_now.strftime('%H:%M:%S')} | Пермь: {perm_now.strftime('%H:%M:%S')}")
 
     async def load_candles_batch(self, pairs: List[str], interval: str, limit: int) -> Dict[str, List]:
         """Batch load candles"""
@@ -299,7 +308,13 @@ class TradingBot:
             logger.warning("No signals to validate")
             return {'validated': [], 'rejected': []}
 
+        # ✅ Проверка времени торговли перед валидацией
         validation_result = await validate_signals_simple(ai_router, preliminary_signals)
+
+        # Проверяем, была ли валидация пропущена из-за времени
+        if validation_result.get('validation_skipped_reason'):
+            logger.warning(validation_result['validation_skipped_reason'])
+            return validation_result
 
         validated = validation_result['validated']
         rejected = validation_result['rejected']
@@ -314,7 +329,10 @@ class TradingBot:
         """Run full trading cycle"""
         cycle_start = time.time()
 
+        logger.info("=" * 60)
         logger.info("STARTING FULL CYCLE")
+        self._print_time_info()
+        logger.info("=" * 60)
 
         try:
             signal_pairs = await self.stage1_filter_signals()
@@ -374,6 +392,24 @@ class TradingBot:
             validation_result = await self.stage4_validation(preliminary_signals)
             validated = validation_result['validated']
             rejected = validation_result['rejected']
+
+            # Если валидация пропущена из-за времени
+            if validation_result.get('validation_skipped_reason'):
+                total_time = time.time() - cycle_start
+                return {
+                    'result': 'VALIDATION_SKIPPED',
+                    'reason': validation_result['validation_skipped_reason'],
+                    'total_time': total_time,
+                    'stats': {
+                        'pairs_scanned': self.processed_pairs,
+                        'signal_pairs_found': self.signal_pairs_count,
+                        'ai_selected': self.ai_selected_count,
+                        'analyzed': self.analyzed_count,
+                        'validated_signals': 0,
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
+                    }
+                }
 
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -447,13 +483,20 @@ async def main():
     print(f"Logs: {log_filename}")
     print()
 
+    # Проверка торговых часов перед запуском
+    time_allowed, time_reason = check_trading_hours()
+    print(time_reason)
+    print()
+
     bot = TradingBot()
 
     try:
         result = await bot.run_full_cycle()
 
         print()
+        print("=" * 60)
         print("RESULT: " + result['result'])
+        print("=" * 60)
         print(f"Time: {result.get('total_time', 0):.1f}s")
 
         stats = result.get('stats', {})
@@ -465,9 +508,15 @@ async def main():
         print(f"Speed: {stats.get('processing_speed', 0):.1f} pairs/sec")
         print()
 
+        # Если валидация пропущена из-за времени
+        if result.get('result') == 'VALIDATION_SKIPPED':
+            print(f"⏰ {result.get('reason', 'Валидация пропущена')}")
+            print()
+            return
+
         if result.get('validated_signals'):
             signals = result['validated_signals']
-            print(f"VALIDATED SIGNALS ({len(signals)}):")
+            print(f"✅ VALIDATED SIGNALS ({len(signals)}):")
 
             for sig in signals:
                 tp_levels = sig.get('take_profit_levels', [0, 0, 0])
@@ -487,7 +536,7 @@ async def main():
 
         if result.get('rejected_signals'):
             rejected = result['rejected_signals']
-            print(f"\nREJECTED SIGNALS ({len(rejected)}):")
+            print(f"\n❌ REJECTED SIGNALS ({len(rejected)}):")
 
             for rej in rejected:
                 tp_levels = rej.get('take_profit_levels', [0, 0, 0])
@@ -499,9 +548,11 @@ async def main():
 
         if result.get('validation_stats'):
             vstats = result['validation_stats']
-            print(f"\nVALIDATION STATS:")
+            print(f"\n📊 VALIDATION STATS:")
             print(f"  Approval rate: {vstats.get('approval_rate', 0)}%")
             print(f"  Avg R/R: 1:{vstats.get('avg_risk_reward', 0):.1f}")
+            print(f"  R/R Range: {vstats.get('rr_stats', {}).get('min_rr', 0):.2f} - {vstats.get('rr_stats', {}).get('max_rr', 0):.2f}")
+            print(f"  Samples: {vstats.get('rr_stats', {}).get('samples_counted', 0)} signals")
             if vstats.get('top_rejection_reasons'):
                 print(f"  Top rejections:")
                 for reason in vstats['top_rejection_reasons']:
