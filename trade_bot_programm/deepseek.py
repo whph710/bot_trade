@@ -1,17 +1,17 @@
 """
-DeepSeek API client - FIXED VERSION
+DeepSeek API client - с оптимизированным логированием
 """
 
 import asyncio
 import json
-import logging
 import os
 from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 from config import config
 from utils import fallback_validation, extract_json_from_response
+from logging_config import setup_module_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_module_logger(__name__)
 
 _prompts_cache = {}
 
@@ -19,18 +19,20 @@ _prompts_cache = {}
 def load_prompt_cached(filename: str) -> str:
     """Load prompt with caching"""
     if filename in _prompts_cache:
+        logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
 
     if not os.path.exists(filename):
-        logger.error(f"Prompt file {filename} not found")
+        logger.error(f"Prompt file not found: {filename}")
         raise FileNotFoundError(f"Prompt file {filename} not found")
 
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             content = f.read().strip()
             if not content:
-                raise ValueError(f"Prompt file {filename} is empty")
+                raise ValueError(f"Prompt file is empty: {filename}")
             _prompts_cache[filename] = content
+            logger.debug(f"Prompt cached: {filename} ({len(content)} chars)")
             return content
     except Exception as e:
         logger.error(f"Error loading prompt {filename}: {e}")
@@ -39,8 +41,6 @@ def load_prompt_cached(filename: str) -> str:
 
 def safe_float_conversion(value) -> float:
     """Safe float conversion"""
-    if value is None:
-        return 0.0
     try:
         return float(value)
     except (ValueError, TypeError):
@@ -55,6 +55,7 @@ class DeepSeekClient:
         self.model = config.DEEPSEEK_MODEL
         self.base_url = config.DEEPSEEK_URL
         self.use_reasoning = config.DEEPSEEK_REASONING
+        logger.debug(f"DeepSeek client initialized: model={self.model}, reasoning={self.use_reasoning}")
 
     async def call(
             self,
@@ -65,12 +66,15 @@ class DeepSeekClient:
     ) -> str:
         """Make API request"""
         if not self.api_key:
+            logger.error("DeepSeek API key not configured")
             raise ValueError("DeepSeek API key not found")
 
         if use_reasoning is None:
             use_reasoning = self.use_reasoning
 
         try:
+            logger.debug(f"DeepSeek API call: max_tokens={max_tokens}, reasoning={use_reasoning}")
+
             client = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url
@@ -93,10 +97,12 @@ class DeepSeekClient:
                 timeout=config.API_TIMEOUT
             )
 
-            return response.choices[0].message.content
+            result = response.choices[0].message.content
+            logger.debug(f"DeepSeek response: {len(result)} chars")
+            return result
 
         except asyncio.TimeoutError:
-            logger.error("DeepSeek API timeout")
+            logger.error(f"DeepSeek timeout: {config.API_TIMEOUT}s")
             raise
         except Exception as e:
             logger.error(f"DeepSeek error: {e}")
@@ -105,11 +111,15 @@ class DeepSeekClient:
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
         """Select pairs for analysis"""
         if not pairs_data:
+            logger.warning("No pairs data for DeepSeek selection")
             return []
 
         try:
             if len(pairs_data) > config.MAX_BULK_PAIRS:
                 pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
+                logger.debug(f"Selection limited to top {config.MAX_BULK_PAIRS} pairs")
+
+            logger.info(f"DeepSeek: Selecting pairs from {len(pairs_data)} candidates")
 
             compact_data = {}
             for item in pairs_data:
@@ -142,10 +152,13 @@ class DeepSeekClient:
                 }
 
             if not compact_data:
+                logger.warning("No valid compact data for DeepSeek selection")
                 return []
 
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             json_payload = json.dumps(compact_data, separators=(',', ':'))
+
+            logger.debug(f"Selection data size: {len(json_payload)} chars")
 
             response = await self.call(
                 prompt=f"{prompt}\n\nData:\n{json_payload}",
@@ -157,10 +170,10 @@ class DeepSeekClient:
 
             if result and 'selected_pairs' in result:
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
-                logger.info(f"DeepSeek selected {len(selected_pairs)} pairs")
+                logger.info(f"DeepSeek selected {len(selected_pairs)} pairs: {selected_pairs}")
                 return selected_pairs
 
-            logger.info("DeepSeek returned no pairs")
+            logger.warning("DeepSeek returned no pairs in response")
             return []
 
         except asyncio.TimeoutError:
@@ -173,9 +186,12 @@ class DeepSeekClient:
     async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
         """Validate trading signal"""
         try:
+            symbol = signal.get('symbol', 'UNKNOWN')
+            logger.debug(f"DeepSeek: Validating signal for {symbol}")
+
             validation_input = {
                 'signal': {
-                    'symbol': signal['symbol'],
+                    'symbol': symbol,
                     'signal': signal['signal'],
                     'confidence': signal['confidence'],
                     'entry_price': signal['entry_price'],
@@ -194,6 +210,8 @@ class DeepSeekClient:
             prompt = load_prompt_cached(config.VALIDATION_PROMPT)
             data_json = json.dumps(validation_input, separators=(',', ':'))
 
+            logger.debug(f"Validation data size: {len(data_json)} chars")
+
             response = await self.call(
                 prompt=f"{prompt}\n\nValidation data:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_VALIDATE,
@@ -211,6 +229,8 @@ class DeepSeekClient:
                     if not isinstance(tp_levels, list):
                         tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
 
+                    logger.debug(f"DeepSeek: Approved {symbol} with R/R {validated.get('risk_reward_ratio', 0)}")
+
                     return {
                         'approved': True,
                         'final_confidence': validated.get('confidence', signal['confidence']),
@@ -224,9 +244,12 @@ class DeepSeekClient:
                     }
                 else:
                     rejected_info = result.get('rejected_signals', [{}])[0]
+                    reason = rejected_info.get('reason', 'DeepSeek rejected')
+                    logger.debug(f"DeepSeek: Rejected {symbol} - {reason}")
+
                     return {
                         'approved': False,
-                        'rejection_reason': rejected_info.get('reason', 'DeepSeek rejected'),
+                        'rejection_reason': reason,
                         'entry_price': signal.get('entry_price', 0),
                         'stop_loss': signal.get('stop_loss', 0),
                         'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
@@ -234,8 +257,12 @@ class DeepSeekClient:
                         'validation_method': 'deepseek'
                     }
 
+            logger.warning(f"DeepSeek: Invalid validation response for {symbol}")
             return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
+        except asyncio.TimeoutError:
+            logger.error(f"DeepSeek validation timeout for {symbol}")
+            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
         except Exception as e:
-            logger.error(f"DeepSeek validation error: {e}")
+            logger.error(f"DeepSeek validation error for {symbol}: {e}")
             return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)

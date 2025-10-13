@@ -3,16 +3,9 @@
 """
 
 import json
-import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
-
-# Добавить папку с ботом в PATH если нужно
-BOT_DIR = Path(__file__).parent / "trade_bot_programm"
-if str(BOT_DIR) not in sys.path:
-    sys.path.insert(0, str(BOT_DIR))
-
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)

@@ -1,13 +1,13 @@
 """
-Simple validator with full level support
+Simple validator with optimized logging
 """
 
-import logging
 from typing import Dict, List
 from datetime import datetime
 import pytz
+from logging_config import setup_module_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_module_logger(__name__)
 
 
 def check_trading_hours(perm_time=None) -> tuple[bool, str]:
@@ -18,55 +18,59 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
         (is_allowed: bool, reason: str)
     """
     if perm_time is None:
-        # Получить текущее время в Перми
-        perm_tz = pytz.timezone('Asia/Yekaterinburg')  # UTC+5
+        perm_tz = pytz.timezone('Asia/Yekaterinburg')
         perm_time = datetime.now(perm_tz)
 
     hour = perm_time.hour
 
-    # 🔴 КРИТИЧЕСКИЕ ПЕРИОДЫ - НЕ ТОРГОВАТЬ
-    # 00:00–03:00 (19:00–22:00 UTC) — конец US сессии, низкие объёмы
+    # Критические периоды
     if 0 <= hour < 3:
-        return False, f"❌ BLOCKED: {hour}:00–03:00 (конец US сессии, низкие объёмы)"
+        return False, "US session end (00:00–03:00): low volumes"
 
-    # 04:00–08:00 (23:00–03:00 UTC) — азиатская ночь, высокие спреды
     if 4 <= hour < 8:
-        return False, f"❌ BLOCKED: {hour}:00–08:00 (азиатская ночь, спреды >0.15%)"
+        return False, "Asian night (04:00–08:00): high spreads >0.15%"
 
-    # 12:00–13:00 (07:00–08:00 UTC) — gap после Asian close
     if 12 <= hour < 13:
-        return False, f"❌ BLOCKED: 12:00–13:00 (gap после Asian close, фиксация позиций)"
+        return False, "Asian close gap (12:00–13:00): position fixing"
 
-    return True, "✅ Торговые часы OK"
+    return True, "Trading hours: OK"
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
     """Simple validation through AI"""
 
-    # Проверка времени перед началом валидации
+    # Check trading hours
     time_allowed, time_reason = check_trading_hours()
-    logger.warning(time_reason)
 
     if not time_allowed:
-        logger.warning(f"Валидация пропущена: {time_reason}")
+        logger.warning(f"Trading hours check: {time_reason}")
+        logger.warning("Validation pipeline: SKIPPED")
         return {
             'validated': [],
             'rejected': [],
             'validation_skipped_reason': time_reason
         }
 
+    logger.debug(f"Trading hours check: {time_reason}")
+
     if not preliminary_signals:
+        logger.warning("No preliminary signals for validation")
         return {'validated': [], 'rejected': []}
 
     validated = []
     rejected = []
 
+    logger.info(f"Starting validation of {len(preliminary_signals)} signal(s)")
+
     for signal in preliminary_signals:
         try:
             symbol = signal['symbol']
-            comprehensive_data = signal.get('comprehensive_data', {})
+            signal_type = signal.get('signal', 'UNKNOWN')
+            confidence = signal.get('confidence', 0)
 
-            logger.debug(f"Validating {symbol}...")
+            logger.debug(f"Validating {symbol}: {signal_type} ({confidence}%)")
+
+            comprehensive_data = signal.get('comprehensive_data', {})
 
             validation_result = await ai_router.validate_signal_with_stage3_data(
                 signal,
@@ -83,15 +87,17 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                     tp_levels.append(last_tp * 1.1)
 
             if validation_result.get('approved', False):
+                rr_ratio = validation_result.get('risk_reward_ratio', 0)
+
                 validated_signal = {
                     'symbol': symbol,
-                    'signal': signal['signal'],
-                    'confidence': validation_result.get('final_confidence', signal['confidence']),
+                    'signal': signal_type,
+                    'confidence': validation_result.get('final_confidence', confidence),
                     'entry_price': validation_result.get('entry_price', signal['entry_price']),
                     'stop_loss': validation_result.get('stop_loss', signal['stop_loss']),
                     'take_profit_levels': tp_levels,
                     'analysis': signal.get('analysis', ''),
-                    'risk_reward_ratio': validation_result.get('risk_reward_ratio', 0),
+                    'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': validation_result.get('hold_duration_minutes', 720),
                     'validation_notes': validation_result.get('validation_notes', ''),
                     'market_conditions': validation_result.get('market_conditions', ''),
@@ -100,20 +106,26 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
                 validated.append(validated_signal)
-                logger.info(f"✅ Validated {symbol} | R/R: {validation_result.get('risk_reward_ratio', 0)}")
+
+                logger.info(f"✓ {symbol}: APPROVED | R/R: {rr_ratio:.2f}:1 | Duration: {validation_result.get('hold_duration_minutes', 720)}min")
+                logger.debug(f"  Notes: {validation_result.get('validation_notes', 'N/A')[:80]}")
+
             else:
+                rejection_reason = validation_result.get('rejection_reason', 'Validation failed')
+
                 rejected_signal = {
                     'symbol': symbol,
-                    'signal': signal.get('signal', 'UNKNOWN'),
-                    'original_confidence': signal.get('confidence', 0),
+                    'signal': signal_type,
+                    'original_confidence': confidence,
                     'entry_price': validation_result.get('entry_price', signal.get('entry_price', 0)),
                     'stop_loss': validation_result.get('stop_loss', signal.get('stop_loss', 0)),
                     'take_profit_levels': tp_levels,
-                    'rejection_reason': validation_result.get('rejection_reason', 'Validation failed'),
+                    'rejection_reason': rejection_reason,
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
                 rejected.append(rejected_signal)
-                logger.info(f"❌ Rejected {symbol}: {rejected_signal['rejection_reason']}")
+
+                logger.info(f"✗ {symbol}: REJECTED | {rejection_reason}")
 
         except Exception as e:
             logger.error(f"Validation error for {signal['symbol']}: {e}")
@@ -129,10 +141,13 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 'entry_price': signal.get('entry_price', 0),
                 'stop_loss': signal.get('stop_loss', 0),
                 'take_profit_levels': tp_levels,
-                'rejection_reason': f'Validation exception: {str(e)}',
+                'rejection_reason': f'Exception: {str(e)[:60]}',
                 'timestamp': signal.get('timestamp', datetime.now().isoformat())
             })
-            continue
+
+            logger.debug(f"Exception details:", exc_info=True)
+
+    logger.info(f"Validation complete: {len(validated)} approved, {len(rejected)} rejected")
 
     return {
         'validated': validated,
@@ -161,11 +176,11 @@ def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> D
 
     approval_rate = (len(validated) / total) * 100 if total > 0 else 0
 
-    # ✅ ИСПРАВЛЕНИЕ: Фильтруем нулевые R/R перед расчётом среднего
+    # Фильтруем только положительные R/R
     rr_ratios = [
         sig.get('risk_reward_ratio', 0)
         for sig in validated
-        if sig.get('risk_reward_ratio', 0) > 0  # Только положительные значения
+        if sig.get('risk_reward_ratio', 0) > 0
     ]
 
     avg_rr = sum(rr_ratios) / len(rr_ratios) if rr_ratios else 0
@@ -189,17 +204,16 @@ def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> D
         'rr_stats': {
             'min_rr': round(min_rr, 2),
             'max_rr': round(max_rr, 2),
-            'samples_counted': len(rr_ratios),
-            'signals_with_zero_rr': len(validated) - len(rr_ratios)  # Отладка
+            'samples_counted': len(rr_ratios)
         }
     }
 
-    # Логируем статистику
-    logger.info(f"📊 VALIDATION STATS:")
-    logger.info(f"  Total: {total} | Approved: {len(validated)} | Rejected: {len(rejected)}")
+    logger.info(f"📊 Validation Statistics:")
+    logger.info(f"  Total signals: {total} | Approved: {len(validated)} | Rejected: {len(rejected)}")
     logger.info(f"  Approval rate: {approval_rate:.1f}%")
-    logger.info(f"  R/R: min={min_rr:.2f}, avg={avg_rr:.2f}, max={max_rr:.2f} ({len(rr_ratios)} samples)")
+    if rr_ratios:
+        logger.info(f"  R/R: min={min_rr:.2f}, avg={avg_rr:.2f}, max={max_rr:.2f} ({len(rr_ratios)} samples)")
     if stats['top_rejection_reasons']:
-        logger.info(f"  Top rejections: {', '.join(stats['top_rejection_reasons'][:2])}")
+        logger.info(f"  Top rejection reasons: {', '.join(stats['top_rejection_reasons'][:2])}")
 
     return stats
