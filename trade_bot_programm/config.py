@@ -81,9 +81,9 @@ class Config:
     API_TIMEOUT_VALIDATION = int(os.getenv('API_TIMEOUT_VALIDATION', '120')) # Stage 4
 
     # Prompts
-    SELECTION_PROMPT = 'prompt_select.txt'
-    ANALYSIS_PROMPT = 'prompt_analyze.txt'
-    VALIDATION_PROMPT = 'prompt_validate.txt'
+    SELECTION_PROMPT = 'trade_bot_programm/prompt_analyze.txt'
+    ANALYSIS_PROMPT = 'trade_bot_programm/prompt_analyze.txt'
+    VALIDATION_PROMPT = 'trade_bot_programm/prompt_validate.txt'
 
     # AI Parameters
     AI_TEMPERATURE_SELECT = float(os.getenv('AI_TEMPERATURE_SELECT', '0.3'))

@@ -1,10 +1,10 @@
 """
-AI Router with provider selection - с оптимизированным логированием
+AI Router with provider selection - оптимизировано
 """
 
 from typing import List, Dict
 from config import config
-from utils import fallback_validation
+from shared_utils import fallback_validation
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -28,7 +28,7 @@ class AIRouter:
     @property
     def anthropic_client(self):
         if self._anthropic_client is None:
-            from anthropic_ai import AnthropicClient
+            from anthropic_client import AnthropicClient
             self._anthropic_client = AnthropicClient()
             logger.debug("Anthropic client initialized")
         return self._anthropic_client

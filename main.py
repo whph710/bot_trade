@@ -11,6 +11,7 @@ BOT_DIR = Path(__file__).parent / "trade_bot_programm"
 sys.path.insert(0, str(BOT_DIR))
 
 from logging_config import setup_module_logger
+from utils import save_bot_result, print_bot_result, cleanup_old_results
 
 logger = setup_module_logger(__name__)
 
@@ -21,7 +22,6 @@ async def run_trading_bot_cycle():
     """
     try:
         from bot_runner import run_trading_bot
-        from utils import save_bot_result, print_bot_result, cleanup_old_results
 
         logger.info("Bot cycle initialization started")
 

@@ -243,7 +243,6 @@ class TradingBotRunner:
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
                     logger.debug(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
 
-                    # Логируем причину отклонения если есть
                     rejection_reason = analysis.get('rejection_reason')
                     if rejection_reason:
                         logger.info(f"  Rejection reason: {rejection_reason}")
@@ -280,13 +279,11 @@ class TradingBotRunner:
         validated = validation_result['validated']
         rejected = validation_result['rejected']
 
-        # Логируем одобренные
         for sig in validated:
             tp_levels = sig.get('take_profit_levels', [0, 0, 0])
             logger.info(f"✓ APPROVED: {sig['symbol']} {sig['signal']} (confidence: {sig['confidence']}%, R/R: {sig.get('risk_reward_ratio', 0):.1f})")
             logger.debug(f"  {sig['validation_notes'][:100]}")
 
-        # Логируем отклоненные
         for rej in rejected:
             logger.info(f"✗ REJECTED: {rej['symbol']} - {rej.get('rejection_reason', 'Unknown')}")
 
@@ -307,7 +304,6 @@ class TradingBotRunner:
         logger.info("╚" + "=" * 68 + "╝")
 
         try:
-            # Stage 1
             signal_pairs = await self.stage1_filter_signals()
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
@@ -324,7 +320,6 @@ class TradingBotRunner:
                     }
                 }
 
-            # Stage 2
             selected_pairs = await self.stage2_ai_select(signal_pairs)
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
@@ -341,7 +336,6 @@ class TradingBotRunner:
                     }
                 }
 
-            # Stage 3
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
@@ -358,7 +352,6 @@ class TradingBotRunner:
                     }
                 }
 
-            # Stage 4
             validation_result = await self.stage4_validation(preliminary_signals)
             validated = validation_result['validated']
             rejected = validation_result['rejected']
@@ -379,7 +372,6 @@ class TradingBotRunner:
                     }
                 }
 
-            # Final result
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             validation_stats = calculate_validation_stats(validated, rejected)

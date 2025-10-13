@@ -1,12 +1,11 @@
 """
-DeepSeek API client - с оптимизированным логированием
+Anthropic Claude AI Client
 """
 
 import asyncio
 import json
-import os
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 from config import config
 from shared_utils import fallback_validation, extract_json_from_response
 from logging_config import setup_module_logger
@@ -22,10 +21,6 @@ def load_prompt_cached(filename: str) -> str:
         logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
 
-    if not os.path.exists(filename):
-        logger.error(f"Prompt file not found: {filename}")
-        raise FileNotFoundError(f"Prompt file {filename} not found")
-
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             content = f.read().strip()
@@ -39,79 +34,81 @@ def load_prompt_cached(filename: str) -> str:
         raise
 
 
-def safe_float_conversion(value) -> float:
-    """Safe float conversion"""
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-class DeepSeekClient:
-    """DeepSeek API client"""
+class AnthropicClient:
+    """Anthropic Claude API client"""
 
     def __init__(self):
-        self.api_key = config.DEEPSEEK_API_KEY
-        self.model = config.DEEPSEEK_MODEL
-        self.base_url = config.DEEPSEEK_URL
-        self.use_reasoning = config.DEEPSEEK_REASONING
-        logger.debug(f"DeepSeek client initialized: model={self.model}, reasoning={self.use_reasoning}")
+        self.api_key = config.ANTHROPIC_API_KEY
+        self.model = config.ANTHROPIC_MODEL
+        self.use_thinking = config.ANTHROPIC_THINKING
+        logger.debug(f"Anthropic client initialized: model={self.model}, thinking={self.use_thinking}")
 
     async def call(
             self,
             prompt: str,
             max_tokens: int = 2000,
             temperature: float = 0.7,
-            use_reasoning: bool = None
+            use_thinking: bool = None,
+            stage: str = 'analysis'
     ) -> str:
-        """Make API request"""
+        """Make API request to Claude"""
         if not self.api_key:
-            logger.error("DeepSeek API key not configured")
-            raise ValueError("DeepSeek API key not found")
+            logger.error("Anthropic API key not configured")
+            raise ValueError("Anthropic API key not found")
 
-        if use_reasoning is None:
-            use_reasoning = self.use_reasoning
+        if use_thinking is None:
+            use_thinking = self.use_thinking
 
         try:
-            logger.debug(f"DeepSeek API call: max_tokens={max_tokens}, reasoning={use_reasoning}")
+            logger.debug(f"Claude API call: stage={stage}, max_tokens={max_tokens}, thinking={use_thinking}")
 
-            client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url
-            )
+            client = AsyncAnthropic(api_key=self.api_key)
 
-            messages = [{"role": "user", "content": prompt}]
+            if use_thinking:
+                budget_tokens = min(10000, max_tokens * 3)
+                response = await asyncio.wait_for(
+                    client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        thinking={
+                            "type": "enabled",
+                            "budget_tokens": budget_tokens
+                        },
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=temperature
+                    ),
+                    timeout=config.API_TIMEOUT_ANALYSIS if stage == 'analysis' else config.API_TIMEOUT
+                )
+            else:
+                response = await asyncio.wait_for(
+                    client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=temperature
+                    ),
+                    timeout=config.API_TIMEOUT_ANALYSIS if stage == 'analysis' else config.API_TIMEOUT
+                )
 
-            kwargs = {
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature
-            }
-
-            if use_reasoning:
-                kwargs["reasoning"] = {"enabled": True}
-
-            response = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs),
-                timeout=config.API_TIMEOUT
-            )
-
-            result = response.choices[0].message.content
-            logger.debug(f"DeepSeek response: {len(result)} chars")
+            result = response.content[0].text
+            logger.debug(f"Claude response: {len(result)} chars")
             return result
 
         except asyncio.TimeoutError:
-            logger.error(f"DeepSeek timeout: {config.API_TIMEOUT}s")
+            logger.error(f"Claude timeout: {config.API_TIMEOUT}s")
             raise
         except Exception as e:
-            logger.error(f"DeepSeek error: {e}")
+            logger.error(f"Claude error: {e}")
             raise
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
         """Select pairs for analysis"""
         if not pairs_data:
-            logger.warning("No pairs data for DeepSeek selection")
+            logger.warning("No pairs data for Claude selection")
             return []
 
         try:
@@ -119,7 +116,7 @@ class DeepSeekClient:
                 pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
                 logger.debug(f"Selection limited to top {config.MAX_BULK_PAIRS} pairs")
 
-            logger.info(f"DeepSeek: Selecting pairs from {len(pairs_data)} candidates")
+            logger.info(f"Claude: Selecting pairs from {len(pairs_data)} candidates")
 
             compact_data = {}
             for item in pairs_data:
@@ -152,7 +149,7 @@ class DeepSeekClient:
                 }
 
             if not compact_data:
-                logger.warning("No valid compact data for DeepSeek selection")
+                logger.warning("No valid compact data for Claude selection")
                 return []
 
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
@@ -170,24 +167,24 @@ class DeepSeekClient:
 
             if result and 'selected_pairs' in result:
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
-                logger.info(f"DeepSeek selected {len(selected_pairs)} pairs: {selected_pairs}")
+                logger.info(f"Claude selected {len(selected_pairs)} pairs: {selected_pairs}")
                 return selected_pairs
 
-            logger.warning("DeepSeek returned no pairs in response")
+            logger.warning("Claude returned no pairs in response")
             return []
 
         except asyncio.TimeoutError:
-            logger.error("DeepSeek selection timeout")
+            logger.error("Claude selection timeout")
             return []
         except Exception as e:
-            logger.error(f"DeepSeek selection error: {e}")
+            logger.error(f"Claude selection error: {e}")
             return []
 
     async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
         """Validate trading signal"""
         try:
             symbol = signal.get('symbol', 'UNKNOWN')
-            logger.debug(f"DeepSeek: Validating signal for {symbol}")
+            logger.debug(f"Claude: Validating signal for {symbol}")
 
             validation_input = {
                 'signal': {
@@ -215,7 +212,8 @@ class DeepSeekClient:
             response = await self.call(
                 prompt=f"{prompt}\n\nValidation data:\n{data_json}",
                 max_tokens=config.AI_MAX_TOKENS_VALIDATE,
-                temperature=config.AI_TEMPERATURE_VALIDATE
+                temperature=config.AI_TEMPERATURE_VALIDATE,
+                stage='validation'
             )
 
             result = extract_json_from_response(response)
@@ -229,7 +227,7 @@ class DeepSeekClient:
                     if not isinstance(tp_levels, list):
                         tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
 
-                    logger.debug(f"DeepSeek: Approved {symbol} with R/R {validated.get('risk_reward_ratio', 0)}")
+                    logger.debug(f"Claude: Approved {symbol} with R/R {validated.get('risk_reward_ratio', 0)}")
 
                     return {
                         'approved': True,
@@ -240,12 +238,14 @@ class DeepSeekClient:
                         'risk_reward_ratio': validated.get('risk_reward_ratio', 0),
                         'hold_duration_minutes': validated.get('hold_duration_minutes', 720),
                         'validation_notes': validated.get('validation_notes', ''),
-                        'validation_method': 'deepseek'
+                        'market_conditions': validated.get('market_conditions', ''),
+                        'key_levels': validated.get('key_levels', ''),
+                        'validation_method': 'claude'
                     }
                 else:
                     rejected_info = result.get('rejected_signals', [{}])[0]
-                    reason = rejected_info.get('reason', 'DeepSeek rejected')
-                    logger.debug(f"DeepSeek: Rejected {symbol} - {reason}")
+                    reason = rejected_info.get('reason', 'Claude rejected')
+                    logger.debug(f"Claude: Rejected {symbol} - {reason}")
 
                     return {
                         'approved': False,
@@ -254,15 +254,15 @@ class DeepSeekClient:
                         'stop_loss': signal.get('stop_loss', 0),
                         'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
                         'final_confidence': signal.get('confidence', 0),
-                        'validation_method': 'deepseek'
+                        'validation_method': 'claude'
                     }
 
-            logger.warning(f"DeepSeek: Invalid validation response for {symbol}")
+            logger.warning(f"Claude: Invalid validation response for {symbol}")
             return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
 
         except asyncio.TimeoutError:
-            logger.error(f"DeepSeek validation timeout for {symbol}")
+            logger.error(f"Claude validation timeout for {symbol}")
             return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
         except Exception as e:
-            logger.error(f"DeepSeek validation error for {symbol}: {e}")
+            logger.error(f"Claude validation error for {symbol}: {e}")
             return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
