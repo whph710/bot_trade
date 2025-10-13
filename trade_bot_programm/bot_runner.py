@@ -158,7 +158,6 @@ class TradingBotRunner:
             logger.warning("No pairs for analysis")
             return []
 
-        # Load BTC data
         logger.debug("Loading BTC candles for correlation analysis")
         btc_candles_1h, btc_candles_4h = await asyncio.gather(
             fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
@@ -280,7 +279,6 @@ class TradingBotRunner:
         rejected = validation_result['rejected']
 
         for sig in validated:
-            tp_levels = sig.get('take_profit_levels', [0, 0, 0])
             logger.info(f"✓ APPROVED: {sig['symbol']} {sig['signal']} (confidence: {sig['confidence']}%, R/R: {sig.get('risk_reward_ratio', 0):.1f})")
             logger.debug(f"  {sig['validation_notes'][:100]}")
 

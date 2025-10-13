@@ -4,6 +4,7 @@ Trading bot configuration - UPDATED WITH DYNAMIC TIMEOUTS
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     with open('../.env', 'r', encoding='utf-8') as f:
@@ -80,10 +81,28 @@ class Config:
     API_TIMEOUT_ANALYSIS = int(os.getenv('API_TIMEOUT_ANALYSIS', '180'))     # Stage 3
     API_TIMEOUT_VALIDATION = int(os.getenv('API_TIMEOUT_VALIDATION', '120')) # Stage 4
 
-    # Prompts
-    SELECTION_PROMPT = 'trade_bot_programm/prompt_analyze.txt'
-    ANALYSIS_PROMPT = 'trade_bot_programm/prompt_analyze.txt'
-    VALIDATION_PROMPT = 'trade_bot_programm/prompt_validate.txt'
+    # Prompts - FIXED: Absolute paths
+    @staticmethod
+    def _get_prompt_path(filename: str) -> str:
+        """Get absolute path to prompt file"""
+        # Try relative to config.py location
+        config_dir = Path(__file__).parent
+        prompt_path = config_dir / filename
+        if prompt_path.exists():
+            return str(prompt_path)
+
+        # Try relative to project root
+        root_dir = config_dir.parent
+        prompt_path = root_dir / 'trade_bot_programm' / filename
+        if prompt_path.exists():
+            return str(prompt_path)
+
+        # Fallback to original
+        return f'trade_bot_programm/{filename}'
+
+    SELECTION_PROMPT = _get_prompt_path('prompt_select.txt')
+    ANALYSIS_PROMPT = _get_prompt_path('prompt_analyze.txt')
+    VALIDATION_PROMPT = _get_prompt_path('prompt_validate.txt')
 
     # AI Parameters
     AI_TEMPERATURE_SELECT = float(os.getenv('AI_TEMPERATURE_SELECT', '0.3'))

@@ -4,6 +4,7 @@ Anthropic Claude AI Client
 
 import asyncio
 import json
+from pathlib import Path
 from typing import List, Dict, Optional
 from anthropic import AsyncAnthropic
 from config import config
@@ -16,18 +17,32 @@ _prompts_cache = {}
 
 
 def load_prompt_cached(filename: str) -> str:
-    """Load prompt with caching"""
+    """Load prompt with caching - FIXED: Better path resolution"""
     if filename in _prompts_cache:
         logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
 
+    # Try direct path
+    filepath = Path(filename)
+    if not filepath.exists():
+        # Try relative to this file
+        filepath = Path(__file__).parent / Path(filename).name
+
+    if not filepath.exists():
+        # Try in parent/trade_bot_programm
+        filepath = Path(__file__).parent.parent / 'trade_bot_programm' / Path(filename).name
+
+    if not filepath.exists():
+        logger.error(f"Prompt file not found: {filename}")
+        raise FileNotFoundError(f"Prompt file {filename} not found")
+
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read().strip()
             if not content:
                 raise ValueError(f"Prompt file is empty: {filename}")
             _prompts_cache[filename] = content
-            logger.debug(f"Prompt cached: {filename} ({len(content)} chars)")
+            logger.debug(f"Prompt cached: {filepath.name} ({len(content)} chars)")
             return content
     except Exception as e:
         logger.error(f"Error loading prompt {filename}: {e}")
