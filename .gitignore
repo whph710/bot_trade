@@ -1,5 +1,5 @@
 # Environment
-.env
+trade_bot_programm/.env
 .env.local
 
 # Python
