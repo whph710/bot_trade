@@ -133,9 +133,6 @@ SMC Patterns (из unified analysis):
 }
 }
 
-ЕСЛИ СИГНАЛ ОТКЛОНЕН - ВАЖНО:
-Всё равно верни entry_price, stop_loss, take_profit_levels в rejected_signals для отчетности!
-
 РАСШИРЕННЫЙ ФОРМАТ ПРИ REJECTION:
 {
   "final_signals": [],
