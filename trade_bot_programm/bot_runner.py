@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - FIXED: упрощенный формат вывода
+Trading Bot Runner - FIXED: упрощенный формат вывода + сохранение данных анализа
 """
 
 import asyncio
@@ -29,6 +29,7 @@ class TradingBotRunner:
         self.signal_pairs_count = 0
         self.ai_selected_count = 0
         self.analyzed_count = 0
+        self.analysis_data_cache = {}  # Кеш для сохранения данных анализа
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -237,6 +238,9 @@ class TradingBotRunner:
                     analysis['timestamp'] = datetime.now().isoformat()
                     final_signals.append(analysis)
 
+                    # Сохраняем данные анализа для последующей записи
+                    self.analysis_data_cache[symbol] = comprehensive_data
+
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
                     logger.info(f"✓ SIGNAL GENERATED: {symbol} {signal_type} (confidence: {confidence}%)")
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
@@ -288,8 +292,31 @@ class TradingBotRunner:
         logger.info(f"Stage 4 complete: {len(validated)} approved, {len(rejected)} rejected")
         return validation_result
 
+    def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
+        """Добавляет данные анализа к сигналу"""
+        symbol = signal.get('symbol')
+        if symbol not in self.analysis_data_cache:
+            return signal
+
+        comp_data = self.analysis_data_cache[symbol]
+
+        # Добавляем данные анализа
+        signal['analysis_data'] = {
+            'candles_1h': comp_data.get('candles_1h', []),
+            'candles_4h': comp_data.get('candles_4h', []),
+            'indicators_1h': comp_data.get('indicators_1h', {}),
+            'indicators_4h': comp_data.get('indicators_4h', {}),
+            'current_price': comp_data.get('current_price', 0),
+            'market_data': comp_data.get('market_data', {}),
+            'correlation_data': comp_data.get('correlation_data', {}),
+            'volume_profile': comp_data.get('volume_profile', {}),
+            'vp_analysis': comp_data.get('vp_analysis', {})
+        }
+
+        return signal
+
     async def run_cycle(self) -> Dict[str, Any]:
-        """Запуск полного цикла бота - FIXED: новый формат вывода"""
+        """Запуск полного цикла бота"""
         import time
         cycle_start = time.time()
 
@@ -304,7 +331,6 @@ class TradingBotRunner:
         try:
             signal_pairs = await self.stage1_filter_signals()
 
-            # FIXED: Early exit - только stats
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
                 total_time = time.time() - cycle_start
@@ -326,7 +352,6 @@ class TradingBotRunner:
 
             selected_pairs = await self.stage2_ai_select(signal_pairs)
 
-            # FIXED: Early exit - только stats
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
                 total_time = time.time() - cycle_start
@@ -348,7 +373,6 @@ class TradingBotRunner:
 
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
 
-            # FIXED: Early exit - только stats
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
                 total_time = time.time() - cycle_start
@@ -372,7 +396,6 @@ class TradingBotRunner:
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
-            # FIXED: Если validation skipped - только stats
             if validation_result.get('validation_skipped_reason'):
                 logger.warning(f"Execution stopped: Validation skipped - {validation_result['validation_skipped_reason']}")
                 total_time = time.time() - cycle_start
@@ -398,7 +421,9 @@ class TradingBotRunner:
 
             result_type = 'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS'
 
-            # FIXED: Упрощенный формат
+            # Обогащаем сигналы данными анализа
+            enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
+
             result = {
                 'timestamp': timestamp,
                 'result': result_type,
@@ -415,9 +440,8 @@ class TradingBotRunner:
                 }
             }
 
-            # FIXED: Добавляем validated_signals только если есть сигналы
-            if validated:
-                result['validated_signals'] = validated
+            if enriched_validated:
+                result['validated_signals'] = enriched_validated
 
             logger.info("╔" + "=" * 68 + "╗")
             logger.info(f"║ CYCLE COMPLETE: {result_type}".ljust(69) + "║")

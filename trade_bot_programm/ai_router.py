@@ -46,7 +46,7 @@ class AIRouter:
             provider = self._get_provider_for_stage(stage)
             logger.debug(f"AI call: stage={stage}, provider={provider}, tokens={max_tokens}")
 
-            if provider == 'anthropic':
+            if provider == 'claude':
                 response = await self.anthropic_client.call(
                     prompt=prompt,
                     max_tokens=max_tokens,

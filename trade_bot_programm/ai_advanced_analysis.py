@@ -1,5 +1,5 @@
 """
-AI advanced analysis module
+AI advanced analysis module - с улучшенной диагностикой
 """
 
 import json
@@ -99,6 +99,8 @@ class AIAdvancedAnalyzer:
 
             prompt = self._create_unified_prompt(symbol, unified_data)
 
+            logger.debug(f"AI call for {symbol}: prompt length={len(prompt)} chars")
+
             response = await self.ai_router.call_ai(
                 prompt=prompt,
                 stage='analysis',
@@ -106,16 +108,23 @@ class AIAdvancedAnalyzer:
                 temperature=0.7
             )
 
+            logger.debug(f"AI response for {symbol}: {len(response)} chars")
+
+            if not response or response == "{}":
+                logger.error(f"Empty AI response for {symbol}")
+                return self._fallback_unified_analysis(symbol, current_price)
+
             result = self._safe_parse_json(response)
 
             if not result:
                 logger.warning(f"Failed to parse analysis for {symbol}")
+                logger.debug(f"Response preview: {response[:500]}")
                 return self._fallback_unified_analysis(symbol, current_price)
 
             return self._validate_and_format_result(result, symbol, current_price)
 
         except Exception as e:
-            logger.error(f"Unified analysis error for {symbol}: {e}")
+            logger.error(f"Unified analysis error for {symbol}: {e}", exc_info=True)
             return self._fallback_unified_analysis(symbol, current_price)
 
     def _create_unified_prompt(self, symbol: str, data: Dict) -> str:
@@ -359,9 +368,13 @@ CRITICAL:
         }
 
     def _safe_parse_json(self, response: str) -> Optional[Dict]:
-        """Safe JSON parsing"""
+        """Safe JSON parsing with better error reporting"""
         try:
             response = response.strip()
+
+            if not response:
+                logger.error("Empty response from AI")
+                return None
 
             if '```json' in response:
                 start = response.find('```json') + 7
@@ -384,6 +397,7 @@ CRITICAL:
 
             start_idx = response.find('{')
             if start_idx == -1:
+                logger.error(f"No JSON object found in response: {response[:200]}")
                 return None
 
             brace_count = 0
@@ -394,12 +408,16 @@ CRITICAL:
                     brace_count -= 1
                     if brace_count == 0:
                         json_str = response[start_idx:i + 1]
-                        return json.loads(json_str)
+                        parsed = json.loads(json_str)
+                        logger.debug(f"Successfully parsed JSON: {len(json_str)} chars")
+                        return parsed
 
+            logger.error(f"Unmatched braces in response: {response[:300]}")
             return None
 
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON parsing error: {e}")
+            logger.error(f"JSON decode error at line {e.lineno}, col {e.colno}: {e.msg}")
+            logger.debug(f"Response preview: {response[:500]}")
             return None
         except Exception as e:
             logger.error(f"Parsing error: {e}")
