@@ -1,5 +1,5 @@
 """
-Shared utilities for trading bot
+Shared utilities for trading bot - FIXED: market_conditions and key_levels
 """
 
 import json
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dict:
-    """Shared fallback validation logic"""
+    """Shared fallback validation logic - FIXED: добавлены market_conditions и key_levels"""
     entry = signal.get('entry_price', 0)
     stop = signal.get('stop_loss', 0)
     tp_levels = signal.get('take_profit_levels', [0, 0, 0])
@@ -25,6 +25,28 @@ def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dic
         if risk > 0:
             rr_ratio = round(reward / risk, 2)
             if rr_ratio >= min_risk_reward_ratio:
+                # FIXED: Извлекаем данные из comprehensive_data для market_conditions
+                comp_data = signal.get('comprehensive_data', {})
+                market_data = comp_data.get('market_data', {})
+
+                # Формируем market_conditions
+                funding = market_data.get('funding_rate', {})
+                oi = market_data.get('open_interest', {})
+                orderbook = market_data.get('orderbook', {})
+
+                funding_rate = funding.get('funding_rate', 0) if funding else 0
+                oi_trend = oi.get('oi_trend', 'UNKNOWN') if oi else 'UNKNOWN'
+                spread_pct = orderbook.get('spread_pct', 0) if orderbook else 0
+
+                market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
+
+                # Формируем key_levels из analysis или используем базовые значения
+                analysis_text = signal.get('analysis', '')
+                if 'OB' in analysis_text or 'Order Block' in analysis_text:
+                    key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
+                else:
+                    key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f} (swing low/high), TP levels: ${tp_levels[0]:.4f}/${tp_levels[1]:.4f}/${tp_levels[2]:.4f}"
+
                 return {
                     'approved': True,
                     'final_confidence': signal['confidence'],
@@ -34,17 +56,21 @@ def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dic
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': 720,
                     'validation_method': 'fallback',
-                    'validation_notes': f'Fallback validation: R/R {rr_ratio}'
+                    'validation_notes': f'Fallback validation: R/R {rr_ratio}',
+                    'market_conditions': market_conditions,  # FIXED: добавлено
+                    'key_levels': key_levels  # FIXED: добавлено
                 }
 
     return {
         'approved': False,
-        'rejection_reason': 'Fallback validation failed',
+        'rejection_reason': 'Fallback validation failed: R/R below minimum',
         'entry_price': entry,
         'stop_loss': stop,
         'take_profit_levels': tp_levels,
         'final_confidence': signal.get('confidence', 0),
-        'validation_method': 'fallback'
+        'validation_method': 'fallback',
+        'market_conditions': 'Validation failed',  # FIXED: добавлено
+        'key_levels': ''  # FIXED: добавлено
     }
 
 

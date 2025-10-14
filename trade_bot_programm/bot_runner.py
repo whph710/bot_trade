@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - с оптимизированным логированием
+Trading Bot Runner - FIXED: упрощенный формат вывода
 """
 
 import asyncio
@@ -289,7 +289,7 @@ class TradingBotRunner:
         return validation_result
 
     async def run_cycle(self) -> Dict[str, Any]:
-        """Запуск полного цикла бота"""
+        """Запуск полного цикла бота - FIXED: новый формат вывода"""
         import time
         cycle_start = time.time()
 
@@ -303,50 +303,68 @@ class TradingBotRunner:
 
         try:
             signal_pairs = await self.stage1_filter_signals()
+
+            # FIXED: Early exit - только stats
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
+                total_time = time.time() - cycle_start
                 return {
+                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                     'result': 'NO_SIGNAL_PAIRS',
-                    'total_time': time.time() - cycle_start,
                     'stats': {
                         'pairs_scanned': self.processed_pairs,
                         'signal_pairs_found': 0,
                         'ai_selected': 0,
                         'analyzed': 0,
                         'validated_signals': 0,
-                        'rejected_signals': 0
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+                        'total_time': round(total_time, 1),
+                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
                     }
                 }
 
             selected_pairs = await self.stage2_ai_select(signal_pairs)
+
+            # FIXED: Early exit - только stats
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
+                total_time = time.time() - cycle_start
                 return {
+                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                     'result': 'NO_AI_SELECTION',
-                    'total_time': time.time() - cycle_start,
                     'stats': {
                         'pairs_scanned': self.processed_pairs,
                         'signal_pairs_found': self.signal_pairs_count,
                         'ai_selected': 0,
                         'analyzed': 0,
                         'validated_signals': 0,
-                        'rejected_signals': 0
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+                        'total_time': round(total_time, 1),
+                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
                     }
                 }
 
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
+
+            # FIXED: Early exit - только stats
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
+                total_time = time.time() - cycle_start
                 return {
+                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                     'result': 'NO_ANALYSIS_SIGNALS',
-                    'total_time': time.time() - cycle_start,
                     'stats': {
                         'pairs_scanned': self.processed_pairs,
                         'signal_pairs_found': self.signal_pairs_count,
                         'ai_selected': self.ai_selected_count,
                         'analyzed': 0,
                         'validated_signals': 0,
-                        'rejected_signals': 0
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+                        'total_time': round(total_time, 1),
+                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
                     }
                 }
 
@@ -354,38 +372,36 @@ class TradingBotRunner:
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
+            # FIXED: Если validation skipped - только stats
             if validation_result.get('validation_skipped_reason'):
                 logger.warning(f"Execution stopped: Validation skipped - {validation_result['validation_skipped_reason']}")
+                total_time = time.time() - cycle_start
                 return {
+                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                     'result': 'VALIDATION_SKIPPED',
                     'reason': validation_result['validation_skipped_reason'],
-                    'total_time': time.time() - cycle_start,
                     'stats': {
                         'pairs_scanned': self.processed_pairs,
                         'signal_pairs_found': self.signal_pairs_count,
                         'ai_selected': self.ai_selected_count,
                         'analyzed': self.analyzed_count,
                         'validated_signals': 0,
-                        'rejected_signals': 0
+                        'rejected_signals': 0,
+                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+                        'total_time': round(total_time, 1),
+                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
                     }
                 }
 
             total_time = time.time() - cycle_start
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            validation_stats = calculate_validation_stats(validated, rejected)
 
             result_type = 'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS'
 
+            # FIXED: Упрощенный формат
             result = {
                 'timestamp': timestamp,
                 'result': result_type,
-                'total_time': round(total_time, 1),
-                'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}",
-                'ai_config': {
-                    'stage2': config.STAGE2_PROVIDER,
-                    'stage3': config.STAGE3_PROVIDER,
-                    'stage4': config.STAGE4_PROVIDER
-                },
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs_found': self.signal_pairs_count,
@@ -393,12 +409,15 @@ class TradingBotRunner:
                     'analyzed': self.analyzed_count,
                     'validated_signals': len(validated),
                     'rejected_signals': len(rejected),
-                    'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0
-                },
-                'validated_signals': validated,
-                'rejected_signals': rejected,
-                'validation_stats': validation_stats
+                    'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+                    'total_time': round(total_time, 1),
+                    'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
+                }
             }
+
+            # FIXED: Добавляем validated_signals только если есть сигналы
+            if validated:
+                result['validated_signals'] = validated
 
             logger.info("╔" + "=" * 68 + "╗")
             logger.info(f"║ CYCLE COMPLETE: {result_type}".ljust(69) + "║")
@@ -409,17 +428,21 @@ class TradingBotRunner:
 
         except Exception as e:
             logger.error(f"CRITICAL CYCLE ERROR: {e}", exc_info=True)
+            total_time = time.time() - cycle_start
             return {
+                'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                 'result': 'ERROR',
                 'error': str(e),
-                'total_time': time.time() - cycle_start,
                 'stats': {
                     'pairs_scanned': self.processed_pairs,
                     'signal_pairs_found': self.signal_pairs_count,
                     'ai_selected': self.ai_selected_count,
                     'analyzed': self.analyzed_count,
                     'validated_signals': 0,
-                    'rejected_signals': 0
+                    'rejected_signals': 0,
+                    'processing_speed': 0,
+                    'total_time': round(total_time, 1),
+                    'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
                 }
             }
 

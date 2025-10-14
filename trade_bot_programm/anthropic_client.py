@@ -1,5 +1,5 @@
 """
-Anthropic Claude AI Client
+Anthropic Claude AI Client - FIXED: гарантируем market_conditions и key_levels
 """
 
 import asyncio
@@ -196,7 +196,7 @@ class AnthropicClient:
             return []
 
     async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
-        """Validate trading signal"""
+        """Validate trading signal - FIXED: гарантируем все поля"""
         try:
             symbol = signal.get('symbol', 'UNKNOWN')
             logger.debug(f"Claude: Validating signal for {symbol}")
@@ -242,6 +242,28 @@ class AnthropicClient:
                     if not isinstance(tp_levels, list):
                         tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
 
+                    # FIXED: Гарантируем наличие всех полей
+                    market_conditions = validated.get('market_conditions', '').strip()
+                    key_levels = validated.get('key_levels', '').strip()
+
+                    # Если AI не заполнил - заполняем сами
+                    if not market_conditions:
+                        market_data = comprehensive_data.get('market_data', {})
+                        funding = market_data.get('funding_rate', {})
+                        oi = market_data.get('open_interest', {})
+                        orderbook = market_data.get('orderbook', {})
+
+                        funding_rate = funding.get('funding_rate', 0) if funding else 0
+                        oi_trend = oi.get('oi_trend', 'UNKNOWN') if oi else 'UNKNOWN'
+                        spread_pct = orderbook.get('spread_pct', 0) if orderbook else 0
+
+                        market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
+
+                    if not key_levels:
+                        entry = validated.get('entry_price', signal['entry_price'])
+                        stop = validated.get('stop_loss', signal['stop_loss'])
+                        key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
+
                     logger.debug(f"Claude: Approved {symbol} with R/R {validated.get('risk_reward_ratio', 0)}")
 
                     return {
@@ -253,8 +275,8 @@ class AnthropicClient:
                         'risk_reward_ratio': validated.get('risk_reward_ratio', 0),
                         'hold_duration_minutes': validated.get('hold_duration_minutes', 720),
                         'validation_notes': validated.get('validation_notes', ''),
-                        'market_conditions': validated.get('market_conditions', ''),
-                        'key_levels': validated.get('key_levels', ''),
+                        'market_conditions': market_conditions,  # FIXED: гарантировано заполнено
+                        'key_levels': key_levels,  # FIXED: гарантировано заполнено
                         'validation_method': 'claude'
                     }
                 else:

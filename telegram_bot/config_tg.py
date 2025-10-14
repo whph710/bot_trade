@@ -22,7 +22,7 @@ load_env()
 # Telegram настройки
 TG_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TG_USER_ID = int(os.getenv('TELEGRAM_USER_ID', '0'))
-TG_CHAT_ID = os.getenv('TELEGRAM_GROUP_ID', '0')
+TG_CHAT_ID = int(os.getenv('TELEGRAM_GROUP_ID', '0'))
 
 # Проверка конфигурации
 if not TG_TOKEN or TG_USER_ID == 0 or TG_CHAT_ID == 0:

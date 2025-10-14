@@ -1,5 +1,5 @@
 """
-Simple validator with optimized logging
+Simple validator - FIXED: гарантируем market_conditions и key_levels
 """
 
 from typing import Dict, List
@@ -37,7 +37,7 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
-    """Simple validation through AI"""
+    """Simple validation through AI - FIXED: гарантируем все поля"""
 
     # Check trading hours
     time_allowed, time_reason = check_trading_hours()
@@ -89,6 +89,28 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
             if validation_result.get('approved', False):
                 rr_ratio = validation_result.get('risk_reward_ratio', 0)
 
+                # FIXED: Гарантируем market_conditions и key_levels
+                market_conditions = validation_result.get('market_conditions', '').strip()
+                key_levels = validation_result.get('key_levels', '').strip()
+
+                # Если не заполнены - берем из comprehensive_data
+                if not market_conditions:
+                    market_data = comprehensive_data.get('market_data', {})
+                    funding = market_data.get('funding_rate', {})
+                    oi = market_data.get('open_interest', {})
+                    orderbook = market_data.get('orderbook', {})
+
+                    funding_rate = funding.get('funding_rate', 0) if funding else 0
+                    oi_trend = oi.get('oi_trend', 'UNKNOWN') if oi else 'UNKNOWN'
+                    spread_pct = orderbook.get('spread_pct', 0) if orderbook else 0
+
+                    market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
+
+                if not key_levels:
+                    entry = validation_result.get('entry_price', signal['entry_price'])
+                    stop = validation_result.get('stop_loss', signal['stop_loss'])
+                    key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
+
                 validated_signal = {
                     'symbol': symbol,
                     'signal': signal_type,
@@ -100,8 +122,8 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': validation_result.get('hold_duration_minutes', 720),
                     'validation_notes': validation_result.get('validation_notes', ''),
-                    'market_conditions': validation_result.get('market_conditions', ''),
-                    'key_levels': validation_result.get('key_levels', ''),
+                    'market_conditions': market_conditions,  # FIXED: гарантировано заполнено
+                    'key_levels': key_levels,  # FIXED: гарантировано заполнено
                     'validation_method': validation_result.get('validation_method', 'ai'),
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
