@@ -7,7 +7,6 @@ import pytz
 from pathlib import Path
 import sys
 
-# Добавить родительскую директорию в PATH
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from aiogram import Bot, Dispatcher, F
@@ -16,7 +15,11 @@ from aiogram.filters import Command
 
 from telegram_bot.config_tg import TG_TOKEN, TG_CHAT_ID, TG_USER_ID
 from telegram_bot.schedule_manager import ScheduleManager
-from telegram_bot.result_formatter import format_bot_result
+from telegram_bot.result_formatter import (
+    format_bot_result,
+    format_signal_individual,
+    send_individual_signals_to_group
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +35,6 @@ class TradingBotTelegram:
         self.schedule_manager = ScheduleManager()
         self.trading_bot_running = False
 
-        # Регистрируем обработчики
         self.dp.message.register(self.start_command, Command(commands=["start"]))
         self.dp.message.register(self.handle_message, F.text & ~F.command)
 
@@ -84,23 +86,44 @@ class TradingBotTelegram:
 
             formatted_result = format_bot_result(result)
 
+            # Отправить результат пользователю
             await message.reply(
                 f"📈 <b>Результат анализа:</b>\n\n{formatted_result}",
                 parse_mode="HTML"
             )
 
+            # Отправить сигналы в группу если они есть
             if result.get('validated_signals'):
-                group_message = self._format_group_message(result)
-                await self.bot.send_message(
-                    chat_id=TG_CHAT_ID,
-                    text=group_message,
-                    parse_mode="HTML"
-                )
-                logger.info(f"📊 Posted {len(result['validated_signals'])} signals to group")
+                await self._post_signals_to_group(result)
+            else:
+                logger.info("ℹ️ No validated signals to post")
 
         except Exception as e:
             logger.exception("Error running trading bot manually")
             await message.reply(f"❌ Ошибка: {str(e)}")
+
+    async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
+        """
+        Постить каждый сигнал отдельным постом в группу
+        """
+        try:
+            validated_signals = result.get('validated_signals', [])
+
+            if not validated_signals:
+                logger.info("No validated signals to post")
+                return
+
+            # Отправляем каждый сигнал отдельным постом
+            sent_count = await send_individual_signals_to_group(
+                self.bot,
+                TG_CHAT_ID,
+                validated_signals
+            )
+
+            logger.info(f"✅ Posted {sent_count}/{len(validated_signals)} signal(s) to group {TG_CHAT_ID}")
+
+        except Exception as e:
+            logger.exception(f"Error posting signals to group: {e}")
 
     async def show_status(self, message: Message):
         perm_tz = pytz.timezone('Asia/Yekaterinburg')
@@ -121,41 +144,8 @@ class TradingBotTelegram:
     async def stop_bot(self, message: Message):
         await message.reply("🛑 Бот остановлен. Перезапустите для возобновления")
 
-    def _format_group_message(self, result: Dict[str, Any]) -> str:
-        validated = result.get('validated_signals', [])
-
-        if not validated:
-            return "ℹ️ No validated signals in this cycle"
-
-        message = "🎯 <b>TRADING SIGNALS - VALIDATED</b>\n\n"
-
-        for i, sig in enumerate(validated, 1):
-            tp_levels = sig.get('take_profit_levels', [0, 0, 0])
-            message += (
-                f"<b>#{i}. {sig['symbol']}</b>\n"
-                f"📍 Signal: <b>{sig['signal']}</b>\n"
-                f"📊 Confidence: <b>{sig['confidence']}%</b>\n"
-                f"💰 Entry: <code>${sig['entry_price']:.2f}</code>\n"
-                f"🛑 Stop: <code>${sig['stop_loss']:.2f}</code>\n"
-                f"🎯 TP1: <code>${tp_levels[0]:.2f}</code>\n"
-                f"🎯 TP2: <code>${tp_levels[1]:.2f}</code>\n"
-                f"🎯 TP3: <code>${tp_levels[2]:.2f}</code>\n"
-                f"📈 R/R: <b>1:{sig.get('risk_reward_ratio', 0):.2f}</b>\n"
-                f"⏱️ Hold: <b>{sig.get('hold_duration_minutes', 0)}min</b>\n"
-                f"📝 {sig.get('validation_notes', '')}\n\n"
-            )
-
-        stats = result.get('validation_stats', {})
-        message += (
-            f"<b>Summary:</b>\n"
-            f"✅ Approved: {stats.get('approved', 0)}\n"
-            f"❌ Rejected: {stats.get('rejected', 0)}\n"
-            f"⏱️ Total time: {result.get('total_time', 0):.1f}s\n"
-        )
-
-        return message
-
     async def schedule_callback(self, bot: Bot):
+        """Callback для плановых запусков"""
         try:
             logger.info("🤖 Scheduled trading bot cycle started")
 
@@ -164,29 +154,29 @@ class TradingBotTelegram:
             result = await run_trading_bot_cycle()
 
             formatted_result = format_bot_result(result)
+
+            # Отправить результат пользователю
             await bot.send_message(
                 chat_id=TG_USER_ID,
                 text=f"📈 <b>Результат анализа:</b>\n\n{formatted_result}",
                 parse_mode="HTML"
             )
 
+            # Постить сигналы в группу если они есть
             if result.get('validated_signals'):
-                group_message = self._format_group_message(result)
-                await bot.send_message(
-                    chat_id=TG_CHAT_ID,
-                    text=group_message,
-                    parse_mode="HTML"
-                )
-                logger.info(f"📊 Posted {len(result['validated_signals'])} signals to group")
+                await self._post_signals_to_group(result)
             else:
-                logger.info("No validated signals in this cycle")
+                logger.info("ℹ️ No validated signals in this cycle")
 
         except Exception as e:
             logger.exception("Error in scheduled cycle")
-            await bot.send_message(
-                chat_id=TG_USER_ID,
-                text=f"❌ Ошибка в запланированном цикле: {str(e)}"
-            )
+            try:
+                await bot.send_message(
+                    chat_id=TG_USER_ID,
+                    text=f"❌ Ошибка в запланированном цикле: {str(e)[:100]}"
+                )
+            except Exception as send_error:
+                logger.exception(f"Failed to send error message: {send_error}")
 
     async def start(self):
         self.schedule_manager.setup_schedule(self.bot, self.schedule_callback)
@@ -202,5 +192,3 @@ async def run_telegram_bot():
     await bot.start()
 
 
-if __name__ == "__main__":
-    asyncio.run(run_telegram_bot())
