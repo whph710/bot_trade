@@ -1,5 +1,5 @@
 """
-DeepSeek API client - FIXED: гарантируем market_conditions и key_levels
+DeepSeek API client - FIXED: убрано ограничение MAX_BULK_PAIRS
 """
 
 import asyncio
@@ -106,7 +106,7 @@ class DeepSeekClient:
 
             response = await asyncio.wait_for(
                 client.chat.completions.create(**kwargs),
-                timeout=config.API_TIMEOUT
+                timeout=config.API_TIMEOUT_SELECTION  # Используем таймаут для selection
             )
 
             result = response.choices[0].message.content
@@ -114,24 +114,21 @@ class DeepSeekClient:
             return result
 
         except asyncio.TimeoutError:
-            logger.error(f"DeepSeek timeout: {config.API_TIMEOUT}s")
+            logger.error(f"DeepSeek timeout: {config.API_TIMEOUT_SELECTION}s")
             raise
         except Exception as e:
             logger.error(f"DeepSeek error: {e}")
             raise
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
-        """Select pairs for analysis"""
+        """Select pairs for analysis - NO LIMIT for DeepSeek (cheap AI)"""
         if not pairs_data:
             logger.warning("No pairs data for DeepSeek selection")
             return []
 
         try:
-            if len(pairs_data) > config.MAX_BULK_PAIRS:
-                pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
-                logger.debug(f"Selection limited to top {config.MAX_BULK_PAIRS} pairs")
-
-            logger.info(f"DeepSeek: Selecting pairs from {len(pairs_data)} candidates")
+            # REMOVED LIMIT - DeepSeek is cheap, can process all pairs
+            logger.info(f"DeepSeek: Selecting pairs from {len(pairs_data)} candidates (no limit)")
 
             compact_data = {}
             for item in pairs_data:
@@ -170,7 +167,7 @@ class DeepSeekClient:
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             json_payload = json.dumps(compact_data, separators=(',', ':'))
 
-            logger.debug(f"Selection data size: {len(json_payload)} chars")
+            logger.debug(f"Selection data size: {len(json_payload)} chars for {len(compact_data)} pairs")
 
             response = await self.call(
                 prompt=f"{prompt}\n\nData:\n{json_payload}",
@@ -189,7 +186,7 @@ class DeepSeekClient:
             return []
 
         except asyncio.TimeoutError:
-            logger.error("DeepSeek selection timeout")
+            logger.error(f"DeepSeek selection timeout ({config.API_TIMEOUT_SELECTION}s)")
             return []
         except Exception as e:
             logger.error(f"DeepSeek selection error: {e}")
