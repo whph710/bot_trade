@@ -1,12 +1,19 @@
 """
-Обновленный result_formatter.py - отдельный пост для каждого сигнала с анализом
+Упрощенный result_formatter.py - базовое форматирование результатов
+AI форматирование вынесено в ai_formatter.py
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 
-def format_bot_result(result: Dict[str, Any]) -> str:
-    """Форматировать результат работы торгового бота для вывода в Telegram"""
+def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) -> str:
+    """
+    Форматировать результат работы торгового бота для вывода в Telegram
+
+    Args:
+        result: Результат работы бота
+        run_stats: Статистика запусков (total_runs, today_runs)
+    """
 
     bot_result = result.get('result', 'UNKNOWN')
     total_time = result.get('total_time', 0)
@@ -29,7 +36,7 @@ def format_bot_result(result: Dict[str, Any]) -> str:
         f"⏱️ <b>Время:</b> {total_time:.1f}s\n\n"
     )
 
-    result_text += "<b>📊 СТАТИСТИКА:</b>\n"
+    result_text += "<b>📊 СТАТИСТИКА АНАЛИЗА:</b>\n"
     result_text += f"  • Пар отсканировано: {stats.get('pairs_scanned', 0)}\n"
     result_text += f"  • Сигналов найдено: {stats.get('signal_pairs_found', 0)}\n"
     result_text += f"  • AI отобрал: {stats.get('ai_selected', 0)}\n"
@@ -40,6 +47,12 @@ def format_bot_result(result: Dict[str, Any]) -> str:
     if stats.get('processing_speed'):
         result_text += f"  • Скорость: {stats.get('processing_speed', 0):.1f} пар/сек\n"
 
+    # Добавляем статистику запусков если передана
+    if run_stats:
+        result_text += f"\n<b>🔢 СТАТИСТИКА ЗАПУСКОВ:</b>\n"
+        result_text += f"  • Всего запусков: {run_stats.get('total_runs', 0)}\n"
+        result_text += f"  • Сегодня: {run_stats.get('today_runs', 0)}\n"
+
     if result.get('validation_skipped_reason'):
         result_text += f"\n⏰ <b>Причина пропуска:</b>\n{result['validation_skipped_reason']}"
 
@@ -49,101 +62,36 @@ def format_bot_result(result: Dict[str, Any]) -> str:
     return result_text
 
 
-def format_signal_individual(signal: Dict[str, Any], index: int = 1, total: int = 1) -> str:
+async def send_formatted_signals_to_group(bot, chat_id: int, formatted_signals: list[str]) -> int:
     """
-    Форматировать один сигнал для отдельного поста
-
-    Args:
-        signal: Словарь с данными сигнала
-        index: Номер сигнала
-        total: Всего сигналов
-
-    Returns:
-        Отформатированный текст для поста
-    """
-    symbol = signal.get('symbol', 'N/A')
-    signal_type = signal.get('signal', 'N/A')
-    confidence = signal.get('confidence', 0)
-    entry = signal.get('entry_price', 0)
-    stop = signal.get('stop_loss', 0)
-    tp_levels = signal.get('take_profit_levels', [0, 0, 0])
-    rr = signal.get('risk_reward_ratio', 0)
-    hold = signal.get('hold_duration_minutes', 0)
-    analysis = signal.get('analysis', '')
-    market_cond = signal.get('market_conditions', '')
-    validation_notes = signal.get('validation_notes', '')
-
-    # Направление с цветным эмодзи
-    dir_emoji = '🟢' if signal_type.upper() == 'LONG' else '🔴'
-
-    # Основная информация - начинаем с тикера
-    message = f"{dir_emoji} <b>{symbol}</b> | {signal_type}\n"
-    message += f"{'━' * 40}\n\n"
-
-    # Основные параметры
-    message += f"<b>📊 ПАРАМЕТРЫ:</b>\n"
-    message += f"  • Confidence: <b>{confidence}%</b>\n"
-    message += f"  • Risk/Reward: <b>1:{rr:.2f}</b>\n"
-    message += f"  • Длительность: <b>{hold} мин</b>\n\n"
-
-    # Уровни входа/выхода
-    message += f"<b>💰 УРОВНИ ВХОДА/ВЫХОДА:</b>\n"
-    message += f"  • Entry:  <code>${entry:.4f}</code>\n"
-    message += f"  • Stop:   <code>${stop:.4f}</code>\n"
-    message += f"  • TP1:    <code>${tp_levels[0]:.4f}</code>\n"
-    message += f"  • TP2:    <code>${tp_levels[1]:.4f}</code>\n"
-    message += f"  • TP3:    <code>${tp_levels[2]:.4f}</code>\n\n"
-
-    # Рыночные условия если есть
-    if market_cond:
-        message += f"<b>📈 РЫНОК:</b>\n"
-        message += f"  {market_cond}\n\n"
-
-    # Обоснование анализа (главная часть)
-    if analysis:
-        message += f"<b>📝 АНАЛИЗ:</b>\n"
-        message += f"<i>{analysis}</i>\n\n"
-
-    # Заметки валидации
-    if validation_notes:
-        message += f"<b>✓ ВАЛИДАЦИЯ:</b>\n"
-        message += f"  {validation_notes}\n"
-
-    return message
-
-
-async def send_individual_signals_to_group(bot, chat_id: int, signals: List[Dict[str, Any]]) -> int:
-    """
-    Отправить каждый сигнал отдельным постом в группу
+    Отправить уже отформатированные сигналы в группу
 
     Args:
         bot: Экземпляр Bot
         chat_id: ID чата
-        signals: Список сигналов
+        formatted_signals: Список уже отформатированных HTML-текстов
 
     Returns:
         Количество успешно отправленных сигналов
     """
-    if not signals:
+    if not formatted_signals:
         return 0
 
     sent_count = 0
-    total_signals = len(signals)
+    total_signals = len(formatted_signals)
 
-    for index, signal in enumerate(signals, 1):
+    for index, formatted_text in enumerate(formatted_signals, 1):
         try:
-            formatted_signal = format_signal_individual(signal, index, total_signals)
-
             await bot.send_message(
                 chat_id=chat_id,
-                text=formatted_signal,
+                text=formatted_text,
                 parse_mode="HTML"
             )
 
             sent_count += 1
             print(f"✅ Sent signal {index}/{total_signals} to group")
 
-            # Небольшая задержка между постами (чтобы Telegram не заблокировал)
+            # Небольшая задержка между постами
             import asyncio
             await asyncio.sleep(0.5)
 
@@ -157,15 +105,6 @@ async def send_individual_signals_to_group(bot, chat_id: int, signals: List[Dict
 async def send_group_message_safe(bot, chat_id: int, text: str, max_length: int = 4096) -> bool:
     """
     Безопасно отправить одно сообщение, разбивая на части если нужно
-
-    Args:
-        bot: Экземпляр Bot
-        chat_id: ID чата
-        text: Текст сообщения
-        max_length: Максимальная длина сообщения Telegram
-
-    Returns:
-        True если успешно, False если ошибка
     """
     try:
         if len(text) <= max_length:
