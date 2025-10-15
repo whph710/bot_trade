@@ -5,7 +5,7 @@
 
 import json
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, Any
 from logging_config import setup_module_logger
 
@@ -109,7 +109,7 @@ class StatsManager:
             return
 
         today = date.today()
-        cutoff_date = today.replace(day=today.day - days_to_keep)
+        cutoff_date = today - timedelta(days=days_to_keep)
 
         keys_to_remove = []
         for date_str in self.stats['daily_stats'].keys():

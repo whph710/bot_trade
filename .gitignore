@@ -43,3 +43,4 @@ bot_result_*.json
 # OS
 .DS_Store
 Thumbs.db
+bot_statistics.json
