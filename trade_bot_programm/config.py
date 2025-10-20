@@ -1,5 +1,6 @@
 """
-Trading bot configuration - UPDATED WITH DYNAMIC TIMEOUTS
+Trading bot configuration - OPTIMIZED FOR SWING TRADING (1H/4H)
+Enhanced with HTF context, session awareness, higher R/R targets
 """
 
 import os
@@ -19,7 +20,7 @@ except:
 
 @dataclass
 class Config:
-    """Bot configuration"""
+    """Bot configuration - Swing Trading Focus"""
 
     # API Keys
     DEEPSEEK_API_KEY = os.getenv('DEEPSEEK') or os.getenv('DEEPSEEK_API_KEY')
@@ -36,18 +37,23 @@ class Config:
     STAGE3_PROVIDER = os.getenv('STAGE3_PROVIDER', 'claude')    # claude or deepseek
     STAGE4_PROVIDER = os.getenv('STAGE4_PROVIDER', 'claude')    # claude or deepseek
 
-    # Timeframes
+    # Timeframes (SWING TRADING - оставляем 1H/4H)
     TIMEFRAME_SHORT = '60'
     TIMEFRAME_SHORT_NAME = '1h'
     TIMEFRAME_LONG = '240'
     TIMEFRAME_LONG_NAME = '4h'
 
+    # NEW: Higher Timeframe for trend context
+    TIMEFRAME_HTF = '1440'  # 1D для определения major trend
+    TIMEFRAME_HTF_NAME = '1d'
+
     # Candles
-    QUICK_SCAN_CANDLES = 48
+    QUICK_SCAN_CANDLES = 48  # 4H = 8 days
     AI_BULK_CANDLES = 48
     AI_INDICATORS_HISTORY = 40
-    FINAL_SHORT_CANDLES = 168
-    FINAL_LONG_CANDLES = 84
+    FINAL_SHORT_CANDLES = 168  # 1H = 7 days
+    FINAL_LONG_CANDLES = 84    # 4H = 14 days
+    FINAL_HTF_CANDLES = 30     # NEW: 1D = 30 days для контекста
     FINAL_INDICATORS_HISTORY = 60
 
     # Indicators
@@ -60,14 +66,19 @@ class Config:
     MACD_SIGNAL = 9
     ATR_PERIOD = 14
 
-    # Trading
+    # Trading - ENHANCED FOR SWING
     MIN_CONFIDENCE = 75
     MIN_VOLUME_RATIO = 1.3
     MIN_ATR_RATIO = 0.8
-    MIN_RISK_REWARD_RATIO = 2.0
-    MAX_HOLD_DURATION = 2880
-    MIN_HOLD_DURATION = 240
+    MIN_RISK_REWARD_RATIO = 2.5  # INCREASED from 2.0 для swing quality
+    MAX_HOLD_DURATION = 4320     # INCREASED: 72 hours (3 days)
+    MIN_HOLD_DURATION = 240      # 4 hours minimum
     VALIDATION_CONFIDENCE_BOOST = 5
+
+    # NEW: R/R Targets для swing trading
+    RR_TARGET_AGGRESSIVE = [2.5, 4.0, 6.0]  # Strong setups
+    RR_TARGET_MODERATE = [2.0, 3.0, 4.5]    # Medium setups
+    RR_TARGET_CONSERVATIVE = [1.8, 2.5, 3.5]  # Weak setups
 
     # Performance
     BATCH_SIZE = 50
@@ -75,29 +86,26 @@ class Config:
     MAX_FINAL_PAIRS = 5
     MAX_BULK_PAIRS = 15  # Используется только для Claude, DeepSeek обрабатывает все
 
-    # API Timeouts - UPDATED: Увеличен таймаут для selection
-    API_TIMEOUT = 120  # Базовый таймаут
-    API_TIMEOUT_SELECTION = int(os.getenv('API_TIMEOUT_SELECTION', '180'))    # Stage 2 - увеличено до 180s
-    API_TIMEOUT_ANALYSIS = int(os.getenv('API_TIMEOUT_ANALYSIS', '180'))     # Stage 3
-    API_TIMEOUT_VALIDATION = int(os.getenv('API_TIMEOUT_VALIDATION', '120')) # Stage 4
+    # API Timeouts
+    API_TIMEOUT = 120
+    API_TIMEOUT_SELECTION = int(os.getenv('API_TIMEOUT_SELECTION', '180'))
+    API_TIMEOUT_ANALYSIS = int(os.getenv('API_TIMEOUT_ANALYSIS', '180'))
+    API_TIMEOUT_VALIDATION = int(os.getenv('API_TIMEOUT_VALIDATION', '120'))
 
-    # Prompts - FIXED: Absolute paths
+    # Prompts
     @staticmethod
     def _get_prompt_path(filename: str) -> str:
         """Get absolute path to prompt file"""
-        # Try relative to config.py location
         config_dir = Path(__file__).parent
         prompt_path = config_dir / filename
         if prompt_path.exists():
             return str(prompt_path)
 
-        # Try relative to project root
         root_dir = config_dir.parent
         prompt_path = root_dir / 'trade_bot_programm' / filename
         if prompt_path.exists():
             return str(prompt_path)
 
-        # Fallback to original
         return f'trade_bot_programm/{filename}'
 
     SELECTION_PROMPT = _get_prompt_path('prompt_select.txt')
@@ -109,14 +117,27 @@ class Config:
     AI_TEMPERATURE_ANALYZE = float(os.getenv('AI_TEMPERATURE_ANALYZE', '0.7'))
     AI_TEMPERATURE_VALIDATE = float(os.getenv('AI_TEMPERATURE_VALIDATE', '0.3'))
     AI_MAX_TOKENS_SELECT = int(os.getenv('AI_MAX_TOKENS_SELECT', '2000'))
-    AI_MAX_TOKENS_ANALYZE = int(os.getenv('AI_MAX_TOKENS_ANALYZE', '3000'))
-    AI_MAX_TOKENS_VALIDATE = int(os.getenv('AI_MAX_TOKENS_VALIDATE', '3500'))
+    AI_MAX_TOKENS_ANALYZE = int(os.getenv('AI_MAX_TOKENS_ANALYZE', '3500'))  # INCREASED для HTF анализа
+    AI_MAX_TOKENS_VALIDATE = int(os.getenv('AI_MAX_TOKENS_VALIDATE', '4000'))  # INCREASED
 
     # Market Data Thresholds
     OI_CHANGE_GROWING_THRESHOLD = float(os.getenv('OI_CHANGE_GROWING_THRESHOLD', '2.0'))
     OI_CHANGE_DECLINING_THRESHOLD = float(os.getenv('OI_CHANGE_DECLINING_THRESHOLD', '-2.0'))
     SPREAD_ILLIQUID_THRESHOLD = float(os.getenv('SPREAD_ILLIQUID_THRESHOLD', '0.15'))
     SPREAD_WARNING_THRESHOLD = float(os.getenv('SPREAD_WARNING_THRESHOLD', '0.08'))
+
+    # NEW: Session Quality Metrics (для session awareness)
+    SESSION_QUALITY = {
+        'asian_night': 0.3,    # 00:00-08:00 UTC - низкое качество
+        'london_open': 0.9,    # 08:00-12:00 UTC - высокое (breakouts)
+        'london_us_overlap': 1.0,  # 12:00-16:00 UTC - максимальное
+        'us_session': 0.85,    # 16:00-20:00 UTC - высокое
+        'us_close': 0.5        # 20:00-00:00 UTC - среднее
+    }
+
+    # NEW: Divergence Detection Settings
+    DIVERGENCE_LOOKBACK = 20  # Свечей для поиска дивергенций
+    DIVERGENCE_CONFIDENCE_BOOST = 25  # Бонус к confidence за дивергенцию
 
 
 config = Config()
