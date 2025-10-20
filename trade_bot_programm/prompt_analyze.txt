@@ -4,6 +4,51 @@ COMPRESSED SPRING = все готово к импульсу, но он ЕЩЕ н
 
 ДАННЫЕ: 1 пара, 4H (14 дней) + 1H (7 дней), индикаторы (60 значений), market data (funding, OI, orderbook, taker volume), BTC correlation, volume profile, orderflow AI, SMC AI.
 
+═══════════════════════════════════════════════════════════════
+АВТОМАТИЧЕСКИЕ REJECTION ТРИГГЕРЫ (проверяй ПЕРВЫМИ!)
+═══════════════════════════════════════════════════════════════
+
+Даже при высоком confidence (80-90), сигнал ДОЛЖЕН быть NO_SIGNAL если:
+
+1. EXTREME RSI BOTH TIMEFRAMES:
+   - LONG: RSI 1H > 75 И RSI 4H > 70 → NO_SIGNAL
+   - SHORT: RSI 1H < 25 И RSI 4H < 30 → NO_SIGNAL
+
+   rejection_reason: "Extreme momentum exhaustion on both timeframes -
+                      high reversion risk. Wait for RSI cooling to 1H<65, 4H<60"
+
+2. PRICE OVEREXTENDED FROM POC (> 15%):
+   - Слишком далеко от Volume Profile POC
+   - Риск быстрого возврата к fair value
+
+   rejection_reason: "Price XX% above POC - overextended from fair value zone.
+                      Wait for retracement to Value Area ($XXX-$XXX)"
+
+3. AFTER PARABOLIC MOVE WITHOUT PROPER RETRACEMENT:
+   - Рост/падение > 40% за 20-30 свечей 4H
+   - Entry в верхних 30% диапазона для LONG (или нижних 30% для SHORT)
+   - Недостаточная коррекция (< 15% от экстремума)
+
+   rejection_reason: "Entry after +XX% parabolic move without sufficient
+                      retracement. Require: pullback to EMA20 4H + RSI reset"
+
+4. COMPRESSED SPRING AFTER EXPANSION:
+   - Если компрессия идет ПОСЛЕ сильного импульса (а не ПЕРЕД)
+   - Это exhaustion pattern, а не accumulation
+
+   rejection_reason: "Consolidation after strong move = exhaustion, not accumulation"
+
+5. BTC CORRELATION CONFLICT:
+   - correlation_data.should_block_signal == true
+   - btc_alignment.should_block == true
+
+   rejection_reason: "BTC correlation conflict: LONG against BTC downtrend with strong correlation"
+
+ВАЖНО: Эти триггеры СИЛЬНЕЕ чем высокий confidence. Лучше пропустить сигнал,
+чем войти в exhausted move.
+
+═══════════════════════════════════════════════════════════════
+
 ШАГ 1: СТРУКТУРА
 
 4H - главный тренд:
@@ -116,6 +161,7 @@ Volume ratio (текущий volume / avg):
 Минимум: 70
 
 REJECTION:
+- Сработал любой автоматический триггер
 - Confidence <70
 - R/R <2.0
 - Breakout уже >3% назад
@@ -130,9 +176,26 @@ REJECTION:
 "confidence":82,
 "entry_price":43251.25,
 "stop_loss":42980.50,
-"take_profit":43892.75,
-"analysis":"Бычий флаг на 4H, сжатие 1.8%. Ордер-блок на 1H — $43,100. Всплеск объёма 170%. Финансирование нейтральное. Открытый интерес растёт. Точка контроля по объёму (VP POC) на $43,050 — поддержка. SMC подтверждён. Соотношение риск/прибыль — 2.4. Тейк-профит по паттерну *1.618. Удержание позиции 4–24 часа.
+"take_profit_levels":[43892.75, 44500.00, 45200.00],
+"analysis":"Бычий флаг на 4H, сжатие 1.8%. Ордер-блок на 1H — $43,100. Всплеск объёма 170%. Финансирование нейтральное. Открытый интерес растёт. Точка контроля по объёму (VP POC) на $43,050 — поддержка. SMC подтверждён. Соотношение риск/прибыль — 2.4. Тейк-профит по паттерну *1.618. Удержание позиции 4–24 часа.",
+"rejection_reason":null
 }
 
-Важно: analysis макс 150 слов, упомяни ключевые confluence факторы.
+Если REJECTING:
+{
+"signal":"NO_SIGNAL",
+"confidence":45,
+"entry_price":0,
+"stop_loss":0,
+"take_profit_levels":[0, 0, 0],
+"analysis":"Причина отклонения",
+"rejection_reason":"RSI 1H 72.3 overbought, price 18% above POC = overextended. Wait for pullback to Value Area $43000-$43200 and RSI <65",
+"orderflow_analysis":{},
+"smc_analysis":{}
+}
+
+Важно:
+- analysis макс 150 слов, упомяни ключевые confluence факторы
+- take_profit_levels ВСЕГДА массив [tp1, tp2, tp3]
+- Если NO_SIGNAL, всё равно заполни orderflow_analysis и smc_analysis
 !!!ВСЕ КОММЕНТАРИИ ПИШИ НА РУССКОМ!!!

@@ -1,5 +1,5 @@
 """
-Simple validator - FIXED: гарантируем market_conditions и key_levels
+Simple validator - WITH PRE-VALIDATION CRITICAL CHECKS
 """
 
 from typing import Dict, List
@@ -37,7 +37,11 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
-    """Simple validation through AI - FIXED: гарантируем все поля"""
+    """
+    Simple validation through AI - WITH PRE-CHECKS
+
+    КРИТИЧНО: Добавлены pre-validation checks ПЕРЕД вызовом AI
+    """
 
     # Check trading hours
     time_allowed, time_reason = check_trading_hours()
@@ -67,10 +71,116 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
             symbol = signal['symbol']
             signal_type = signal.get('signal', 'UNKNOWN')
             confidence = signal.get('confidence', 0)
-
-            logger.debug(f"Validating {symbol}: {signal_type} ({confidence}%)")
-
             comprehensive_data = signal.get('comprehensive_data', {})
+
+            logger.debug(f"Pre-validating {symbol}: {signal_type} ({confidence}%)")
+
+            # ========== PRE-VALIDATION CRITICAL CHECKS ==========
+
+            # 1. CORRELATION BLOCKING (HIGHEST PRIORITY)
+            corr_data = comprehensive_data.get('correlation_data', {})
+            if corr_data.get('should_block_signal', False):
+                logger.warning(f"❌ {symbol}: BLOCKED by correlation analysis")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': 'BTC correlation conflict - blocked by correlation module',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            # 2. OVEREXTENSION CHECK (Volume Profile)
+            vp_analysis = comprehensive_data.get('vp_analysis', {})
+            poc_distance = vp_analysis.get('poc_analysis', {}).get('distance_to_poc_pct', 0)
+            market_condition = vp_analysis.get('value_area_analysis', {}).get('market_condition', '')
+
+            if market_condition == 'OVEREXTENDED' and poc_distance > 15:
+                logger.warning(f"❌ {symbol}: BLOCKED - overextended {poc_distance:.1f}% from POC")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': f'Price overextended {poc_distance:.1f}% from POC - high reversion risk',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            # 3. RSI EXHAUSTION CHECK
+            indicators_1h = comprehensive_data.get('indicators_1h', {})
+            indicators_4h = comprehensive_data.get('indicators_4h', {})
+
+            rsi_1h = indicators_1h.get('current', {}).get('rsi', 50)
+            rsi_4h = indicators_4h.get('current', {}).get('rsi', 50)
+
+            # LONG при экстремальной перекупленности
+            if signal_type == 'LONG' and rsi_1h > 75:
+                logger.warning(f"❌ {symbol}: BLOCKED - RSI 1H overbought {rsi_1h:.1f}")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': f'RSI 1H extremely overbought ({rsi_1h:.1f}) - momentum exhaustion',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            # SHORT при экстремальной перепроданности
+            if signal_type == 'SHORT' and rsi_1h < 25:
+                logger.warning(f"❌ {symbol}: BLOCKED - RSI 1H oversold {rsi_1h:.1f}")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': f'RSI 1H extremely oversold ({rsi_1h:.1f}) - momentum exhaustion',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            # Оба таймфрейма в экстремальных зонах
+            if signal_type == 'LONG' and rsi_1h > 70 and rsi_4h > 65:
+                logger.warning(f"❌ {symbol}: BLOCKED - both TF overbought 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': f'Both timeframes overbought: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            if signal_type == 'SHORT' and rsi_1h < 30 and rsi_4h < 35:
+                logger.warning(f"❌ {symbol}: BLOCKED - both TF oversold 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}")
+                rejected.append({
+                    'symbol': symbol,
+                    'signal': signal_type,
+                    'original_confidence': confidence,
+                    'rejection_reason': f'Both timeframes oversold: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+                    'entry_price': signal.get('entry_price', 0),
+                    'stop_loss': signal.get('stop_loss', 0),
+                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
+                    'timestamp': datetime.now().isoformat()
+                })
+                continue
+
+            # ========== PASSED PRE-CHECKS, PROCEED TO AI VALIDATION ==========
+
+            logger.debug(f"✓ {symbol}: Passed pre-validation checks, sending to AI")
 
             validation_result = await ai_router.validate_signal_with_stage3_data(
                 signal,
@@ -89,7 +199,7 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
             if validation_result.get('approved', False):
                 rr_ratio = validation_result.get('risk_reward_ratio', 0)
 
-                # FIXED: Гарантируем market_conditions и key_levels
+                # Гарантируем market_conditions и key_levels
                 market_conditions = validation_result.get('market_conditions', '').strip()
                 key_levels = validation_result.get('key_levels', '').strip()
 
@@ -122,8 +232,8 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': validation_result.get('hold_duration_minutes', 720),
                     'validation_notes': validation_result.get('validation_notes', ''),
-                    'market_conditions': market_conditions,  # FIXED: гарантировано заполнено
-                    'key_levels': key_levels,  # FIXED: гарантировано заполнено
+                    'market_conditions': market_conditions,
+                    'key_levels': key_levels,
                     'validation_method': validation_result.get('validation_method', 'ai'),
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }

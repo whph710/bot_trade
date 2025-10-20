@@ -1,5 +1,5 @@
 """
-Shared utilities for trading bot - FIXED: market_conditions and key_levels
+Shared utilities for trading bot - ENHANCED WITH CRITICAL BLOCKERS
 """
 
 import json
@@ -10,13 +10,129 @@ logger = logging.getLogger(__name__)
 
 
 def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dict:
-    """Shared fallback validation logic - FIXED: добавлены market_conditions и key_levels"""
+    """
+    Enhanced fallback validation with CRITICAL SAFETY CHECKS
+
+    КРИТИЧНО: Добавлены проверки которые были пропущены в ALICEUSDT
+    - BTC correlation blocking
+    - Volume Profile overextension
+    - RSI exhaustion
+    """
     entry = signal.get('entry_price', 0)
     stop = signal.get('stop_loss', 0)
     tp_levels = signal.get('take_profit_levels', [0, 0, 0])
 
     if not isinstance(tp_levels, list):
         tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
+
+    # ========== НОВЫЕ КРИТИЧЕСКИЕ ПРОВЕРКИ ==========
+
+    comp_data = signal.get('comprehensive_data', {})
+
+    # 1. БЛОКИРОВКА ПО КОРРЕЛЯЦИИ (HIGHEST PRIORITY)
+    corr_data = comp_data.get('correlation_data', {})
+
+    if corr_data.get('should_block_signal', False):
+        logger.warning(f"❌ BLOCKED: BTC correlation conflict for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': 'BTC correlation conflict - blocked by correlation analysis',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': 'Blocked by correlation',
+            'key_levels': ''
+        }
+
+    # 2. ПРОВЕРКА OVEREXTENSION (Volume Profile)
+    vp_analysis = comp_data.get('vp_analysis', {})
+    poc_distance = vp_analysis.get('poc_analysis', {}).get('distance_to_poc_pct', 0)
+    market_condition = vp_analysis.get('value_area_analysis', {}).get('market_condition', '')
+
+    if market_condition == 'OVEREXTENDED' and poc_distance > 15:
+        logger.warning(f"❌ BLOCKED: Price overextended {poc_distance:.1f}% from POC for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': f'Price overextended {poc_distance:.1f}% from POC - high reversion risk',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': f'Overextended {poc_distance:.1f}% from fair value',
+            'key_levels': ''
+        }
+
+    # 3. ПРОВЕРКА RSI EXHAUSTION
+    indicators_1h = comp_data.get('indicators_1h', {})
+    indicators_4h = comp_data.get('indicators_4h', {})
+
+    rsi_1h = indicators_1h.get('current', {}).get('rsi', 50)
+    rsi_4h = indicators_4h.get('current', {}).get('rsi', 50)
+    signal_type = signal.get('signal', 'NONE')
+
+    # LONG при экстремальной перекупленности
+    if signal_type == 'LONG' and rsi_1h > 75:
+        logger.warning(f"❌ BLOCKED: RSI 1H extremely overbought ({rsi_1h:.1f}) for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': f'RSI 1H extremely overbought ({rsi_1h:.1f}) - momentum exhaustion',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': f'RSI exhaustion: 1H={rsi_1h:.1f}',
+            'key_levels': ''
+        }
+
+    # SHORT при экстремальной перепроданности
+    if signal_type == 'SHORT' and rsi_1h < 25:
+        logger.warning(f"❌ BLOCKED: RSI 1H extremely oversold ({rsi_1h:.1f}) for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': f'RSI 1H extremely oversold ({rsi_1h:.1f}) - momentum exhaustion',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': f'RSI exhaustion: 1H={rsi_1h:.1f}',
+            'key_levels': ''
+        }
+
+    # Оба таймфрейма в экстремальных зонах
+    if signal_type == 'LONG' and rsi_1h > 70 and rsi_4h > 65:
+        logger.warning(f"❌ BLOCKED: Both timeframes overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}) for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': f'Both timeframes overbought: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': f'Multi-timeframe exhaustion: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+            'key_levels': ''
+        }
+
+    if signal_type == 'SHORT' and rsi_1h < 30 and rsi_4h < 35:
+        logger.warning(f"❌ BLOCKED: Both timeframes oversold (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}) for {signal.get('symbol', 'UNKNOWN')}")
+        return {
+            'approved': False,
+            'rejection_reason': f'Both timeframes oversold: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+            'entry_price': entry,
+            'stop_loss': stop,
+            'take_profit_levels': tp_levels,
+            'final_confidence': signal.get('confidence', 0),
+            'validation_method': 'fallback_blocked',
+            'market_conditions': f'Multi-timeframe exhaustion: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+            'key_levels': ''
+        }
+
+    # ========== ПРОДОЛЖЕНИЕ СУЩЕСТВУЮЩЕЙ ЛОГИКИ R/R ==========
 
     if entry > 0 and stop > 0 and tp_levels and tp_levels[0] > 0:
         risk = abs(entry - stop)
@@ -25,11 +141,8 @@ def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dic
         if risk > 0:
             rr_ratio = round(reward / risk, 2)
             if rr_ratio >= min_risk_reward_ratio:
-                # FIXED: Извлекаем данные из comprehensive_data для market_conditions
-                comp_data = signal.get('comprehensive_data', {})
+                # Извлекаем данные для market_conditions
                 market_data = comp_data.get('market_data', {})
-
-                # Формируем market_conditions
                 funding = market_data.get('funding_rate', {})
                 oi = market_data.get('open_interest', {})
                 orderbook = market_data.get('orderbook', {})
@@ -40,12 +153,14 @@ def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dic
 
                 market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
 
-                # Формируем key_levels из analysis или используем базовые значения
+                # Формируем key_levels
                 analysis_text = signal.get('analysis', '')
                 if 'OB' in analysis_text or 'Order Block' in analysis_text:
                     key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
                 else:
                     key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f} (swing low/high), TP levels: ${tp_levels[0]:.4f}/${tp_levels[1]:.4f}/${tp_levels[2]:.4f}"
+
+                logger.info(f"✓ Fallback validation PASSED: R/R {rr_ratio}, all critical checks OK")
 
                 return {
                     'approved': True,
@@ -55,22 +170,22 @@ def fallback_validation(signal: Dict, min_risk_reward_ratio: float = 2.0) -> Dic
                     'take_profit_levels': tp_levels,
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': 720,
-                    'validation_method': 'fallback',
-                    'validation_notes': f'Fallback validation: R/R {rr_ratio}',
-                    'market_conditions': market_conditions,  # FIXED: добавлено
-                    'key_levels': key_levels  # FIXED: добавлено
+                    'validation_method': 'fallback_enhanced',
+                    'validation_notes': f'Enhanced fallback: R/R {rr_ratio}, passed critical checks (correlation, VP, RSI)',
+                    'market_conditions': market_conditions,
+                    'key_levels': key_levels
                 }
 
     return {
         'approved': False,
-        'rejection_reason': 'Fallback validation failed: R/R below minimum',
+        'rejection_reason': 'Fallback validation failed: insufficient R/R or invalid data',
         'entry_price': entry,
         'stop_loss': stop,
         'take_profit_levels': tp_levels,
         'final_confidence': signal.get('confidence', 0),
-        'validation_method': 'fallback',
-        'market_conditions': 'Validation failed',  # FIXED: добавлено
-        'key_levels': ''  # FIXED: добавлено
+        'validation_method': 'fallback_blocked',
+        'market_conditions': 'Validation failed',
+        'key_levels': ''
     }
 
 
