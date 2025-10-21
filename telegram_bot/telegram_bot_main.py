@@ -1,4 +1,4 @@
-# telegram_bot_main.py - UPDATED with typing indicator
+# telegram_bot_main.py - UPDATED with signal_formatter
 import asyncio
 import logging
 from datetime import datetime
@@ -21,7 +21,8 @@ from telegram_bot.result_formatter import (
     send_formatted_signals_to_group,
     send_group_message_safe
 )
-from telegram_bot.ai_formatter import AISignalFormatter
+# МОДИФИКАЦИЯ: Заменён AI formatter на template formatter
+from trade_bot_programm.signal_formatter import format_multiple_signals
 from telegram_bot.stats_manager import StatsManager
 
 logging.basicConfig(
@@ -36,7 +37,7 @@ class TradingBotTelegram:
         self.bot = Bot(token=TG_TOKEN)
         self.dp = Dispatcher()
         self.schedule_manager = ScheduleManager()
-        self.ai_formatter = AISignalFormatter()
+        # МОДИФИКАЦИЯ: Убран self.ai_formatter
         self.stats_manager = StatsManager()
         self.trading_bot_running = False
         self._typing_task = None
@@ -54,14 +55,13 @@ class TradingBotTelegram:
                         chat_id=chat_id,
                         action=ChatAction.TYPING
                     )
-                    await asyncio.sleep(4)  # Обновляем каждые 4 секунды
+                    await asyncio.sleep(4)
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 logger.error(f"Error in typing indicator: {e}")
 
         self._typing_task = asyncio.create_task(send_typing())
-        logger.debug(f"Typing indicator started for chat {chat_id}")
 
     async def _stop_typing_indicator(self):
         """Остановить индикатор печати"""
@@ -72,7 +72,6 @@ class TradingBotTelegram:
             except asyncio.CancelledError:
                 pass
             self._typing_task = None
-            logger.debug("Typing indicator stopped")
 
     async def start_command(self, message: Message):
         user_id = message.from_user.id
@@ -118,45 +117,37 @@ class TradingBotTelegram:
     async def run_trading_bot_manual(self, message: Message):
         """Ручной запуск торгового бота"""
         try:
-            # Инкрементируем статистику
             run_stats = self.stats_manager.increment_run()
 
-            # Отправляем начальное сообщение
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
                 text="⏳ <b>Запуск торгового бота...</b>",
                 parse_mode="HTML"
             )
 
-            # НОВОЕ: Запускаем индикатор "печатает..."
             await self._start_typing_indicator(TG_USER_ID)
 
             try:
                 from main import run_trading_bot_cycle
                 result = await run_trading_bot_cycle()
             finally:
-                # НОВОЕ: Останавливаем индикатор
                 await self._stop_typing_indicator()
 
             formatted_result = format_bot_result(result, run_stats)
 
-            # Отправляем результат
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
                 text=f"📈 <b>Результат анализа:</b>\n\n{formatted_result}",
                 parse_mode="HTML"
             )
 
-            # Отправить сигналы в группу если они есть
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
             else:
                 logger.info("ℹ️ No validated signals to post")
 
         except Exception as e:
-            # Останавливаем индикатор при ошибке
             await self._stop_typing_indicator()
-
             logger.exception("Error running trading bot manually")
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
@@ -166,7 +157,8 @@ class TradingBotTelegram:
 
     async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
         """
-        Форматируем сигналы через AI и постим в группу
+        Форматируем сигналы через template и постим в группу
+        МОДИФИКАЦИЯ: Использует signal_formatter вместо AI
         """
         try:
             validated_signals = result.get('validated_signals', [])
@@ -175,24 +167,23 @@ class TradingBotTelegram:
                 logger.info("No validated signals to post")
                 return
 
-            # НОВОЕ: Уведомление о форматировании + typing для группы
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"🎨 <b>Форматирую {len(validated_signals)} сигнал(ов) через AI...</b>",
+                text=f"📝 <b>Форматирую {len(validated_signals)} сигнал(ов)...</b>",
                 parse_mode="HTML"
             )
 
-            # Показываем typing в группе
             await self._start_typing_indicator(TG_CHAT_ID)
 
             try:
-                logger.info(f"Formatting {len(validated_signals)} signals via AI...")
-                formatted_signals = await self.ai_formatter.format_multiple_signals(validated_signals)
+                # МОДИФИКАЦИЯ: Используем template formatter (БЕЗ AI)
+                logger.info(f"Formatting {len(validated_signals)} signals via template...")
+                formatted_signals = format_multiple_signals(validated_signals)
             finally:
                 await self._stop_typing_indicator()
 
             if not formatted_signals:
-                logger.warning("AI formatting failed, no signals to post")
+                logger.warning("Template formatting failed, no signals to post")
                 await self.bot.send_message(
                     chat_id=TG_USER_ID,
                     text="⚠️ <b>Ошибка форматирования сигналов</b>",
@@ -200,14 +191,12 @@ class TradingBotTelegram:
                 )
                 return
 
-            # Отправляем отформатированные сигналы в группу
             sent_count = await send_formatted_signals_to_group(
                 self.bot,
                 TG_CHAT_ID,
                 formatted_signals
             )
 
-            # Уведомление о результате
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
                 text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу</b>",
@@ -270,17 +259,14 @@ class TradingBotTelegram:
         try:
             logger.info("🤖 Scheduled trading bot cycle started")
 
-            # Инкрементируем статистику
             run_stats = self.stats_manager.increment_run()
 
-            # Уведомление о запуске
             await bot.send_message(
                 chat_id=TG_USER_ID,
                 text="⏰ <b>Плановый запуск анализа...</b>",
                 parse_mode="HTML"
             )
 
-            # НОВОЕ: Typing indicator для запланированного запуска
             await self._start_typing_indicator(TG_USER_ID)
 
             try:
@@ -291,14 +277,12 @@ class TradingBotTelegram:
 
             formatted_result = format_bot_result(result, run_stats)
 
-            # Отправить результат пользователю
             await bot.send_message(
                 chat_id=TG_USER_ID,
                 text=f"📈 <b>Результат анализа:</b>\n\n{formatted_result}",
                 parse_mode="HTML"
             )
 
-            # Постить сигналы в группу если они есть
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
             else:
@@ -326,7 +310,6 @@ class TradingBotTelegram:
         try:
             await self.dp.start_polling(self.bot, allowed_updates=["message"])
         finally:
-            # Останавливаем typing при завершении
             await self._stop_typing_indicator()
             await self.bot.session.close()
 

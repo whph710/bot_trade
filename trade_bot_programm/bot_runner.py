@@ -1,5 +1,7 @@
 """
-Trading Bot Runner - FIXED: упрощенный формат вывода + сохранение данных анализа
+Trading Bot Runner - МОДИФИКАЦИЯ
+Часть 1: BTC load once + checkpoint support + data storage
+Файл: trade_bot_programm/bot_runner.py
 """
 
 import asyncio
@@ -16,6 +18,8 @@ from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, clea
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
 from ai_router import ai_router
 from simple_validator import validate_signals_simple, calculate_validation_stats
+from checkpoint_manager import CheckpointManager
+from data_storage import storage
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -30,6 +34,8 @@ class TradingBotRunner:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.analysis_data_cache = {}  # Кеш для сохранения данных анализа
+        # МОДИФИКАЦИЯ: Добавлен checkpoint manager
+        self.checkpoint_mgr = CheckpointManager()
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -150,7 +156,10 @@ class TradingBotRunner:
         return selected_pairs
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
-        """Stage 3: Unified analysis"""
+        """
+        Stage 3: Unified analysis
+        МОДИФИКАЦИЯ: BTC candles загружаются ОДИН РАЗ
+        """
         logger.info("=" * 70)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
         logger.info("=" * 70)
@@ -159,7 +168,8 @@ class TradingBotRunner:
             logger.warning("No pairs for analysis")
             return []
 
-        logger.debug("Loading BTC candles for correlation analysis")
+        # КРИТИЧНО: Загружаем BTC candles ОДИН РАЗ для всех пар
+        logger.debug("Loading BTC candles for correlation analysis (ONCE)")
         btc_candles_1h, btc_candles_4h = await asyncio.gather(
             fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
             fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
@@ -169,7 +179,7 @@ class TradingBotRunner:
             logger.error("Failed to load BTC candles")
             return []
 
-        logger.debug(f"BTC candles loaded: 1H={len(btc_candles_1h)}, 4H={len(btc_candles_4h)}")
+        logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H)")
 
         final_signals = []
 
@@ -183,7 +193,7 @@ class TradingBotRunner:
                 )
 
                 if not klines_1h or not klines_4h:
-                    logger.debug(f"{symbol}: Insufficient candle data")
+                    logger.debug(f"{symbol}: Insufficient data")
                     continue
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
@@ -206,6 +216,7 @@ class TradingBotRunner:
                 collector = MarketDataCollector(await get_optimized_session())
                 market_snapshot = await collector.get_market_snapshot(symbol, current_price)
 
+                # Correlation analysis с переиспользованием BTC candles
                 corr_analysis = await get_comprehensive_correlation_analysis(
                     symbol, klines_1h, btc_candles_1h, 'UNKNOWN', None
                 )
@@ -238,29 +249,28 @@ class TradingBotRunner:
                     analysis['timestamp'] = datetime.now().isoformat()
                     final_signals.append(analysis)
 
-                    # Сохраняем данные анализа для последующей записи
+                    # МОДИФИКАЦИЯ: Сохраняем данные анализа для последующей записи
                     self.analysis_data_cache[symbol] = comprehensive_data
 
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
                     logger.info(f"✓ SIGNAL GENERATED: {symbol} {signal_type} (confidence: {confidence}%)")
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
                     logger.debug(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
-
-                    rejection_reason = analysis.get('rejection_reason')
-                    if rejection_reason:
-                        logger.info(f"  Rejection reason: {rejection_reason}")
                 else:
                     rejection_reason = analysis.get('rejection_reason', 'Low confidence')
                     logger.info(f"✗ NO_SIGNAL: {symbol} - {rejection_reason}")
 
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}", exc_info=False)
-                logger.debug(f"Stack trace for {symbol}:", exc_info=True)
                 continue
 
         self.analyzed_count = len(final_signals)
         logger.info(f"Stage 3 complete: {len(final_signals)} signals generated")
         return final_signals
+
+    """
+    bot_runner.py - Часть 2: Stage4, run_cycle с checkpoint и storage
+    """
 
     async def stage4_validation(self, preliminary_signals: list[Dict]) -> Dict[str, Any]:
         """Stage 4: Signal validation"""
@@ -283,8 +293,8 @@ class TradingBotRunner:
         rejected = validation_result['rejected']
 
         for sig in validated:
-            logger.info(f"✓ APPROVED: {sig['symbol']} {sig['signal']} (confidence: {sig['confidence']}%, R/R: {sig.get('risk_reward_ratio', 0):.1f})")
-            logger.debug(f"  {sig['validation_notes'][:100]}")
+            logger.info(
+                f"✓ APPROVED: {sig['symbol']} {sig['signal']} (confidence: {sig['confidence']}%, R/R: {sig.get('risk_reward_ratio', 0):.1f})")
 
         for rej in rejected:
             logger.info(f"✗ REJECTED: {rej['symbol']} - {rej.get('rejection_reason', 'Unknown')}")
@@ -293,7 +303,10 @@ class TradingBotRunner:
         return validation_result
 
     def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
-        """Добавляет данные анализа к сигналу"""
+        """
+        Добавляет данные анализа к сигналу
+        МОДИФИКАЦИЯ: Используется для сохранения в storage
+        """
         symbol = signal.get('symbol')
         if symbol not in self.analysis_data_cache:
             return signal
@@ -316,9 +329,13 @@ class TradingBotRunner:
         return signal
 
     async def run_cycle(self) -> Dict[str, Any]:
-        """Запуск полного цикла бота"""
+        """
+        Запуск полного цикла бота
+        МОДИФИКАЦИЯ: Добавлен checkpoint support и data storage
+        """
         import time
         cycle_start = time.time()
+        cycle_id = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         print("\n" + "=" * 70)
         print("🚀 TRADING BOT CYCLE STARTED")
@@ -328,124 +345,97 @@ class TradingBotRunner:
         logger.info("║" + " TRADING BOT CYCLE STARTED".center(68) + "║")
         logger.info("╚" + "=" * 68 + "╝")
 
+        # МОДИФИКАЦИЯ: Проверка recovery
+        last_checkpoint = self.checkpoint_mgr.get_last_checkpoint()
+
+        if last_checkpoint:
+            logger.info("🔄 RECOVERY MODE: Resuming from checkpoint")
+            return await self._resume_from_checkpoint(last_checkpoint)
+
+        # МОДИФИКАЦИЯ: Начать новый checkpoint
+        self.checkpoint_mgr.start_checkpoint(cycle_id)
+
         try:
+            # Stage 1
             signal_pairs = await self.stage1_filter_signals()
+            self.checkpoint_mgr.save_stage(1, {'signal_pairs': signal_pairs})
 
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
                 total_time = time.time() - cycle_start
-                return {
-                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
-                    'result': 'NO_SIGNAL_PAIRS',
-                    'stats': {
-                        'pairs_scanned': self.processed_pairs,
-                        'signal_pairs_found': 0,
-                        'ai_selected': 0,
-                        'analyzed': 0,
-                        'validated_signals': 0,
-                        'rejected_signals': 0,
-                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
-                        'total_time': round(total_time, 1),
-                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                    }
-                }
+                return self._build_result('NO_SIGNAL_PAIRS', total_time, [], [])
 
+            # Stage 2
             selected_pairs = await self.stage2_ai_select(signal_pairs)
+            self.checkpoint_mgr.save_stage(2, {'selected_pairs': selected_pairs})
 
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
                 total_time = time.time() - cycle_start
-                return {
-                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
-                    'result': 'NO_AI_SELECTION',
-                    'stats': {
-                        'pairs_scanned': self.processed_pairs,
-                        'signal_pairs_found': self.signal_pairs_count,
-                        'ai_selected': 0,
-                        'analyzed': 0,
-                        'validated_signals': 0,
-                        'rejected_signals': 0,
-                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
-                        'total_time': round(total_time, 1),
-                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                    }
-                }
+                return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
+            # Stage 3
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
+            self.checkpoint_mgr.save_stage(3, {'preliminary_signals': preliminary_signals})
 
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
                 total_time = time.time() - cycle_start
-                return {
-                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
-                    'result': 'NO_ANALYSIS_SIGNALS',
-                    'stats': {
-                        'pairs_scanned': self.processed_pairs,
-                        'signal_pairs_found': self.signal_pairs_count,
-                        'ai_selected': self.ai_selected_count,
-                        'analyzed': 0,
-                        'validated_signals': 0,
-                        'rejected_signals': 0,
-                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
-                        'total_time': round(total_time, 1),
-                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                    }
-                }
+                return self._build_result('NO_ANALYSIS_SIGNALS', total_time, [], [])
 
+            # Stage 4
             validation_result = await self.stage4_validation(preliminary_signals)
+            self.checkpoint_mgr.save_stage(4, {'validation_result': validation_result})
+
             validated = validation_result['validated']
             rejected = validation_result['rejected']
 
             if validation_result.get('validation_skipped_reason'):
-                logger.warning(f"Execution stopped: Validation skipped - {validation_result['validation_skipped_reason']}")
+                logger.warning(f"Execution stopped: {validation_result['validation_skipped_reason']}")
                 total_time = time.time() - cycle_start
-                return {
-                    'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+                result = {
+                    'timestamp': cycle_id,
                     'result': 'VALIDATION_SKIPPED',
                     'reason': validation_result['validation_skipped_reason'],
-                    'stats': {
-                        'pairs_scanned': self.processed_pairs,
-                        'signal_pairs_found': self.signal_pairs_count,
-                        'ai_selected': self.ai_selected_count,
-                        'analyzed': self.analyzed_count,
-                        'validated_signals': 0,
-                        'rejected_signals': 0,
-                        'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
-                        'total_time': round(total_time, 1),
-                        'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                    }
+                    'stats': self._build_stats(total_time)
                 }
+                self.checkpoint_mgr.clear_checkpoint()
+                return result
 
             total_time = time.time() - cycle_start
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-            result_type = 'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS'
+            # Success - clear checkpoint
+            self.checkpoint_mgr.clear_checkpoint()
 
-            # Обогащаем сигналы данными анализа
-            enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
+            # МОДИФИКАЦИЯ: Сохраняем данные в storage
+            if validated:
+                enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
 
-            result = {
-                'timestamp': timestamp,
-                'result': result_type,
-                'stats': {
-                    'pairs_scanned': self.processed_pairs,
-                    'signal_pairs_found': self.signal_pairs_count,
-                    'ai_selected': self.ai_selected_count,
-                    'analyzed': self.analyzed_count,
-                    'validated_signals': len(validated),
-                    'rejected_signals': len(rejected),
-                    'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
-                    'total_time': round(total_time, 1),
-                    'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                }
-            }
+                # Сохраняем каждый validated signal
+                for sig in enriched_validated:
+                    storage.save_signal(sig, compress=True)
+            else:
+                enriched_validated = []
 
-            if enriched_validated:
-                result['validated_signals'] = enriched_validated
+            result = self._build_result(
+                'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS',
+                total_time,
+                enriched_validated,
+                rejected
+            )
+
+            # МОДИФИКАЦИЯ: Сохраняем дневную статистику
+            storage.save_daily_statistics(result['stats'])
+
+            # МОДИФИКАЦИЯ: Cleanup раз в день в полночь
+            if datetime.now().hour == 0:
+                storage.cleanup_old_data(days_to_keep=90)
 
             logger.info("╔" + "=" * 68 + "╗")
-            logger.info(f"║ CYCLE COMPLETE: {result_type}".ljust(69) + "║")
-            logger.info(f"║ Time: {total_time:.1f}s | Signals: {len(validated)} approved, {len(rejected)} rejected".ljust(69) + "║")
+            logger.info(f"║ CYCLE COMPLETE: {result['result']}".ljust(69) + "║")
+            logger.info(
+                f"║ Time: {total_time:.1f}s | Signals: {len(validated)} approved, {len(rejected)} rejected".ljust(
+                    69) + "║")
             logger.info("╚" + "=" * 68 + "╝")
 
             return result
@@ -453,25 +443,102 @@ class TradingBotRunner:
         except Exception as e:
             logger.error(f"CRITICAL CYCLE ERROR: {e}", exc_info=True)
             total_time = time.time() - cycle_start
-            return {
-                'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
-                'result': 'ERROR',
-                'error': str(e),
-                'stats': {
-                    'pairs_scanned': self.processed_pairs,
-                    'signal_pairs_found': self.signal_pairs_count,
-                    'ai_selected': self.ai_selected_count,
-                    'analyzed': self.analyzed_count,
-                    'validated_signals': 0,
-                    'rejected_signals': 0,
-                    'processing_speed': 0,
-                    'total_time': round(total_time, 1),
-                    'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
-                }
-            }
+            return self._build_result('ERROR', total_time, [], [], error=str(e))
 
         finally:
             await cleanup_api()
+
+    async def _resume_from_checkpoint(self, checkpoint: Dict) -> Dict:
+        """
+        Возобновляет выполнение из чекпоинта
+        МОДИФИКАЦИЯ: Новый метод для recovery
+        """
+        last_stage = checkpoint.get('stage', 0)
+        data = checkpoint.get('data', {})
+
+        logger.info(f"Resuming from Stage {last_stage}")
+
+        if last_stage >= 1:
+            signal_pairs = data.get('stage1', {}).get('signal_pairs', [])
+            logger.info(f"Stage 1: Loaded {len(signal_pairs)} pairs from checkpoint")
+        else:
+            signal_pairs = await self.stage1_filter_signals()
+            self.checkpoint_mgr.save_stage(1, {'signal_pairs': signal_pairs})
+
+        if last_stage >= 2:
+            selected_pairs = data.get('stage2', {}).get('selected_pairs', [])
+            logger.info(f"Stage 2: Loaded {len(selected_pairs)} pairs from checkpoint")
+        else:
+            selected_pairs = await self.stage2_ai_select(signal_pairs)
+            self.checkpoint_mgr.save_stage(2, {'selected_pairs': selected_pairs})
+
+        if last_stage >= 3:
+            preliminary_signals = data.get('stage3', {}).get('preliminary_signals', [])
+            logger.info(f"Stage 3: Loaded {len(preliminary_signals)} signals from checkpoint")
+        else:
+            preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
+            self.checkpoint_mgr.save_stage(3, {'preliminary_signals': preliminary_signals})
+
+        # Всегда запускаем Stage 4
+        validation_result = await self.stage4_validation(preliminary_signals)
+        self.checkpoint_mgr.save_stage(4, {'validation_result': validation_result})
+
+        # Success - clear checkpoint
+        self.checkpoint_mgr.clear_checkpoint()
+
+        # Construct result
+        validated = validation_result['validated']
+        rejected = validation_result['rejected']
+
+        enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
+
+        # Сохраняем
+        for sig in enriched_validated:
+            storage.save_signal(sig, compress=True)
+
+        result = self._build_result(
+            'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS',
+            0,  # time unknown
+            enriched_validated,
+            rejected
+        )
+
+        storage.save_daily_statistics(result['stats'])
+
+        return result
+
+    def _build_stats(self, total_time: float) -> Dict:
+        """Helper для построения stats"""
+        return {
+            'pairs_scanned': self.processed_pairs,
+            'signal_pairs_found': self.signal_pairs_count,
+            'ai_selected': self.ai_selected_count,
+            'analyzed': self.analyzed_count,
+            'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
+            'total_time': round(total_time, 1),
+            'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
+        }
+
+    def _build_result(self, result_type: str, total_time: float, validated: list, rejected: list,
+                      error: str = None) -> Dict:
+        """Helper для построения result"""
+        stats = self._build_stats(total_time)
+        stats['validated_signals'] = len(validated)
+        stats['rejected_signals'] = len(rejected)
+
+        result = {
+            'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+            'result': result_type,
+            'stats': stats
+        }
+
+        if validated:
+            result['validated_signals'] = validated
+
+        if error:
+            result['error'] = error
+
+        return result
 
 
 async def run_trading_bot() -> Dict[str, Any]:

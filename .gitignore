@@ -43,4 +43,11 @@ bot_result_*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Statistics
 bot_statistics.json
+
+# НОВОЕ: Data storage
+bot_data/
+bot_checkpoints/
+backtest_results/

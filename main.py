@@ -1,6 +1,7 @@
 """
 Main Entry Point - Orchestrator для всех модулей
 Интегрирован с Telegram ботом
+МОДИФИКАЦИЯ: Добавлен pre-check trading hours
 """
 
 import asyncio
@@ -20,36 +21,35 @@ logger = setup_module_logger(__name__)
 
 async def run_trading_bot_cycle():
     """
-    Запустить полный цикл торгового бота
+    Выполняет один цикл работы бота с pre-checks
+    МОДИФИКАЦИЯ: Добавлена проверка trading hours ПЕРЕД запуском
     """
-    try:
-        from bot_runner import run_trading_bot
+    from simple_validator import check_trading_hours
+    from datetime import datetime
 
-        logger.info("Bot cycle initialization started")
-
-        result = await run_trading_bot()
-
-        # Вывод результата
-        print_bot_result(result)
-
-        # Сохранение результата в файл
-        saved_path = save_bot_result(result, output_dir="bot_results")
-
-        if saved_path:
-            logger.info(f"Result saved: {saved_path}")
-
-        # Очистка старых результатов
-        cleanup_old_results(results_dir="bot_results", keep_last=10)
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Critical cycle error: {e}", exc_info=True)
+    # КРИТИЧНО: Проверяем trading hours ПЕРЕД запуском любых операций
+    time_allowed, time_reason = check_trading_hours()
+    if not time_allowed:
+        logger.warning(f"⏰ Trading hours blocked: {time_reason}")
         return {
-            'result': 'ERROR',
-            'error': str(e),
-            'stats': {}
+            'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+            'result': 'TRADING_HOURS_BLOCKED',
+            'reason': time_reason,
+            'stats': {
+                'pairs_scanned': 0,
+                'signal_pairs_found': 0,
+                'ai_selected': 0,
+                'analyzed': 0,
+                'validated_signals': 0,
+                'rejected_signals': 0,
+                'total_time': 0
+            }
         }
+
+    # Proceed with bot cycle
+    from bot_runner import run_trading_bot
+    result = await run_trading_bot()
+    return result
 
 
 async def run_telegram_bot():
@@ -99,7 +99,7 @@ if __name__ == "__main__":
             logger.info("🚀 Running trading bot ONCE")
             result = asyncio.run(main_single_cycle())
 
-            if result.get('result') in ['SUCCESS', 'NO_VALIDATED_SIGNALS']:
+            if result.get('result') in ['SUCCESS', 'NO_VALIDATED_SIGNALS', 'TRADING_HOURS_BLOCKED']:
                 sys.exit(0)
             else:
                 sys.exit(1)

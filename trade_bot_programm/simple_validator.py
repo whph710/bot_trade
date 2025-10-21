@@ -1,10 +1,13 @@
 """
-Simple validator - WITH PRE-VALIDATION CRITICAL CHECKS
+Simple validator - WITH ValidationEngine
+МОДИФИКАЦИЯ: Использует ValidationEngine для проверок
+Файл: trade_bot_programm/simple_validator.py
 """
 
 from typing import Dict, List
 from datetime import datetime
 import pytz
+from validation_engine import ValidationEngine
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -38,28 +41,20 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
     """
-    Simple validation through AI - WITH PRE-CHECKS
+    Simple validation through AI - WITH ValidationEngine
 
-    КРИТИЧНО: Добавлены pre-validation checks ПЕРЕД вызовом AI
+    МОДИФИКАЦИЯ: Использует ValidationEngine.run_all_checks()
     """
 
-    # Check trading hours
-    time_allowed, time_reason = check_trading_hours()
-
-    if not time_allowed:
-        logger.warning(f"Trading hours check: {time_reason}")
-        logger.warning("Validation pipeline: SKIPPED")
-        return {
-            'validated': [],
-            'rejected': [],
-            'validation_skipped_reason': time_reason
-        }
-
-    logger.debug(f"Trading hours check: {time_reason}")
+    # Trading hours уже проверены в main.py, здесь не проверяем
 
     if not preliminary_signals:
         logger.warning("No preliminary signals for validation")
-        return {'validated': [], 'rejected': []}
+        return {
+            'validated_signals': [],
+            'rejected_signals': [],
+            'validation_summary': 'No signals to validate'
+        }
 
     validated = []
     rejected = []
@@ -73,104 +68,18 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
             confidence = signal.get('confidence', 0)
             comprehensive_data = signal.get('comprehensive_data', {})
 
-            logger.debug(f"Pre-validating {symbol}: {signal_type} ({confidence}%)")
+            logger.debug(f"Validating {symbol}: {signal_type} ({confidence}%)")
 
-            # ========== PRE-VALIDATION CRITICAL CHECKS ==========
+            # ========== ИСПОЛЬЗУЕМ ValidationEngine ==========
+            passed, reasons = ValidationEngine.run_all_checks(signal, comprehensive_data)
 
-            # 1. CORRELATION BLOCKING (HIGHEST PRIORITY)
-            corr_data = comprehensive_data.get('correlation_data', {})
-            if corr_data.get('should_block_signal', False):
-                logger.warning(f"❌ {symbol}: BLOCKED by correlation analysis")
+            if not passed:
+                logger.warning(f"❌ {symbol}: BLOCKED - {'; '.join(reasons)}")
                 rejected.append({
                     'symbol': symbol,
                     'signal': signal_type,
                     'original_confidence': confidence,
-                    'rejection_reason': 'BTC correlation conflict - blocked by correlation module',
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            # 2. OVEREXTENSION CHECK (Volume Profile)
-            vp_analysis = comprehensive_data.get('vp_analysis', {})
-            poc_distance = vp_analysis.get('poc_analysis', {}).get('distance_to_poc_pct', 0)
-            market_condition = vp_analysis.get('value_area_analysis', {}).get('market_condition', '')
-
-            if market_condition == 'OVEREXTENDED' and poc_distance > 15:
-                logger.warning(f"❌ {symbol}: BLOCKED - overextended {poc_distance:.1f}% from POC")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': f'Price overextended {poc_distance:.1f}% from POC - high reversion risk',
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            # 3. RSI EXHAUSTION CHECK
-            indicators_1h = comprehensive_data.get('indicators_1h', {})
-            indicators_4h = comprehensive_data.get('indicators_4h', {})
-
-            rsi_1h = indicators_1h.get('current', {}).get('rsi', 50)
-            rsi_4h = indicators_4h.get('current', {}).get('rsi', 50)
-
-            # LONG при экстремальной перекупленности
-            if signal_type == 'LONG' and rsi_1h > 75:
-                logger.warning(f"❌ {symbol}: BLOCKED - RSI 1H overbought {rsi_1h:.1f}")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': f'RSI 1H extremely overbought ({rsi_1h:.1f}) - momentum exhaustion',
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            # SHORT при экстремальной перепроданности
-            if signal_type == 'SHORT' and rsi_1h < 25:
-                logger.warning(f"❌ {symbol}: BLOCKED - RSI 1H oversold {rsi_1h:.1f}")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': f'RSI 1H extremely oversold ({rsi_1h:.1f}) - momentum exhaustion',
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            # Оба таймфрейма в экстремальных зонах
-            if signal_type == 'LONG' and rsi_1h > 70 and rsi_4h > 65:
-                logger.warning(f"❌ {symbol}: BLOCKED - both TF overbought 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': f'Both timeframes overbought: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            if signal_type == 'SHORT' and rsi_1h < 30 and rsi_4h < 35:
-                logger.warning(f"❌ {symbol}: BLOCKED - both TF oversold 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': f'Both timeframes oversold: 1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}',
+                    'rejection_reason': '; '.join(reasons),
                     'entry_price': signal.get('entry_price', 0),
                     'stop_loss': signal.get('stop_loss', 0),
                     'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
@@ -180,7 +89,7 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
 
             # ========== PASSED PRE-CHECKS, PROCEED TO AI VALIDATION ==========
 
-            logger.debug(f"✓ {symbol}: Passed pre-validation checks, sending to AI")
+            logger.debug(f"✓ {symbol}: Passed ValidationEngine checks, sending to AI")
 
             validation_result = await ai_router.validate_signal_with_stage3_data(
                 signal,
@@ -240,7 +149,6 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 validated.append(validated_signal)
 
                 logger.info(f"✓ {symbol}: APPROVED | R/R: {rr_ratio:.2f}:1 | Duration: {validation_result.get('hold_duration_minutes', 720)}min")
-                logger.debug(f"  Notes: {validation_result.get('validation_notes', 'N/A')[:80]}")
 
             else:
                 rejection_reason = validation_result.get('rejection_reason', 'Validation failed')
@@ -276,8 +184,6 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 'rejection_reason': f'Exception: {str(e)[:60]}',
                 'timestamp': signal.get('timestamp', datetime.now().isoformat())
             })
-
-            logger.debug(f"Exception details:", exc_info=True)
 
     logger.info(f"Validation complete: {len(validated)} approved, {len(rejected)} rejected")
 
@@ -326,7 +232,7 @@ def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> D
 
     top_rejections = sorted(rejection_reasons.items(), key=lambda x: x[1], reverse=True)[:3]
 
-    stats = {
+    return {
         'total': total,
         'approved': len(validated),
         'rejected': len(rejected),
@@ -339,13 +245,3 @@ def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> D
             'samples_counted': len(rr_ratios)
         }
     }
-
-    logger.info(f"📊 Validation Statistics:")
-    logger.info(f"  Total signals: {total} | Approved: {len(validated)} | Rejected: {len(rejected)}")
-    logger.info(f"  Approval rate: {approval_rate:.1f}%")
-    if rr_ratios:
-        logger.info(f"  R/R: min={min_rr:.2f}, avg={avg_rr:.2f}, max={max_rr:.2f} ({len(rr_ratios)} samples)")
-    if stats['top_rejection_reasons']:
-        logger.info(f"  Top rejection reasons: {', '.join(stats['top_rejection_reasons'][:2])}")
-
-    return stats
