@@ -15,7 +15,7 @@ sys.path.insert(0, str(CURRENT_DIR))
 from config import config
 from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, cleanup as cleanup_api, get_optimized_session
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
-from ai_router import ai_router
+from ai_router import AIRouter
 from simple_validator import validate_signals_simple, calculate_validation_stats
 from data_storage import storage
 from logging_config import setup_module_logger
