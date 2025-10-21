@@ -1,6 +1,6 @@
 """
-Trading bot configuration - OPTIMIZED FOR SWING TRADING (1H/4H)
-Enhanced with HTF context, session awareness, higher R/R targets
+Trading bot configuration - OPTIMIZED FOR SWING TRADING (1H/4H/1D)
+FIXED: Bybit API использует 'D' для дневных свечей, не '1440'
 """
 
 import os
@@ -25,7 +25,7 @@ class Config:
     # API Keys
     DEEPSEEK_API_KEY = os.getenv('DEEPSEEK') or os.getenv('DEEPSEEK_API_KEY')
     DEEPSEEK_URL = 'https://api.deepseek.com/v1'
-    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
+    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner') #'deepseek-reasoner' / 'deepseek-chat'
     DEEPSEEK_REASONING = os.getenv('DEEPSEEK_REASONING', 'false').lower() == 'true'
 
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC')
@@ -34,26 +34,26 @@ class Config:
 
     # AI Stage Selection
     STAGE2_PROVIDER = os.getenv('STAGE2_PROVIDER', 'deepseek')  # deepseek or claude
-    STAGE3_PROVIDER = os.getenv('STAGE3_PROVIDER', 'claude')    # claude or deepseek
-    STAGE4_PROVIDER = os.getenv('STAGE4_PROVIDER', 'claude')    # claude or deepseek
+    STAGE3_PROVIDER = os.getenv('STAGE3_PROVIDER', 'deepseek')    # claude or deepseek
+    STAGE4_PROVIDER = os.getenv('STAGE4_PROVIDER', 'deepseek')    # claude or deepseek
 
-    # Timeframes (SWING TRADING - оставляем 1H/4H)
-    TIMEFRAME_SHORT = '60'
+    # Timeframes (SWING TRADING - 1H/4H/1D)
+    TIMEFRAME_SHORT = '60'      # 1 hour
     TIMEFRAME_SHORT_NAME = '1h'
-    TIMEFRAME_LONG = '240'
+    TIMEFRAME_LONG = '240'      # 4 hours
     TIMEFRAME_LONG_NAME = '4h'
 
-    # NEW: Higher Timeframe for trend context
-    TIMEFRAME_HTF = '1440'  # 1D для определения major trend
+    # FIXED: Bybit API format для дневных свечей
+    TIMEFRAME_HTF = 'D'         # Daily (Bybit использует 'D', не '1440')
     TIMEFRAME_HTF_NAME = '1d'
 
     # Candles
-    QUICK_SCAN_CANDLES = 48  # 4H = 8 days
+    QUICK_SCAN_CANDLES = 48     # 4H = 8 days
     AI_BULK_CANDLES = 48
     AI_INDICATORS_HISTORY = 40
-    FINAL_SHORT_CANDLES = 168  # 1H = 7 days
-    FINAL_LONG_CANDLES = 84    # 4H = 14 days
-    FINAL_HTF_CANDLES = 30     # NEW: 1D = 30 days для контекста
+    FINAL_SHORT_CANDLES = 168   # 1H = 7 days
+    FINAL_LONG_CANDLES = 84     # 4H = 14 days
+    FINAL_HTF_CANDLES = 30      # 1D = 30 days для контекста
     FINAL_INDICATORS_HISTORY = 60
 
     # Indicators
@@ -117,8 +117,8 @@ class Config:
     AI_TEMPERATURE_ANALYZE = float(os.getenv('AI_TEMPERATURE_ANALYZE', '0.7'))
     AI_TEMPERATURE_VALIDATE = float(os.getenv('AI_TEMPERATURE_VALIDATE', '0.3'))
     AI_MAX_TOKENS_SELECT = int(os.getenv('AI_MAX_TOKENS_SELECT', '2000'))
-    AI_MAX_TOKENS_ANALYZE = int(os.getenv('AI_MAX_TOKENS_ANALYZE', '3500'))  # INCREASED для HTF анализа
-    AI_MAX_TOKENS_VALIDATE = int(os.getenv('AI_MAX_TOKENS_VALIDATE', '4000'))  # INCREASED
+    AI_MAX_TOKENS_ANALYZE = int(os.getenv('AI_MAX_TOKENS_ANALYZE', '3500'))
+    AI_MAX_TOKENS_VALIDATE = int(os.getenv('AI_MAX_TOKENS_VALIDATE', '4000'))
 
     # Market Data Thresholds
     OI_CHANGE_GROWING_THRESHOLD = float(os.getenv('OI_CHANGE_GROWING_THRESHOLD', '2.0'))

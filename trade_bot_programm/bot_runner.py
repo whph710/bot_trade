@@ -1,6 +1,5 @@
 """
-Trading Bot Runner - МОДИФИКАЦИЯ
-Часть 1: BTC load once + checkpoint support + data storage
+Trading Bot Runner - FIXED: 1D данные для swing анализа
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -33,8 +32,7 @@ class TradingBotRunner:
         self.signal_pairs_count = 0
         self.ai_selected_count = 0
         self.analyzed_count = 0
-        self.analysis_data_cache = {}  # Кеш для сохранения данных анализа
-        # МОДИФИКАЦИЯ: Добавлен checkpoint manager
+        self.analysis_data_cache = {}
         self.checkpoint_mgr = CheckpointManager()
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
@@ -158,7 +156,7 @@ class TradingBotRunner:
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """
         Stage 3: Unified analysis
-        МОДИФИКАЦИЯ: BTC candles загружаются ОДИН РАЗ
+        FIXED: Загружаем 1D данные для SWING анализа
         """
         logger.info("=" * 70)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
@@ -168,18 +166,19 @@ class TradingBotRunner:
             logger.warning("No pairs for analysis")
             return []
 
-        # КРИТИЧНО: Загружаем BTC candles ОДИН РАЗ для всех пар
-        logger.debug("Loading BTC candles for correlation analysis (ONCE)")
-        btc_candles_1h, btc_candles_4h = await asyncio.gather(
+        # КРИТИЧНО: Загружаем BTC candles ОДИН РАЗ (включая 1D!)
+        logger.debug("Loading BTC candles for correlation analysis (ONCE: 1H/4H/1D)")
+        btc_candles_1h, btc_candles_4h, btc_candles_1d = await asyncio.gather(
             fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
-            fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+            fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
+            fetch_klines('BTCUSDT', config.TIMEFRAME_HTF, config.FINAL_HTF_CANDLES)
         )
 
         if not btc_candles_1h or not btc_candles_4h:
             logger.error("Failed to load BTC candles")
             return []
 
-        logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H)")
+        logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d) if btc_candles_1d else 0} (1D)")
 
         final_signals = []
 
@@ -187,14 +186,20 @@ class TradingBotRunner:
             try:
                 logger.info(f"Analyzing {symbol}...")
 
-                klines_1h, klines_4h = await asyncio.gather(
+                # FIXED: Загружаем ВСЕ таймфреймы включая 1D
+                klines_1h, klines_4h, klines_1d = await asyncio.gather(
                     fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
-                    fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES)
+                    fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
+                    fetch_klines(symbol, config.TIMEFRAME_HTF, config.FINAL_HTF_CANDLES)
                 )
 
                 if not klines_1h or not klines_4h:
-                    logger.debug(f"{symbol}: Insufficient data")
+                    logger.debug(f"{symbol}: Insufficient 1H/4H data")
                     continue
+
+                # 1D данные опциональны для не-swing пар, но желательны
+                if not klines_1d:
+                    logger.warning(f"{symbol}: No 1D data available (reduced analysis quality)")
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
                     logger.debug(f"{symbol}: Candle validation failed")
@@ -202,6 +207,14 @@ class TradingBotRunner:
 
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
                 indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
+
+                # FIXED: Рассчитываем индикаторы для 1D если есть данные
+                indicators_1d = None
+                if klines_1d and validate_candles(klines_1d, 10):
+                    indicators_1d = calculate_ai_indicators(klines_1d, min(30, len(klines_1d)))
+                    logger.debug(f"{symbol}: 1D indicators calculated")
+                else:
+                    logger.debug(f"{symbol}: No 1D indicators (data unavailable or insufficient)")
 
                 if not indicators_1h or not indicators_4h:
                     logger.debug(f"{symbol}: Indicators calculation failed")
@@ -224,19 +237,23 @@ class TradingBotRunner:
                 vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
                 vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
 
+                # FIXED: Добавлены 1D данные в comprehensive_data
                 comprehensive_data = {
                     'symbol': symbol,
                     'candles_1h': klines_1h,
                     'candles_4h': klines_4h,
+                    'candles_1d': klines_1d if klines_1d else [],  # FIXED
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
+                    'indicators_1d': indicators_1d if indicators_1d else {},  # FIXED
                     'current_price': current_price,
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
                     'volume_profile': vp_data,
                     'vp_analysis': vp_analysis,
                     'btc_candles_1h': btc_candles_1h,
-                    'btc_candles_4h': btc_candles_4h
+                    'btc_candles_4h': btc_candles_4h,
+                    'btc_candles_1d': btc_candles_1d if btc_candles_1d else []  # FIXED
                 }
 
                 analysis = await ai_router.analyze_pair_comprehensive(symbol, comprehensive_data)
@@ -249,7 +266,7 @@ class TradingBotRunner:
                     analysis['timestamp'] = datetime.now().isoformat()
                     final_signals.append(analysis)
 
-                    # МОДИФИКАЦИЯ: Сохраняем данные анализа для последующей записи
+                    # Сохраняем данные анализа для последующей записи
                     self.analysis_data_cache[symbol] = comprehensive_data
 
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
@@ -267,10 +284,6 @@ class TradingBotRunner:
         self.analyzed_count = len(final_signals)
         logger.info(f"Stage 3 complete: {len(final_signals)} signals generated")
         return final_signals
-
-    """
-    bot_runner.py - Часть 2: Stage4, run_cycle с checkpoint и storage
-    """
 
     async def stage4_validation(self, preliminary_signals: list[Dict]) -> Dict[str, Any]:
         """Stage 4: Signal validation"""
@@ -303,22 +316,20 @@ class TradingBotRunner:
         return validation_result
 
     def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
-        """
-        Добавляет данные анализа к сигналу
-        МОДИФИКАЦИЯ: Используется для сохранения в storage
-        """
+        """Добавляет данные анализа к сигналу"""
         symbol = signal.get('symbol')
         if symbol not in self.analysis_data_cache:
             return signal
 
         comp_data = self.analysis_data_cache[symbol]
 
-        # Добавляем данные анализа
         signal['analysis_data'] = {
             'candles_1h': comp_data.get('candles_1h', []),
             'candles_4h': comp_data.get('candles_4h', []),
+            'candles_1d': comp_data.get('candles_1d', []),  # FIXED
             'indicators_1h': comp_data.get('indicators_1h', {}),
             'indicators_4h': comp_data.get('indicators_4h', {}),
+            'indicators_1d': comp_data.get('indicators_1d', {}),  # FIXED
             'current_price': comp_data.get('current_price', 0),
             'market_data': comp_data.get('market_data', {}),
             'correlation_data': comp_data.get('correlation_data', {}),
@@ -331,7 +342,7 @@ class TradingBotRunner:
     async def run_cycle(self) -> Dict[str, Any]:
         """
         Запуск полного цикла бота
-        МОДИФИКАЦИЯ: Добавлен checkpoint support и data storage
+        FIXED: С поддержкой 1D данных для swing анализа
         """
         import time
         cycle_start = time.time()
@@ -345,14 +356,14 @@ class TradingBotRunner:
         logger.info("║" + " TRADING BOT CYCLE STARTED".center(68) + "║")
         logger.info("╚" + "=" * 68 + "╝")
 
-        # МОДИФИКАЦИЯ: Проверка recovery
+        # Проверка recovery
         last_checkpoint = self.checkpoint_mgr.get_last_checkpoint()
 
         if last_checkpoint:
             logger.info("🔄 RECOVERY MODE: Resuming from checkpoint")
             return await self._resume_from_checkpoint(last_checkpoint)
 
-        # МОДИФИКАЦИЯ: Начать новый checkpoint
+        # Начать новый checkpoint
         self.checkpoint_mgr.start_checkpoint(cycle_id)
 
         try:
@@ -374,7 +385,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
-            # Stage 3
+            # Stage 3 (FIXED: с 1D данными)
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
             self.checkpoint_mgr.save_stage(3, {'preliminary_signals': preliminary_signals})
 
@@ -407,11 +418,10 @@ class TradingBotRunner:
             # Success - clear checkpoint
             self.checkpoint_mgr.clear_checkpoint()
 
-            # МОДИФИКАЦИЯ: Сохраняем данные в storage
+            # Сохраняем данные в storage
             if validated:
                 enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
 
-                # Сохраняем каждый validated signal
                 for sig in enriched_validated:
                     storage.save_signal(sig, compress=True)
             else:
@@ -424,10 +434,10 @@ class TradingBotRunner:
                 rejected
             )
 
-            # МОДИФИКАЦИЯ: Сохраняем дневную статистику
+            # Сохраняем дневную статистику
             storage.save_daily_statistics(result['stats'])
 
-            # МОДИФИКАЦИЯ: Cleanup раз в день в полночь
+            # Cleanup раз в день в полночь
             if datetime.now().hour == 0:
                 storage.cleanup_old_data(days_to_keep=90)
 
@@ -449,10 +459,7 @@ class TradingBotRunner:
             await cleanup_api()
 
     async def _resume_from_checkpoint(self, checkpoint: Dict) -> Dict:
-        """
-        Возобновляет выполнение из чекпоинта
-        МОДИФИКАЦИЯ: Новый метод для recovery
-        """
+        """Возобновляет выполнение из чекпоинта"""
         last_stage = checkpoint.get('stage', 0)
         data = checkpoint.get('data', {})
 
@@ -486,19 +493,17 @@ class TradingBotRunner:
         # Success - clear checkpoint
         self.checkpoint_mgr.clear_checkpoint()
 
-        # Construct result
         validated = validation_result['validated']
         rejected = validation_result['rejected']
 
         enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
 
-        # Сохраняем
         for sig in enriched_validated:
             storage.save_signal(sig, compress=True)
 
         result = self._build_result(
             'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS',
-            0,  # time unknown
+            0,
             enriched_validated,
             rejected
         )
@@ -516,7 +521,7 @@ class TradingBotRunner:
             'analyzed': self.analyzed_count,
             'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
             'total_time': round(total_time, 1),
-            'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}"
+            'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}/{config.TIMEFRAME_HTF_NAME}"
         }
 
     def _build_result(self, result_type: str, total_time: float, validated: list, rejected: list,
