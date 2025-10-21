@@ -26,17 +26,17 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
 
     hour = perm_time.hour
 
-    # Критические периоды
-    if 0 <= hour < 3:
-        return False, "US session end (00:00–03:00): low volumes"
-
-    if 4 <= hour < 8:
-        return False, "Asian night (04:00–08:00): high spreads >0.15%"
-
-    if 12 <= hour < 13:
-        return False, "Asian close gap (12:00–13:00): position fixing"
-
-    return True, "Trading hours: OK"
+    # # Критические периоды
+    # if 0 <= hour < 3:
+    #     return False, "US session end (00:00–03:00): low volumes"
+    #
+    # if 4 <= hour < 8:
+    #     return False, "Asian night (04:00–08:00): high spreads >0.15%"
+    #
+    # if 12 <= hour < 13:
+    #     return False, "Asian close gap (12:00–13:00): position fixing"
+    #
+    # return True, "Trading hours: OK"
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
