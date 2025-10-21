@@ -1,5 +1,6 @@
 """
 DeepSeek AI клиент с полной поддержкой reasoning режима через .env
+FIXED: Изменен 'ticker' на 'symbol' для совместимости с ai_router.py
 """
 
 import os
@@ -94,6 +95,7 @@ class DeepSeekClient:
     ) -> List[str]:
         """
         Выбирает лучшие торговые пары из предложенных
+        FIXED: Использует 'symbol' вместо 'ticker'
 
         Args:
             pairs_data: Список данных о парах
@@ -115,18 +117,27 @@ class DeepSeekClient:
             # Загружаем системный промпт
             system_prompt = self._load_prompt(system_prompt_file)
 
-            # Формируем данные о парах
+            # FIXED: Формируем данные о парах (используем 'symbol')
             pairs_info = []
             for pair in pairs_data:
+                symbol = pair.get('symbol', 'UNKNOWN')  # ← ИСПРАВЛЕНО
+
                 info = (
-                    f"Пара: {pair['ticker']}\n"
-                    f"Сигнал: {pair['signal_type']} ({pair['signal_strength']}%)\n"
-                    f"Цена: ${pair['price']:.8f}\n"
-                    f"Объем 24ч: ${pair.get('volume_24h', 0):,.0f}\n"
-                    f"Ликвидность: {pair.get('liquidity', 0):.1f}\n"
+                    f"Symbol: {symbol}\n"
+                    f"Direction: {pair.get('direction', 'NONE')} ({pair.get('confidence', 0)}%)\n"
                 )
-                if pair.get('technical_data'):
-                    info += f"Технические данные:\n{pair['technical_data']}\n"
+
+                # Добавляем дополнительные данные если есть
+                if pair.get('candles_15m'):
+                    info += f"Candles: {len(pair['candles_15m'])} bars\n"
+
+                if pair.get('indicators_15m'):
+                    current = pair['indicators_15m'].get('current', {})
+                    if current:
+                        info += f"Price: ${current.get('price', 0):.4f}\n"
+                        info += f"RSI: {current.get('rsi', 0):.1f}\n"
+                        info += f"Volume ratio: {current.get('volume_ratio', 0):.2f}\n"
+
                 pairs_info.append(info)
 
             pairs_text = "\n---\n".join(pairs_info)
@@ -136,7 +147,7 @@ class DeepSeekClient:
             user_prompt = (
                 f"Проанализируй следующие {len(pairs_data)} торговых пар и выбери {limit_text} "
                 f"с наилучшим потенциалом для торговли:\n\n{pairs_text}\n\n"
-                f"Верни ТОЛЬКО список тикеров через запятую (например: BTC, ETH, SOL)"
+                f"Верни ТОЛЬКО список символов через запятую (например: BTCUSDT, ETHUSDT, SOLUSDT)"
             )
 
             print(f"\n[DeepSeek] {'─'*60}")
@@ -189,10 +200,10 @@ class DeepSeekClient:
                 tokens = line.replace(',', ' ').split()
                 for token in tokens:
                     token = token.strip().upper()
-                    if 2 <= len(token) <= 10 and token.replace('USDT', '').replace('USD', '').isalnum():
-                        clean_token = token.replace('USDT', '').replace('USD', '')
-                        if clean_token and clean_token not in selected:
-                            selected.append(clean_token)
+                    if 2 <= len(token) <= 15 and token not in selected:
+                        # Проверяем что это похоже на криптопару
+                        if 'USDT' in token or token.replace('USDT', '').isalpha():
+                            selected.append(token)
 
             # Применяем лимит
             if max_pairs and len(selected) > max_pairs:
@@ -221,6 +232,7 @@ class DeepSeekClient:
     ) -> Optional[Dict]:
         """
         Анализирует конкретную торговую пару
+        FIXED: Использует 'symbol' вместо 'ticker'
 
         Args:
             pair_data: Данные о паре для анализа
@@ -240,19 +252,24 @@ class DeepSeekClient:
 
             system_prompt = self._load_prompt(analysis_prompt_file)
 
-            # Формируем данные о паре
-            pair_info = (
-                f"Тикер: {pair_data['ticker']}\n"
-                f"Цена: ${pair_data['price']:.8f}\n"
-                f"Объем 24ч: ${pair_data.get('volume_24h', 0):,.0f}\n"
-            )
+            # FIXED: Используем 'symbol'
+            symbol = pair_data.get('symbol', 'UNKNOWN')
 
-            if pair_data.get('technical_data'):
-                pair_info += f"\nТехнические данные:\n{pair_data['technical_data']}\n"
+            # Формируем данные о паре
+            pair_info = f"Symbol: {symbol}\n"
+
+            if pair_data.get('candles_15m'):
+                pair_info += f"Candles: {len(pair_data['candles_15m'])} bars\n"
+
+            if pair_data.get('indicators_15m'):
+                current = pair_data['indicators_15m'].get('current', {})
+                if current:
+                    pair_info += f"Price: ${current.get('price', 0):.4f}\n"
+                    pair_info += f"RSI: {current.get('rsi', 0):.1f}\n"
 
             user_prompt = f"Проанализируй следующую торговую пару:\n\n{pair_info}"
 
-            print(f"\n[DeepSeek] 🔬 Анализ пары: {pair_data['ticker']}")
+            print(f"\n[DeepSeek] 🔬 Анализ пары: {symbol}")
             print(f"[DeepSeek] 🌡️  Temperature: {temperature}, Max tokens: {max_tokens}")
 
             response = await self.client.chat.completions.create(
@@ -275,17 +292,17 @@ class DeepSeekClient:
 
             content = response.choices[0].message.content.strip()
 
-            print(f"[DeepSeek] ✅ Анализ завершен для {pair_data['ticker']}")
+            print(f"[DeepSeek] ✅ Анализ завершен для {symbol}")
 
             return {
-                'ticker': pair_data['ticker'],
+                'symbol': symbol,  # ← ИСПРАВЛЕНО
                 'analysis': content,
                 'model': self.model,
                 'reasoning_used': self.use_reasoning and self.is_reasoning_model
             }
 
         except Exception as e:
-            print(f"[DeepSeek] ❌ Ошибка при анализе {pair_data.get('ticker', 'unknown')}: {e}")
+            print(f"[DeepSeek] ❌ Ошибка при анализе {pair_data.get('symbol', 'unknown')}: {e}")
             return None
 
     async def chat(
