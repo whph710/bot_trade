@@ -1,5 +1,5 @@
 """
-Anthropic Claude AI Client - FIXED: гарантируем market_conditions и key_levels
+Anthropic Claude AI Client - FIXED: Добавлен метод analyze_comprehensive
 """
 
 import asyncio
@@ -195,6 +195,61 @@ class AnthropicClient:
             logger.error(f"Claude selection error: {e}")
             return []
 
+    async def analyze_comprehensive(self, symbol: str, comprehensive_data: Dict) -> Dict:
+        """
+        Comprehensive analysis using full Stage 3 data
+        НОВЫЙ МЕТОД для Stage 3
+
+        Args:
+            symbol: Trading pair
+            comprehensive_data: All timeframes + market data + correlation + VP
+
+        Returns:
+            Analysis with signal/confidence/levels
+        """
+        try:
+            logger.debug(f"Claude: Comprehensive analysis for {symbol}")
+
+            # Загружаем промпт
+            prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
+
+            # Формируем JSON с данными
+            data_json = json.dumps(comprehensive_data, separators=(',', ':'))
+
+            logger.debug(f"Analysis data size: {len(data_json)} chars")
+
+            response = await self.call(
+                prompt=f"{prompt}\n\nData:\n{data_json}",
+                max_tokens=config.AI_MAX_TOKENS_ANALYZE,
+                temperature=config.AI_TEMPERATURE_ANALYZE,
+                stage='analysis'
+            )
+
+            result = extract_json_from_response(response)
+
+            if result:
+                # Добавляем symbol если отсутствует
+                result['symbol'] = symbol
+                logger.debug(f"Claude: Analysis complete for {symbol}")
+                return result
+            else:
+                logger.warning(f"Claude: Invalid response for {symbol}")
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'Invalid Claude response'
+                }
+
+        except Exception as e:
+            logger.error(f"Claude analysis error for {symbol}: {e}")
+            return {
+                'symbol': symbol,
+                'signal': 'NO_SIGNAL',
+                'confidence': 0,
+                'rejection_reason': f'Exception: {str(e)[:100]}'
+            }
+
     async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
         """Validate trading signal - FIXED: гарантируем все поля"""
         try:
@@ -295,11 +350,11 @@ class AnthropicClient:
                     }
 
             logger.warning(f"Claude: Invalid validation response for {symbol}")
-            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
+            return fallback_validation(signal, comprehensive_data)
 
         except asyncio.TimeoutError:
             logger.error(f"Claude validation timeout for {symbol}")
-            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
+            return fallback_validation(signal, comprehensive_data)
         except Exception as e:
             logger.error(f"Claude validation error for {symbol}: {e}")
-            return fallback_validation(signal, config.MIN_RISK_REWARD_RATIO)
+            return fallback_validation(signal, comprehensive_data)

@@ -1,5 +1,5 @@
 """
-AI Router - умный маршрутизатор для multi-stage AI pipeline
+AI Router - FIXED: Добавлены методы analyze_pair_comprehensive и validate_signal_with_stage3_data
 Поддерживает DeepSeek и Anthropic Claude с reasoning/thinking режимами
 """
 
@@ -174,103 +174,129 @@ class AIRouter:
             traceback.print_exc()
             return []
 
-    async def analyze_pair(
+    async def analyze_pair_comprehensive(
         self,
-        pair_data: Dict
-    ) -> Optional[Dict]:
+        symbol: str,
+        comprehensive_data: Dict
+    ) -> Dict:
         """
-        Stage 3: Анализирует конкретную пару через AI
+        Stage 3: Comprehensive analysis with all data
 
         Args:
-            pair_data: Данные о паре
+            symbol: Trading pair symbol
+            comprehensive_data: Full data from Stage 3 (all timeframes, market data, etc)
 
         Returns:
-            Результаты анализа
+            Analysis result with signal/confidence/levels
         """
-        ticker = pair_data.get('ticker', 'unknown')
-
         print(f"\n[AI Router] {'─'*70}")
-        print(f"[AI Router] 🔬 STAGE 3: АНАЛИЗ ПАРЫ {ticker}")
+        print(f"[AI Router] 🔬 STAGE 3: COMPREHENSIVE ANALYSIS {symbol}")
         print(f"[AI Router] {'─'*70}")
 
         provider_name, client = await self._get_provider_client('stage3')
 
         if not client:
-            print(f"[AI Router] ❌ Клиент недоступен для Stage 3")
-            return None
+            print(f"[AI Router] ❌ Client unavailable for Stage 3")
+            return {
+                'symbol': symbol,
+                'signal': 'NO_SIGNAL',
+                'confidence': 0,
+                'rejection_reason': 'AI client unavailable'
+            }
 
-        print(f"[AI Router] 🤖 Провайдер: {provider_name.upper()}")
+        print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
 
         try:
             if provider_name == 'deepseek':
-                result = await self.deepseek_client.analyze_pair(
-                    pair_data=pair_data,
-                    temperature=AI_TEMPERATURE_ANALYZE,
-                    max_tokens=AI_MAX_TOKENS_ANALYZE
-                )
+                # DeepSeek не поддерживает полноценный Stage 3 анализ
+                # Возвращаем базовый анализ
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'DeepSeek не поддерживает comprehensive analysis. Используйте Claude для Stage 3'
+                }
 
             elif provider_name == 'claude':
-                result = await self._claude_analyze_pair(pair_data)
+                # Claude полноценный анализ
+                from anthropic_client import AnthropicClient
+
+                claude = AnthropicClient()
+
+                result = await claude.analyze_comprehensive(symbol, comprehensive_data)
+
+                if result:
+                    print(f"[AI Router] ✅ Stage 3 complete for {symbol}")
+                    return result
+                else:
+                    return {
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'confidence': 0,
+                        'rejection_reason': 'Claude analysis returned no result'
+                    }
 
             else:
-                return None
-
-            if result:
-                print(f"[AI Router] ✅ Stage 3 завершен для {ticker}")
-
-            return result
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': f'Unknown provider: {provider_name}'
+                }
 
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка в Stage 3: {e}")
-            return None
+            print(f"[AI Router] ❌ Error in Stage 3 for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'symbol': symbol,
+                'signal': 'NO_SIGNAL',
+                'confidence': 0,
+                'rejection_reason': f'Exception: {str(e)[:100]}'
+            }
 
-    async def validate_signal(
+    async def validate_signal_with_stage3_data(
         self,
-        signal_data: Dict
-    ) -> Optional[Dict]:
+        signal: Dict,
+        comprehensive_data: Dict
+    ) -> Dict:
         """
-        Stage 4: Финальная валидация сигнала перед отправкой
+        Stage 4: Validation with full Stage 3 data
 
         Args:
-            signal_data: Данные сигнала для валидации
+            signal: Signal from Stage 3
+            comprehensive_data: Full data from Stage 3
 
         Returns:
-            Результат валидации с рекомендацией
+            Validation result
         """
-        ticker = signal_data.get('ticker', 'unknown')
-
-        print(f"\n[AI Router] {'─'*70}")
-        print(f"[AI Router] ✓ STAGE 4: ВАЛИДАЦИЯ СИГНАЛА {ticker}")
-        print(f"[AI Router] {'─'*70}")
-
         provider_name, client = await self._get_provider_client('stage4')
 
         if not client:
-            print(f"[AI Router] ❌ Клиент недоступен для Stage 4")
-            return None
-
-        print(f"[AI Router] 🤖 Провайдер: {provider_name.upper()}")
+            print(f"[AI Router] ❌ Client unavailable for Stage 4")
+            # Fallback validation
+            from shared_utils import fallback_validation
+            return fallback_validation(signal, comprehensive_data)
 
         try:
-            if provider_name == 'deepseek':
-                result = await self._deepseek_validate_signal(signal_data)
+            if provider_name == 'claude':
+                from anthropic_client import AnthropicClient
+                claude = AnthropicClient()
+                return await claude.validate_signal(signal, comprehensive_data)
 
-            elif provider_name == 'claude':
-                result = await self._claude_validate_signal(signal_data)
+            elif provider_name == 'deepseek':
+                # DeepSeek fallback
+                from shared_utils import fallback_validation
+                return fallback_validation(signal, comprehensive_data)
 
             else:
-                return None
-
-            if result:
-                approved = result.get('approved', False)
-                status = "✅ ОДОБРЕН" if approved else "❌ ОТКЛОНЕН"
-                print(f"[AI Router] {status} Stage 4 для {ticker}")
-
-            return result
+                from shared_utils import fallback_validation
+                return fallback_validation(signal, comprehensive_data)
 
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка в Stage 4: {e}")
-            return None
+            print(f"[AI Router] ❌ Error in Stage 4: {e}")
+            from shared_utils import fallback_validation
+            return fallback_validation(signal, comprehensive_data)
 
     # ========================================================================
     # CLAUDE METHODS
@@ -338,84 +364,6 @@ class AIRouter:
             selected = selected[:max_pairs]
 
         return selected
-
-    async def _claude_analyze_pair(self, pair_data: Dict) -> Optional[Dict]:
-        """Анализ пары через Claude"""
-        pair_info = (
-            f"Тикер: {pair_data['ticker']}\n"
-            f"Цена: ${pair_data['price']:.8f}\n"
-            f"Объем 24ч: ${pair_data.get('volume_24h', 0):,.0f}\n"
-        )
-
-        if pair_data.get('technical_data'):
-            pair_info += f"\n{pair_data['technical_data']}"
-
-        prompt = f"Проанализируй торговую пару:\n\n{pair_info}"
-
-        kwargs = {
-            'model': ANTHROPIC_MODEL,
-            'max_tokens': AI_MAX_TOKENS_ANALYZE,
-            'temperature': AI_TEMPERATURE_ANALYZE,
-            'messages': [{'role': 'user', 'content': prompt}]
-        }
-
-        if ANTHROPIC_THINKING:
-            kwargs['thinking'] = {'type': 'enabled', 'budget_tokens': 3000}
-
-        response = await self.claude_client.messages.create(**kwargs)
-
-        if ANTHROPIC_THINKING and hasattr(response, 'thinking'):
-            print(f"[Claude] 💭 Thinking: {str(response.thinking)[:300]}...")
-
-        return {
-            'ticker': pair_data['ticker'],
-            'analysis': response.content[0].text.strip(),
-            'model': ANTHROPIC_MODEL,
-            'thinking_used': ANTHROPIC_THINKING
-        }
-
-    async def _claude_validate_signal(self, signal_data: Dict) -> Optional[Dict]:
-        """Валидация через Claude"""
-        prompt = f"Валидируй торговый сигнал:\n\n{signal_data}\n\nОдобрить? (да/нет)"
-
-        kwargs = {
-            'model': ANTHROPIC_MODEL,
-            'max_tokens': AI_MAX_TOKENS_VALIDATE,
-            'temperature': AI_TEMPERATURE_VALIDATE,
-            'messages': [{'role': 'user', 'content': prompt}]
-        }
-
-        if ANTHROPIC_THINKING:
-            kwargs['thinking'] = {'type': 'enabled', 'budget_tokens': 2000}
-
-        response = await self.claude_client.messages.create(**kwargs)
-
-        content = response.content[0].text.strip().lower()
-        approved = 'да' in content or 'yes' in content or 'одобр' in content
-
-        return {
-            'approved': approved,
-            'reasoning': content,
-            'model': ANTHROPIC_MODEL
-        }
-
-    async def _deepseek_validate_signal(self, signal_data: Dict) -> Optional[Dict]:
-        """Валидация через DeepSeek"""
-        prompt = f"Валидируй торговый сигнал:\n\n{signal_data}\n\nОдобрить?"
-
-        response = await self.deepseek_client.chat(
-            messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=AI_MAX_TOKENS_VALIDATE,
-            temperature=AI_TEMPERATURE_VALIDATE
-        )
-
-        approved = 'да' in response.lower() or 'yes' in response.lower()
-
-        return {
-            'approved': approved,
-            'reasoning': response,
-            'model': DEEPSEEK_MODEL
-        }
 
     # ========================================================================
     # UTILITY METHODS

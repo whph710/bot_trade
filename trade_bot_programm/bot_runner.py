@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - FIXED: Убран checkpoint, 1D данные опциональны
+Trading Bot Runner - FIXED: AI Router инициализирован
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -22,6 +22,9 @@ from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
 
+# FIXED: Глобальный экземпляр AI Router
+ai_router = AIRouter()
+
 
 class TradingBotRunner:
     """Класс для запуска торгового бота"""
@@ -32,6 +35,8 @@ class TradingBotRunner:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.analysis_data_cache = {}
+        # FIXED: Используем глобальный экземпляр
+        self.ai_router = ai_router
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -139,7 +144,8 @@ class TradingBotRunner:
             return []
 
         logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} for selection")
-        selected_pairs = await ai_router.select_pairs(ai_input_data)
+        # FIXED: Используем self.ai_router
+        selected_pairs = await self.ai_router.select_pairs(ai_input_data)
         self.ai_selected_count = len(selected_pairs)
 
         if selected_pairs:
@@ -266,7 +272,8 @@ class TradingBotRunner:
                     'btc_candles_1d': btc_candles_1d if btc_candles_1d else []
                 }
 
-                analysis = await ai_router.analyze_pair_comprehensive(symbol, comprehensive_data)
+                # FIXED: Используем self.ai_router
+                analysis = await self.ai_router.analyze_pair_comprehensive(symbol, comprehensive_data)
 
                 signal_type = analysis.get('signal', 'NO_SIGNAL')
                 confidence = analysis.get('confidence', 0)
@@ -306,7 +313,8 @@ class TradingBotRunner:
             return {'validated': [], 'rejected': []}
 
         logger.info(f"Validating {len(preliminary_signals)} signals...")
-        validation_result = await validate_signals_simple(ai_router, preliminary_signals)
+        # FIXED: Передаем self.ai_router
+        validation_result = await validate_signals_simple(self.ai_router, preliminary_signals)
 
         if validation_result.get('validation_skipped_reason'):
             logger.warning(f"Validation skipped: {validation_result['validation_skipped_reason']}")
