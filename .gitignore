@@ -47,7 +47,6 @@ Thumbs.db
 # Statistics
 bot_statistics.json
 
-# НОВОЕ: Data storage
+# Data storage
 bot_data/
-bot_checkpoints/
 backtest_results/

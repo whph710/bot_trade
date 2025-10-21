@@ -25,7 +25,7 @@ class Config:
     # API Keys
     DEEPSEEK_API_KEY = os.getenv('DEEPSEEK') or os.getenv('DEEPSEEK_API_KEY')
     DEEPSEEK_URL = 'https://api.deepseek.com/v1'
-    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-reasoner') #'deepseek-reasoner' / 'deepseek-chat'
+    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat') #'deepseek-reasoner' / 'deepseek-chat'
     DEEPSEEK_REASONING = os.getenv('DEEPSEEK_REASONING', 'false').lower() == 'true'
 
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC')

@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - FIXED: 1D данные для swing анализа
+Trading Bot Runner - FIXED: Убран checkpoint, 1D данные опциональны
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -17,7 +17,6 @@ from func_async import get_trading_pairs, fetch_klines, batch_fetch_klines, clea
 from func_trade import calculate_basic_indicators, calculate_ai_indicators, check_basic_signal, validate_candles
 from ai_router import ai_router
 from simple_validator import validate_signals_simple, calculate_validation_stats
-from checkpoint_manager import CheckpointManager
 from data_storage import storage
 from logging_config import setup_module_logger
 
@@ -33,7 +32,6 @@ class TradingBotRunner:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.analysis_data_cache = {}
-        self.checkpoint_mgr = CheckpointManager()
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -156,7 +154,7 @@ class TradingBotRunner:
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """
         Stage 3: Unified analysis
-        FIXED: Загружаем 1D данные для SWING анализа
+        FIXED: 1D данные опциональны, их отсутствие НЕ блокирует анализ
         """
         logger.info("=" * 70)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
@@ -166,8 +164,8 @@ class TradingBotRunner:
             logger.warning("No pairs for analysis")
             return []
 
-        # КРИТИЧНО: Загружаем BTC candles ОДИН РАЗ (включая 1D!)
-        logger.debug("Loading BTC candles for correlation analysis (ONCE: 1H/4H/1D)")
+        # Загружаем BTC candles ОДИН РАЗ (1H/4H обязательны, 1D опционально)
+        logger.debug("Loading BTC candles for correlation analysis (1H/4H required, 1D optional)")
         btc_candles_1h, btc_candles_4h, btc_candles_1d = await asyncio.gather(
             fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
             fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
@@ -175,10 +173,14 @@ class TradingBotRunner:
         )
 
         if not btc_candles_1h or not btc_candles_4h:
-            logger.error("Failed to load BTC candles")
+            logger.error("Failed to load BTC 1H/4H candles (critical)")
             return []
 
-        logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d) if btc_candles_1d else 0} (1D)")
+        # 1D могут отсутствовать
+        if not btc_candles_1d:
+            logger.warning("⚠️ BTC 1D candles not available (non-critical)")
+        else:
+            logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d)} (1D)")
 
         final_signals = []
 
@@ -186,38 +188,45 @@ class TradingBotRunner:
             try:
                 logger.info(f"Analyzing {symbol}...")
 
-                # FIXED: Загружаем ВСЕ таймфреймы включая 1D
+                # Загружаем все таймфреймы (1D опционально)
                 klines_1h, klines_4h, klines_1d = await asyncio.gather(
                     fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
                     fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
                     fetch_klines(symbol, config.TIMEFRAME_HTF, config.FINAL_HTF_CANDLES)
                 )
 
+                # 1H и 4H ОБЯЗАТЕЛЬНЫ
                 if not klines_1h or not klines_4h:
-                    logger.debug(f"{symbol}: Insufficient 1H/4H data")
+                    logger.warning(f"{symbol}: Missing 1H/4H data (critical) - SKIP")
                     continue
 
-                # 1D данные опциональны для не-swing пар, но желательны
-                if not klines_1d:
-                    logger.warning(f"{symbol}: No 1D data available (reduced analysis quality)")
+                # 1D данные ОПЦИОНАЛЬНЫ
+                has_1d_data = bool(klines_1d and validate_candles(klines_1d, 10))
+
+                if not has_1d_data:
+                    logger.info(f"{symbol}: No 1D data available (non-critical, analysis continues)")
+                    klines_1d = []
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
-                    logger.debug(f"{symbol}: Candle validation failed")
+                    logger.warning(f"{symbol}: 1H/4H candle validation failed - SKIP")
                     continue
 
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
                 indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
 
-                # FIXED: Рассчитываем индикаторы для 1D если есть данные
-                indicators_1d = None
-                if klines_1d and validate_candles(klines_1d, 10):
-                    indicators_1d = calculate_ai_indicators(klines_1d, min(30, len(klines_1d)))
-                    logger.debug(f"{symbol}: 1D indicators calculated")
-                else:
-                    logger.debug(f"{symbol}: No 1D indicators (data unavailable or insufficient)")
+                # 1D индикаторы опциональны
+                indicators_1d = {}
+                if has_1d_data:
+                    try:
+                        indicators_1d = calculate_ai_indicators(klines_1d, min(30, len(klines_1d)))
+                        if indicators_1d:
+                            logger.debug(f"{symbol}: ✓ 1D indicators calculated")
+                    except Exception as e:
+                        logger.debug(f"{symbol}: Failed to calculate 1D indicators (non-critical): {e}")
+                        indicators_1d = {}
 
                 if not indicators_1h or not indicators_4h:
-                    logger.debug(f"{symbol}: Indicators calculation failed")
+                    logger.warning(f"{symbol}: 1H/4H indicators calculation failed - SKIP")
                     continue
 
                 current_price = float(klines_1h[-1][4])
@@ -229,7 +238,7 @@ class TradingBotRunner:
                 collector = MarketDataCollector(await get_optimized_session())
                 market_snapshot = await collector.get_market_snapshot(symbol, current_price)
 
-                # Correlation analysis с переиспользованием BTC candles
+                # Correlation analysis
                 corr_analysis = await get_comprehensive_correlation_analysis(
                     symbol, klines_1h, btc_candles_1h, 'UNKNOWN', None
                 )
@@ -237,15 +246,16 @@ class TradingBotRunner:
                 vp_data = calculate_volume_profile_for_candles(klines_4h, num_bins=50)
                 vp_analysis = analyze_volume_profile(vp_data, current_price) if vp_data else None
 
-                # FIXED: Добавлены 1D данные в comprehensive_data
+                # FIXED: Помечаем доступность 1D данных
                 comprehensive_data = {
                     'symbol': symbol,
                     'candles_1h': klines_1h,
                     'candles_4h': klines_4h,
-                    'candles_1d': klines_1d if klines_1d else [],  # FIXED
+                    'candles_1d': klines_1d,  # Может быть пустым []
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
-                    'indicators_1d': indicators_1d if indicators_1d else {},  # FIXED
+                    'indicators_1d': indicators_1d,  # Может быть пустым {}
+                    'has_1d_data': has_1d_data,  # НОВОЕ: флаг доступности
                     'current_price': current_price,
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
@@ -253,7 +263,7 @@ class TradingBotRunner:
                     'vp_analysis': vp_analysis,
                     'btc_candles_1h': btc_candles_1h,
                     'btc_candles_4h': btc_candles_4h,
-                    'btc_candles_1d': btc_candles_1d if btc_candles_1d else []  # FIXED
+                    'btc_candles_1d': btc_candles_1d if btc_candles_1d else []
                 }
 
                 analysis = await ai_router.analyze_pair_comprehensive(symbol, comprehensive_data)
@@ -266,7 +276,7 @@ class TradingBotRunner:
                     analysis['timestamp'] = datetime.now().isoformat()
                     final_signals.append(analysis)
 
-                    # Сохраняем данные анализа для последующей записи
+                    # Сохраняем данные анализа
                     self.analysis_data_cache[symbol] = comprehensive_data
 
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
@@ -326,10 +336,11 @@ class TradingBotRunner:
         signal['analysis_data'] = {
             'candles_1h': comp_data.get('candles_1h', []),
             'candles_4h': comp_data.get('candles_4h', []),
-            'candles_1d': comp_data.get('candles_1d', []),  # FIXED
+            'candles_1d': comp_data.get('candles_1d', []),
             'indicators_1h': comp_data.get('indicators_1h', {}),
             'indicators_4h': comp_data.get('indicators_4h', {}),
-            'indicators_1d': comp_data.get('indicators_1d', {}),  # FIXED
+            'indicators_1d': comp_data.get('indicators_1d', {}),
+            'has_1d_data': comp_data.get('has_1d_data', False),  # Флаг доступности
             'current_price': comp_data.get('current_price', 0),
             'market_data': comp_data.get('market_data', {}),
             'correlation_data': comp_data.get('correlation_data', {}),
@@ -342,7 +353,7 @@ class TradingBotRunner:
     async def run_cycle(self) -> Dict[str, Any]:
         """
         Запуск полного цикла бота
-        FIXED: С поддержкой 1D данных для swing анализа
+        FIXED: Убран checkpoint manager
         """
         import time
         cycle_start = time.time()
@@ -356,20 +367,9 @@ class TradingBotRunner:
         logger.info("║" + " TRADING BOT CYCLE STARTED".center(68) + "║")
         logger.info("╚" + "=" * 68 + "╝")
 
-        # Проверка recovery
-        last_checkpoint = self.checkpoint_mgr.get_last_checkpoint()
-
-        if last_checkpoint:
-            logger.info("🔄 RECOVERY MODE: Resuming from checkpoint")
-            return await self._resume_from_checkpoint(last_checkpoint)
-
-        # Начать новый checkpoint
-        self.checkpoint_mgr.start_checkpoint(cycle_id)
-
         try:
             # Stage 1
             signal_pairs = await self.stage1_filter_signals()
-            self.checkpoint_mgr.save_stage(1, {'signal_pairs': signal_pairs})
 
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
@@ -378,16 +378,14 @@ class TradingBotRunner:
 
             # Stage 2
             selected_pairs = await self.stage2_ai_select(signal_pairs)
-            self.checkpoint_mgr.save_stage(2, {'selected_pairs': selected_pairs})
 
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
-            # Stage 3 (FIXED: с 1D данными)
+            # Stage 3
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
-            self.checkpoint_mgr.save_stage(3, {'preliminary_signals': preliminary_signals})
 
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
@@ -396,7 +394,6 @@ class TradingBotRunner:
 
             # Stage 4
             validation_result = await self.stage4_validation(preliminary_signals)
-            self.checkpoint_mgr.save_stage(4, {'validation_result': validation_result})
 
             validated = validation_result['validated']
             rejected = validation_result['rejected']
@@ -410,13 +407,9 @@ class TradingBotRunner:
                     'reason': validation_result['validation_skipped_reason'],
                     'stats': self._build_stats(total_time)
                 }
-                self.checkpoint_mgr.clear_checkpoint()
                 return result
 
             total_time = time.time() - cycle_start
-
-            # Success - clear checkpoint
-            self.checkpoint_mgr.clear_checkpoint()
 
             # Сохраняем данные в storage
             if validated:
@@ -457,60 +450,6 @@ class TradingBotRunner:
 
         finally:
             await cleanup_api()
-
-    async def _resume_from_checkpoint(self, checkpoint: Dict) -> Dict:
-        """Возобновляет выполнение из чекпоинта"""
-        last_stage = checkpoint.get('stage', 0)
-        data = checkpoint.get('data', {})
-
-        logger.info(f"Resuming from Stage {last_stage}")
-
-        if last_stage >= 1:
-            signal_pairs = data.get('stage1', {}).get('signal_pairs', [])
-            logger.info(f"Stage 1: Loaded {len(signal_pairs)} pairs from checkpoint")
-        else:
-            signal_pairs = await self.stage1_filter_signals()
-            self.checkpoint_mgr.save_stage(1, {'signal_pairs': signal_pairs})
-
-        if last_stage >= 2:
-            selected_pairs = data.get('stage2', {}).get('selected_pairs', [])
-            logger.info(f"Stage 2: Loaded {len(selected_pairs)} pairs from checkpoint")
-        else:
-            selected_pairs = await self.stage2_ai_select(signal_pairs)
-            self.checkpoint_mgr.save_stage(2, {'selected_pairs': selected_pairs})
-
-        if last_stage >= 3:
-            preliminary_signals = data.get('stage3', {}).get('preliminary_signals', [])
-            logger.info(f"Stage 3: Loaded {len(preliminary_signals)} signals from checkpoint")
-        else:
-            preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
-            self.checkpoint_mgr.save_stage(3, {'preliminary_signals': preliminary_signals})
-
-        # Всегда запускаем Stage 4
-        validation_result = await self.stage4_validation(preliminary_signals)
-        self.checkpoint_mgr.save_stage(4, {'validation_result': validation_result})
-
-        # Success - clear checkpoint
-        self.checkpoint_mgr.clear_checkpoint()
-
-        validated = validation_result['validated']
-        rejected = validation_result['rejected']
-
-        enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
-
-        for sig in enriched_validated:
-            storage.save_signal(sig, compress=True)
-
-        result = self._build_result(
-            'SUCCESS' if validated else 'NO_VALIDATED_SIGNALS',
-            0,
-            enriched_validated,
-            rejected
-        )
-
-        storage.save_daily_statistics(result['stats'])
-
-        return result
 
     def _build_stats(self, total_time: float) -> Dict:
         """Helper для построения stats"""

@@ -7,21 +7,50 @@
 SWING SETUP = все факторы подтверждают движение, entry точный, R/R высокий.
 
 ДАННЫЕ:
-- 1D свечи (30 дней) — MAJOR TREND CONTEXT
-- 4H свечи (14 дней) — СТРУКТУРА, паттерн
-- 1H свечи (7 дней) — ТОЧНЫЙ ВХОД
-- Индикаторы (60 значений на каждом TF)
+- 1D свечи (30 дней) — MAJOR TREND CONTEXT (ОПЦИОНАЛЬНО, может отсутствовать!)
+- 4H свечи (14 дней) — СТРУКТУРА, паттерн (ОБЯЗАТЕЛЬНО)
+- 1H свечи (7 дней) — ТОЧНЫЙ ВХОД (ОБЯЗАТЕЛЬНО)
+- Индикаторы (60 значений на каждом TF, 1D может отсутствовать)
 - Market data (funding, OI, orderbook, taker volume)
 - BTC correlation, Volume Profile, Orderflow AI, SMC AI
+- Флаг has_1d_data = true/false (указывает доступность дневных данных)
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 0: HIGHER TIMEFRAME CONTEXT (1D) - КРИТИЧНО!
+⚠️ КРИТИЧНО: РАБОТА БЕЗ 1D ДАННЫХ
 ═══════════════════════════════════════════════════════════════
 
-**ПРАВИЛО**: Swing сделка ВСЕГДА должна быть в направлении 1D тренда.
+**ПРАВИЛО**: 1D данные ЖЕЛАТЕЛЬНЫ, но их отсутствие НЕ должно быть причиной отказа!
+
+**Если has_1d_data == false ИЛИ candles_1d пустой ИЛИ indicators_1d пустой**:
+- НЕ отклоняй сигнал из-за отсутствия 1D данных
+- Используй 4H как главный таймфрейм для определения тренда
+- Адаптируй confidence scoring (без 1D проверок)
+- Упомяни в analysis: "1D data unavailable, using 4H major trend"
+
+**Логика анализа БЕЗ 1D**:
+1. 4H становится "старшим" таймфреймом для определения тренда
+2. Проверь EMA порядок на 4H для тренда:
+   - LONG: EMA9 > EMA21 последние 8+ свечей
+   - SHORT: EMA9 < EMA21 последние 8+ свечей
+3. Используй 1H для точного входа (как обычно)
+
+═══════════════════════════════════════════════════════════════
+ШАГ 0: HIGHER TIMEFRAME CONTEXT (1D) - ЕСЛИ ДОСТУПНО
+═══════════════════════════════════════════════════════════════
+
+**ПРОВЕРКА ДОСТУПНОСТИ**:
+```
+if has_1d_data == false OR len(candles_1d) < 10 OR len(indicators_1d) == 0:
+    # Используй 4H как главный таймфрейм
+    SKIP 1D checks, proceed with 4H major trend
+else:
+    # Выполни полную 1D проверку
+    ...
+```
+
+**ЕСЛИ 1D ДОСТУПЕН** (has_1d_data == true):
 
 1D TREND CHECK:
-- Если нет 1D данных → используй 4H major trend
 - EMA порядок на 1D:
   * LONG: EMA9 > EMA21 > EMA50 (все растут)
   * SHORT: EMA9 < EMA21 < EMA50 (все падают)
@@ -30,30 +59,47 @@ SWING SETUP = все факторы подтверждают движение, e
   * >5% ниже EMA50 = сильный медвежий тренд
   * ±2% от EMA50 = переходная зона (осторожность)
 
-**AUTO REJECT** если:
+**AUTO REJECT** (ТОЛЬКО если 1D доступен):
 - LONG сигнал, но 1D EMA9 < EMA21 (нисходящий тренд)
 - SHORT сигнал, но 1D EMA9 > EMA21 (восходящий тренд)
 - Цена в переходной зоне ±2% от EMA50 1D (неопределённость)
 
 ИСКЛЮЧЕНИЕ: Дивергенция на 1D = возможен разворот тренда.
 
+**ЕСЛИ 1D НЕДОСТУПЕН** (has_1d_data == false):
+- Используй 4H EMA9/EMA21 для определения major trend
+- LONG: требуется 4H EMA9 > EMA21 последние 6+ свечей
+- SHORT: требуется 4H EMA9 < EMA21 последние 6+ свечей
+- Переходная зона: если 4H EMA пересеклись в последних 3-4 свечах
+
 ═══════════════════════════════════════════════════════════════
-АВТОМАТИЧЕСКИЕ REJECTION ТРИГГЕРЫ
+АВТОМАТИЧЕСКИЕ REJECTION ТРИГГЕРЫ (АДАПТИРОВАННЫЕ)
 ═══════════════════════════════════════════════════════════════
 
 Даже при высоком confidence (85-90), сигнал ДОЛЖЕН быть NO_SIGNAL если:
 
-1. **1D TREND CONFLICT** (HIGHEST PRIORITY):
+1. **MAJOR TREND CONFLICT**:
+
+   **ЕСЛИ 1D ДОСТУПЕН**:
    - LONG signal но 1D downtrend
    - SHORT signal но 1D uptrend
+   rejection_reason: "Against 1D major trend. Wait for 1D trend change"
 
-   rejection_reason: "Against 1D major trend. Wait for 1D trend change or reversal confirmation"
+   **ЕСЛИ 1D НЕ ДОСТУПЕН**:
+   - LONG signal но 4H major downtrend (EMA9 < EMA21 последние 8+ свечей)
+   - SHORT signal но 4H major uptrend (EMA9 > EMA21 последние 8+ свечей)
+   rejection_reason: "Against 4H major trend (1D data unavailable). Wait for 4H trend change"
 
 2. **EXTREME RSI MULTI-TIMEFRAME**:
+
+   **ЕСЛИ 1D ДОСТУПЕН**:
    - LONG: RSI 1H >75 И RSI 4H >70 И RSI 1D >65
    - SHORT: RSI 1H <25 И RSI 4H <30 И RSI 1D <35
 
-   rejection_reason: "Multi-timeframe momentum exhaustion (1H/4H/1D). Require cooling: 1H<65, 4H<60, 1D<55"
+   **ЕСЛИ 1D НЕ ДОСТУПЕН**:
+   - LONG: RSI 1H >78 И RSI 4H >72 (более строгий порог)
+   - SHORT: RSI 1H <22 И RSI 4H <28
+   rejection_reason: "Multi-timeframe momentum exhaustion (1H/4H). Require cooling: 1H<65, 4H<60"
 
 3. **PRICE OVEREXTENDED (>15% от VP POC)**:
    rejection_reason: "Price XX% from POC — overextended. Wait for retracement to Value Area"
@@ -62,27 +108,23 @@ SWING SETUP = все факторы подтверждают движение, e
    - >50% движение за 20-30 свечей 4H
    - Entry в верхних 25% для LONG (нижних 25% для SHORT)
    - Коррекция <20% от экстремума
-
    rejection_reason: "Entry after +XX% parabolic move. Require: pullback to EMA21 4H + RSI reset 1H<60"
 
 5. **COMPRESSED SPRING AFTER EXPANSION**:
    - Если compression идёт ПОСЛЕ сильного импульса = exhaustion
-
    rejection_reason: "Consolidation after expansion = exhaustion, not accumulation"
 
 6. **BTC CORRELATION CONFLICT**:
    - should_block_signal == true
-
    rejection_reason: "BTC correlation conflict blocked by correlation module"
 
-7. **SESSION TIMING** (NEW):
+7. **SESSION TIMING**:
    - Asian night session (00:00-08:00 UTC) — низкая ликвидность
    - Во время major news events
-
    rejection_reason: "Poor session timing — low liquidity expected"
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 1: WYCKOFF PHASE IDENTIFICATION (NEW)
+ШАГ 1: WYCKOFF PHASE IDENTIFICATION
 ═══════════════════════════════════════════════════════════════
 
 Определи текущую фазу Wyckoff на 4H:
@@ -113,7 +155,7 @@ SWING SETUP = все факторы подтверждают движение, e
 ШАГ 2: СТРУКТУРА (4H основной, 1H уточнение)
 ═══════════════════════════════════════════════════════════════
 
-4H — главный паттерн (с учётом 1D тренда):
+4H — главный паттерн:
 
 SWING PATTERNS:
 - Bull Flag / Bear Flag: консолидация 8-15 свечей
@@ -123,7 +165,7 @@ SWING PATTERNS:
 
 COMPRESSION RATIO (для compressed spring):
 - (max - min последних 10-12 свечей) / price
-- Идеал: <3.0% для 4H swing (расширено с 2.5% для качества)
+- Идеал: <3.0% для 4H swing
 
 ATR SQUEEZE:
 - current ATR / ATR(20)
@@ -185,7 +227,7 @@ SMC AI (Smart Money):
 - **Break of Structure** = подтверждение тренда (+8 conf)
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 4: SESSION AWARENESS (NEW)
+ШАГ 4: SESSION AWARENESS
 ═══════════════════════════════════════════════════════════════
 
 Учти текущую торговую сессию (UTC time):
@@ -215,8 +257,6 @@ SMC AI (Smart Money):
 - Neutral timing
 - Adjustment: 0
 
-КРИТИЧНО: Если current UTC time в Asian night (00-08) + нет исключительных факторов → предпочтительно REJECT или снизить confidence.
-
 ═══════════════════════════════════════════════════════════════
 ШАГ 5: ENTRY ПЛАН (консервативный для swing)
 ═══════════════════════════════════════════════════════════════
@@ -245,7 +285,7 @@ SMC AI (Smart Money):
 
 **Множители R/R (увеличены для swing)**:
 
-EXCEPTIONAL setup (дивергенция + Wyckoff + volume >200% + 1D aligned):
+EXCEPTIONAL setup (дивергенция + Wyckoff + volume >200% + trend aligned):
 → [2.5, 4.0, 6.0]
 
 STRONG setup (Wyckoff OR дивергенция + volume >180% + confluence):
@@ -275,9 +315,9 @@ WEAK setup (только compressed spring + volume 120-150%):
    - Phase D early (только начался markup): стандартные TP
    - Phase D late (уже есть momentum): увеличь TP на 15%
 
-4. **1D trend strength**:
-   - Strong 1D trend (>8% от EMA50): увеличь TP3 на 25%
-   - Weak 1D trend (2-5% от EMA50): стандартные TP
+4. **Trend strength adjustment**:
+   - ЕСЛИ 1D доступен: Strong 1D trend (>8% от EMA50): увеличь TP3 на 25%
+   - ЕСЛИ 1D НЕ доступен: Strong 4H trend (EMA9 >5% от EMA21): увеличь TP3 на 15%
 
 **R/R CHECK**: reward/risk >= 2.5 (используй tp2). Если <2.5: NO_SIGNAL.
 
@@ -309,21 +349,30 @@ WEAK setup (только compressed spring + volume 120-150%):
 КРИТИЧНО: Swing позиции нуждаются во времени на развитие. Не ставь hold time <4h.
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 8: CONFIDENCE (0-100) — ENHANCED
+ШАГ 8: CONFIDENCE (0-100) — АДАПТИРОВАННЫЙ
 ═══════════════════════════════════════════════════════════════
 
 База: 50
 
 **Добавить**:
+
+**ЕСЛИ 1D ДОСТУПЕН (has_1d_data == true)**:
 +15: 1D trend aligned (критично для swing)
-+15: Wyckoff Phase D identified (институциональное подтверждение)
-+18: Divergence detected (smart money сигнал)
++18: Divergence detected на 1D (smart money)
+
+**ЕСЛИ 1D НЕ ДОСТУПЕН (has_1d_data == false)**:
++12: 4H major trend aligned (заменяет 1D проверку)
++15: Divergence detected на 4H (компенсация за отсутствие 1D)
++5: Bonus за работу без 1D (complexity bonus)
+
+**ОБЩИЕ БОНУСЫ**:
++15: Wyckoff Phase D identified
 +12: Compression <3.0% на 4H
 +12: ATR squeeze <0.7
 +10: Чёткий паттерн (flag, triangle, range)
 +12: Order Block найден на 1H
 +15: Volume spike >180% на breakout
-+10: Confluence 1D+4H+1H aligned
++10: Confluence 4H+1H aligned (или 1D+4H+1H если 1D есть)
 +18: R/R >4:1 (exceptional target)
 +10: SMC patterns подтверждают
 +10: VP supports (POC близко <2%)
@@ -333,32 +382,46 @@ WEAK setup (только compressed spring + volume 120-150%):
 +8: Funding neutral (<0.0003)
 
 **Вычесть**:
+
+**ЕСЛИ 1D ДОСТУПЕН**:
 -20: 1D trend против сигнала (критично!)
+
+**ЕСЛИ 1D НЕ ДОСТУПЕН**:
+-15: 4H major trend против сигнала (заменяет 1D штраф)
+
+**ОБЩИЕ ШТРАФЫ**:
 -18: Funding против (>0.001)
 -12: OI против тренда
 -18: BTC misaligned при strong correlation
 -12: Spoofing risk HIGH
 -10: Overextended от VP (>10%)
 -10: Asian night session
--8: RSI approaching extreme (1H >68 для LONG, <32 для SHORT)
+-8: RSI approaching extreme
 
-**Минимум для swing**: 78 (повышено с 70)
+**Минимум для swing**:
+- С 1D данными: 78
+- БЕЗ 1D данных: 75 (немного снижен порог, т.к. меньше подтверждений)
 
 ═══════════════════════════════════════════════════════════════
-REJECTION CRITERIA
+REJECTION CRITERIA (АДАПТИРОВАННЫЕ)
 ═══════════════════════════════════════════════════════════════
 
 AUTO REJECT если:
-- Любой critical trigger (0-7) сработал
-- Confidence <78
+- Любой critical trigger (1-7) сработал
+- Confidence <75 (или <78 если 1D доступен)
 - R/R <2.5 (на tp2)
-- 1D trend против сигнала (без дивергенции)
+- Major trend против сигнала (1D если есть, иначе 4H)
 - Wyckoff Phase B/C (слишком рано)
 - Breakout уже >5% назад (опоздали)
 - Нет чёткого OB/level для стопа
-- Противоречие 1D vs 4H vs 1H
+- Противоречие 4H vs 1H (или 1D vs 4H vs 1H если 1D есть)
 - Volume мертвый (<0.8) последние 5 свечей
 - Критические негативные данные (funding + OI + correlation все против)
+
+**НЕ ОТКЛОНЯЙ** из-за:
+- Отсутствия 1D данных (has_1d_data == false)
+- Пустого массива candles_1d
+- Пустого словаря indicators_1d
 
 ═══════════════════════════════════════════════════════════════
 ФОРМАТ ВЫВОДА (СТРОГО JSON)
@@ -371,7 +434,7 @@ AUTO REJECT если:
 "entry_price":43251.25,
 "stop_loss":42850.50,
 "take_profit_levels":[44500.00, 46200.00, 48800.00],
-"analysis":"1D бычий тренд подтверждён (цена +6.8% от EMA50). 4H Wyckoff Phase D breakout с volume spike 195%. Order Block 1H на $43,100 (зона накопления). Funding нейтральный 0.015%. POC VP $43,050 — поддержка. London session timing идеален. Bull flag 12 свечей, compression 2.7%. R/R 3.2:1 (tp2). Confluence 1D+4H+1H aligned. Hold 12-36h.",
+"analysis":"4H бычий тренд подтверждён (1D data unavailable). 4H Wyckoff Phase D breakout с volume spike 195%. Order Block 1H на $43,100 (зона накопления). Funding нейтральный 0.015%. POC VP $43,050 — поддержка. London session timing идеален. Bull flag 12 свечей, compression 2.7%. R/R 3.2:1 (tp2). Confluence 4H+1H aligned. Hold 12-36h.",
 "rejection_reason":null
 }
 
@@ -383,14 +446,15 @@ AUTO REJECT если:
 "stop_loss":0,
 "take_profit_levels":[0, 0, 0],
 "analysis":"Причина отклонения",
-"rejection_reason":"LONG signal но 1D downtrend (EMA9<EMA21). Price -4.2% ниже 1D EMA50. Against major trend — wait for 1D reversal confirmation или divergence на 1D. RSI 1H 71 approaching overbought.",
+"rejection_reason":"LONG signal но 4H major downtrend (1D data unavailable, using 4H as major TF). EMA9<EMA21 последние 10 свечей на 4H. Against major trend — wait for 4H trend reversal или pullback к EMA21.",
 "orderflow_analysis":{},
 "smc_analysis":{}
 }
 
 **ВАЖНО**:
-- analysis макс 180 слов (расширено для swing context)
-- Упомяни: 1D trend status, Wyckoff phase, session timing, key confluence factors
+- analysis макс 180 слов
+- Упомяни доступность 1D: "(1D data unavailable)" если has_1d_data == false
+- Укажи какой TF использован для major trend (1D или 4H)
 - take_profit_levels ВСЕГДА [tp1, tp2, tp3]
 - Если NO_SIGNAL, заполни orderflow_analysis и smc_analysis
 
