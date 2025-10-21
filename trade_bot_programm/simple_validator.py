@@ -1,6 +1,6 @@
 """
 Simple validator - WITH ValidationEngine
-МОДИФИКАЦИЯ: Использует ValidationEngine для проверок
+FIXED: check_trading_hours теперь возвращает tuple
 Файл: trade_bot_programm/simple_validator.py
 """
 
@@ -17,6 +17,8 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
     """
     Проверка торговых часов (по пермскому времени UTC+5)
 
+    FIXED: Теперь всегда возвращает tuple
+
     Returns:
         (is_allowed: bool, reason: str)
     """
@@ -25,6 +27,9 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
         perm_time = datetime.now(perm_tz)
 
     hour = perm_time.hour
+
+    # ВРЕМЕННО ОТКЛЮЧЕНО: Все часы разрешены
+    # Раскомментируй блоки ниже для включения ограничений
 
     # # Критические периоды
     # if 0 <= hour < 3:
@@ -35,8 +40,9 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
     #
     # if 12 <= hour < 13:
     #     return False, "Asian close gap (12:00–13:00): position fixing"
-    #
-    # return True, "Trading hours: OK"
+
+    # FIXED: Возвращаем tuple в любом случае
+    return True, "Trading hours: OK"
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
@@ -51,9 +57,8 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
     if not preliminary_signals:
         logger.warning("No preliminary signals for validation")
         return {
-            'validated_signals': [],
-            'rejected_signals': [],
-            'validation_summary': 'No signals to validate'
+            'validated': [],
+            'rejected': []
         }
 
     validated = []

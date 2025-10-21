@@ -1,5 +1,5 @@
 """
-AI Router - FIXED: Добавлены методы analyze_pair_comprehensive и validate_signal_with_stage3_data
+AI Router - COMPLETE: Все методы реализованы
 Поддерживает DeepSeek и Anthropic Claude с reasoning/thinking режимами
 """
 
@@ -25,9 +25,8 @@ class AIRouter:
     def __init__(self):
         """Инициализация роутера"""
         self.deepseek_client: Optional[DeepSeekClient] = None
-        self.claude_client = None  # Будет инициализирован при необходимости
+        self.claude_client = None
 
-        # Конфигурация из env
         self.stage_providers = {
             'stage2': STAGE2_PROVIDER,
             'stage3': STAGE3_PROVIDER,
@@ -68,7 +67,6 @@ class AIRouter:
             return False
 
         try:
-            # Импортируем Anthropic SDK
             from anthropic import AsyncAnthropic
 
             self.claude_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
@@ -89,15 +87,7 @@ class AIRouter:
             return False
 
     async def _get_provider_client(self, stage: str):
-        """
-        Получает клиент для конкретного stage
-
-        Args:
-            stage: 'stage2', 'stage3' или 'stage4'
-
-        Returns:
-            Кортеж (provider_name, client)
-        """
+        """Получает клиент для конкретного stage"""
         provider = self.stage_providers.get(stage, 'deepseek')
 
         if provider == 'deepseek':
@@ -119,16 +109,7 @@ class AIRouter:
         pairs_data: List[Dict],
         max_pairs: Optional[int] = None
     ) -> List[str]:
-        """
-        Stage 2: Выбирает лучшие пары через AI
-
-        Args:
-            pairs_data: Данные о парах
-            max_pairs: Максимальное количество пар
-
-        Returns:
-            Список выбранных тикеров
-        """
+        """Stage 2: Выбирает лучшие пары через AI"""
         print(f"\n[AI Router] {'='*70}")
         print(f"[AI Router] 🎯 STAGE 2: ВЫБОР ПАР")
         print(f"[AI Router] {'='*70}")
@@ -179,16 +160,7 @@ class AIRouter:
         symbol: str,
         comprehensive_data: Dict
     ) -> Dict:
-        """
-        Stage 3: Comprehensive analysis with all data
-
-        Args:
-            symbol: Trading pair symbol
-            comprehensive_data: Full data from Stage 3 (all timeframes, market data, etc)
-
-        Returns:
-            Analysis result with signal/confidence/levels
-        """
+        """Stage 3: Comprehensive analysis with all data"""
         print(f"\n[AI Router] {'─'*70}")
         print(f"[AI Router] 🔬 STAGE 3: COMPREHENSIVE ANALYSIS {symbol}")
         print(f"[AI Router] {'─'*70}")
@@ -207,22 +179,9 @@ class AIRouter:
         print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
 
         try:
-            if provider_name == 'deepseek':
-                # DeepSeek не поддерживает полноценный Stage 3 анализ
-                # Возвращаем базовый анализ
-                return {
-                    'symbol': symbol,
-                    'signal': 'NO_SIGNAL',
-                    'confidence': 0,
-                    'rejection_reason': 'DeepSeek не поддерживает comprehensive analysis. Используйте Claude для Stage 3'
-                }
-
-            elif provider_name == 'claude':
-                # Claude полноценный анализ
+            if provider_name == 'claude':
                 from anthropic_client import AnthropicClient
-
                 claude = AnthropicClient()
-
                 result = await claude.analyze_comprehensive(symbol, comprehensive_data)
 
                 if result:
@@ -235,6 +194,14 @@ class AIRouter:
                         'confidence': 0,
                         'rejection_reason': 'Claude analysis returned no result'
                     }
+
+            elif provider_name == 'deepseek':
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'DeepSeek не поддерживает comprehensive analysis. Используйте Claude для Stage 3'
+                }
 
             else:
                 return {
@@ -262,39 +229,52 @@ class AIRouter:
     ) -> Dict:
         """
         Stage 4: Validation with full Stage 3 data
-
-        Args:
-            signal: Signal from Stage 3
-            comprehensive_data: Full data from Stage 3
-
-        Returns:
-            Validation result
+        FIXED: Теперь реализован полностью
         """
+        symbol = signal.get('symbol', 'UNKNOWN')
+
+        print(f"\n[AI Router] {'─'*70}")
+        print(f"[AI Router] 🔍 STAGE 4: VALIDATION {symbol}")
+        print(f"[AI Router] {'─'*70}")
+
         provider_name, client = await self._get_provider_client('stage4')
 
         if not client:
-            print(f"[AI Router] ❌ Client unavailable for Stage 4")
-            # Fallback validation
+            print(f"[AI Router] ❌ Client unavailable for Stage 4 - using fallback")
             from shared_utils import fallback_validation
             return fallback_validation(signal, comprehensive_data)
+
+        print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
 
         try:
             if provider_name == 'claude':
                 from anthropic_client import AnthropicClient
                 claude = AnthropicClient()
-                return await claude.validate_signal(signal, comprehensive_data)
+                result = await claude.validate_signal(signal, comprehensive_data)
+
+                if result:
+                    print(f"[AI Router] ✅ Stage 4 complete for {symbol}")
+                    return result
+                else:
+                    print(f"[AI Router] ⚠️ Claude returned no validation, using fallback")
+                    from shared_utils import fallback_validation
+                    return fallback_validation(signal, comprehensive_data)
 
             elif provider_name == 'deepseek':
-                # DeepSeek fallback
+                print(f"[AI Router] ⚠️ DeepSeek validation fallback")
                 from shared_utils import fallback_validation
                 return fallback_validation(signal, comprehensive_data)
 
             else:
+                print(f"[AI Router] ⚠️ Unknown provider, using fallback")
                 from shared_utils import fallback_validation
                 return fallback_validation(signal, comprehensive_data)
 
         except Exception as e:
-            print(f"[AI Router] ❌ Error in Stage 4: {e}")
+            print(f"[AI Router] ❌ Error in Stage 4 for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+
             from shared_utils import fallback_validation
             return fallback_validation(signal, comprehensive_data)
 
@@ -308,7 +288,6 @@ class AIRouter:
         max_pairs: Optional[int] = None
     ) -> List[str]:
         """Выбор пар через Claude"""
-        # Формируем промпт
         pairs_info = []
         for pair in pairs_data:
             info = (
@@ -328,7 +307,6 @@ class AIRouter:
             f"Верни ТОЛЬКО список тикеров через запятую."
         )
 
-        # Вызов Claude API
         kwargs = {
             'model': ANTHROPIC_MODEL,
             'max_tokens': AI_MAX_TOKENS_SELECT,
@@ -336,20 +314,17 @@ class AIRouter:
             'messages': [{'role': 'user', 'content': prompt}]
         }
 
-        # Extended thinking для поддерживающих моделей
         if ANTHROPIC_THINKING:
             kwargs['thinking'] = {'type': 'enabled', 'budget_tokens': 2000}
 
         response = await self.claude_client.messages.create(**kwargs)
 
-        # Показываем thinking если есть
         if ANTHROPIC_THINKING and hasattr(response, 'thinking'):
             print(f"[Claude] 💭 Extended Thinking (первые 500 символов):")
             print(f"     {str(response.thinking)[:500]}...")
 
         content = response.content[0].text.strip()
 
-        # Парсим тикеры
         selected = []
         for line in content.split('\n'):
             tokens = line.replace(',', ' ').split()
