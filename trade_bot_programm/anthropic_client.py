@@ -1,5 +1,5 @@
 """
-Anthropic Claude AI Client - FIXED: Добавлен метод analyze_comprehensive
+Anthropic Claude AI Client - FIXED: Unified prompt loading
 """
 
 import asyncio
@@ -17,24 +17,40 @@ _prompts_cache = {}
 
 
 def load_prompt_cached(filename: str) -> str:
-    """Load prompt with caching - FIXED: Better path resolution"""
+    """
+    Load prompt with caching - FIXED: Unified search strategy
+
+    Ищет промпт в следующем порядке:
+    1. Прямой путь (если передан полный путь)
+    2. trade_bot_programm/prompts/
+    3. prompts/ (корень проекта)
+    4. ../prompts/ (родительская директория)
+    """
     if filename in _prompts_cache:
         logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
 
-    # Try direct path
-    filepath = Path(filename)
-    if not filepath.exists():
-        # Try relative to this file
-        filepath = Path(__file__).parent / Path(filename).name
+    # Список путей для поиска
+    search_paths = [
+        Path(filename),  # Прямой путь
+        Path(__file__).parent / "prompts" / Path(filename).name,  # trade_bot_programm/prompts/
+        Path(__file__).parent.parent / "prompts" / Path(filename).name,  # Корень проекта
+        Path(__file__).parent.parent.parent / "prompts" / Path(filename).name,  # Выше корня
+    ]
 
-    if not filepath.exists():
-        # Try in parent/trade_bot_programm
-        filepath = Path(__file__).parent.parent / 'trade_bot_programm' / Path(filename).name
+    filepath = None
+    for path in search_paths:
+        if path.exists() and path.is_file():
+            filepath = path
+            logger.debug(f"Prompt found at: {filepath}")
+            break
 
-    if not filepath.exists():
-        logger.error(f"Prompt file not found: {filename}")
-        raise FileNotFoundError(f"Prompt file {filename} not found")
+    if not filepath:
+        error_msg = f"Prompt file '{filename}' not found. Searched in:\n"
+        for path in search_paths:
+            error_msg += f"  - {path.absolute()}\n"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
 
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -42,7 +58,7 @@ def load_prompt_cached(filename: str) -> str:
             if not content:
                 raise ValueError(f"Prompt file is empty: {filename}")
             _prompts_cache[filename] = content
-            logger.debug(f"Prompt cached: {filepath.name} ({len(content)} chars)")
+            logger.info(f"Prompt cached: {filepath.name} ({len(content)} chars)")
             return content
     except Exception as e:
         logger.error(f"Error loading prompt {filename}: {e}")
@@ -167,6 +183,7 @@ class AnthropicClient:
                 logger.warning("No valid compact data for Claude selection")
                 return []
 
+            # FIXED: Используем load_prompt_cached
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             json_payload = json.dumps(compact_data, separators=(',', ':'))
 
@@ -198,19 +215,11 @@ class AnthropicClient:
     async def analyze_comprehensive(self, symbol: str, comprehensive_data: Dict) -> Dict:
         """
         Comprehensive analysis using full Stage 3 data
-        НОВЫЙ МЕТОД для Stage 3
-
-        Args:
-            symbol: Trading pair
-            comprehensive_data: All timeframes + market data + correlation + VP
-
-        Returns:
-            Analysis with signal/confidence/levels
         """
         try:
             logger.debug(f"Claude: Comprehensive analysis for {symbol}")
 
-            # Загружаем промпт
+            # FIXED: Используем load_prompt_cached
             prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
 
             # Формируем JSON с данными
@@ -228,7 +237,6 @@ class AnthropicClient:
             result = extract_json_from_response(response)
 
             if result:
-                # Добавляем symbol если отсутствует
                 result['symbol'] = symbol
                 logger.debug(f"Claude: Analysis complete for {symbol}")
                 return result
@@ -274,6 +282,7 @@ class AnthropicClient:
                 }
             }
 
+            # FIXED: Используем load_prompt_cached
             prompt = load_prompt_cached(config.VALIDATION_PROMPT)
             data_json = json.dumps(validation_input, separators=(',', ':'))
 
@@ -330,8 +339,8 @@ class AnthropicClient:
                         'risk_reward_ratio': validated.get('risk_reward_ratio', 0),
                         'hold_duration_minutes': validated.get('hold_duration_minutes', 720),
                         'validation_notes': validated.get('validation_notes', ''),
-                        'market_conditions': market_conditions,  # FIXED: гарантировано заполнено
-                        'key_levels': key_levels,  # FIXED: гарантировано заполнено
+                        'market_conditions': market_conditions,
+                        'key_levels': key_levels,
                         'validation_method': 'claude'
                     }
                 else:

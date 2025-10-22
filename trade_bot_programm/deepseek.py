@@ -1,5 +1,5 @@
 """
-DeepSeek AI клиент - FIXED: Symbol parsing from JSON response
+DeepSeek AI клиент - FIXED: Unified prompt loading
 """
 
 import os
@@ -7,6 +7,36 @@ import json
 from openai import AsyncOpenAI
 from typing import Optional, Dict, List
 from pathlib import Path
+
+
+def load_prompt_unified(prompt_file: str) -> str:
+    """
+    Unified prompt loader - ищет промпт в правильной папке
+
+    Ищет в следующем порядке:
+    1. Прямой путь
+    2. trade_bot_programm/prompts/
+    3. prompts/ (корень проекта)
+    4. ../prompts/
+    """
+    search_paths = [
+        Path(prompt_file),
+        Path(__file__).parent / "prompts" / Path(prompt_file).name,
+        Path(__file__).parent.parent / "prompts" / Path(prompt_file).name,
+        Path(__file__).parent.parent.parent / "prompts" / Path(prompt_file).name,
+    ]
+
+    for path in search_paths:
+        if path.exists() and path.is_file():
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                print(f"[DeepSeek] 📄 Промпт загружен: {path.name} ({len(content)} символов)")
+                return content
+
+    error_msg = f"Промпт файл '{prompt_file}' не найден. Искал в:\n"
+    for path in search_paths:
+        error_msg += f"  - {path.absolute()}\n"
+    raise FileNotFoundError(error_msg)
 
 
 class DeepSeekClient:
@@ -56,18 +86,9 @@ class DeepSeekClient:
         if prompt_file in self.prompts_cache:
             return self.prompts_cache[prompt_file]
 
-        prompts_dir = Path(__file__).parent.parent / "prompts"
-        prompt_path = prompts_dir / prompt_file
-
-        if not prompt_path.exists():
-            raise FileNotFoundError(f"Промпт файл не найден: {prompt_path}")
-
-        with open(prompt_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
+        # FIXED: Используем unified loader
+        content = load_prompt_unified(prompt_file)
         self.prompts_cache[prompt_file] = content
-        print(f"[DeepSeek] 📄 Промпт закэширован: {prompt_file} ({len(content)} символов)")
-
         return content
 
     async def select_pairs(
@@ -79,7 +100,7 @@ class DeepSeekClient:
         max_tokens: Optional[int] = None
     ) -> List[str]:
         """
-        FIXED: Парсинг JSON response с корректным извлечением символов
+        Выбор пар через DeepSeek
         """
         try:
             if temperature is None:
@@ -155,7 +176,7 @@ class DeepSeekClient:
             print(f"[DeepSeek] 📝 Ответ модели (первые 200 символов):")
             print(f"[DeepSeek]    {content[:200]}...")
 
-            # FIXED: Парсим JSON response
+            # Парсим JSON response
             selected = []
 
             try:
@@ -175,10 +196,9 @@ class DeepSeekClient:
                 data = json.loads(content)
                 selected_pairs = data.get('selected_pairs', [])
 
-                # CRITICAL FIX: Очищаем от лишних символов
+                # Очищаем от лишних символов
                 for symbol in selected_pairs:
                     if isinstance(symbol, str):
-                        # Убираем кавычки, скобки, пробелы
                         clean_symbol = symbol.strip().strip('"').strip("'").strip('[').strip(']').upper()
                         if clean_symbol and clean_symbol not in selected:
                             selected.append(clean_symbol)
