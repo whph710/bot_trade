@@ -1,4 +1,4 @@
-# config.py - FIXED: Stage-specific model configuration
+# config.py - OPTIMIZED: Reduced data + rate limit protection
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -20,51 +20,40 @@ TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID", "")
 # ============================================================================
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-
-# DeepSeek URL
 DEEPSEEK_URL = "https://api.deepseek.com"
 
 # ============================================================================
 # STAGE PROVIDER SELECTION
 # ============================================================================
-STAGE2_PROVIDER = os.getenv("STAGE2_PROVIDER", "deepseek").lower()
-STAGE3_PROVIDER = os.getenv("STAGE3_PROVIDER", "deepseek").lower()
-STAGE4_PROVIDER = os.getenv("STAGE4_PROVIDER", "deepseek").lower()
+STAGE2_PROVIDER = os.getenv("STAGE2_PROVIDER", "claude").lower()  # Haiku для Stage 2
+STAGE3_PROVIDER = os.getenv("STAGE3_PROVIDER", "claude").lower()  # Sonnet для Stage 3
 
 # ============================================================================
-# STAGE 2: PAIR SELECTION
+# STAGE 2: PAIR SELECTION (Haiku с multi-TF)
 # ============================================================================
-STAGE2_MODEL = os.getenv("STAGE2_MODEL", "deepseek-chat")
+STAGE2_MODEL = os.getenv("STAGE2_MODEL", "claude-haiku-4-5-20251001")
 STAGE2_TEMPERATURE = float(os.getenv("STAGE2_TEMPERATURE", "0.3"))
 STAGE2_MAX_TOKENS = int(os.getenv("STAGE2_MAX_TOKENS", "2000"))
 
 # ============================================================================
-# STAGE 3: ANALYSIS
+# STAGE 3: ANALYSIS (Sonnet)
 # ============================================================================
-STAGE3_MODEL = os.getenv("STAGE3_MODEL", "deepseek-chat")
+STAGE3_MODEL = os.getenv("STAGE3_MODEL", "claude-sonnet-4-20250514")
 STAGE3_TEMPERATURE = float(os.getenv("STAGE3_TEMPERATURE", "0.7"))
 STAGE3_MAX_TOKENS = int(os.getenv("STAGE3_MAX_TOKENS", "3000"))
 
 # ============================================================================
-# STAGE 4: VALIDATION
+# STAGE 4: REMOVED
 # ============================================================================
-STAGE4_MODEL = os.getenv("STAGE4_MODEL", "deepseek-chat")
-STAGE4_TEMPERATURE = float(os.getenv("STAGE4_TEMPERATURE", "0.3"))
-STAGE4_MAX_TOKENS = int(os.getenv("STAGE4_MAX_TOKENS", "3500"))
 
 # ============================================================================
-# BACKWARD COMPATIBILITY (legacy)
+# BACKWARD COMPATIBILITY
 # ============================================================================
-DEEPSEEK_MODEL = STAGE2_MODEL  # Default to Stage 2 model
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
-
 AI_TEMPERATURE_SELECT = STAGE2_TEMPERATURE
 AI_TEMPERATURE_ANALYZE = STAGE3_TEMPERATURE
-AI_TEMPERATURE_VALIDATE = STAGE4_TEMPERATURE
-
 AI_MAX_TOKENS_SELECT = STAGE2_MAX_TOKENS
 AI_MAX_TOKENS_ANALYZE = STAGE3_MAX_TOKENS
-AI_MAX_TOKENS_VALIDATE = STAGE4_MAX_TOKENS
 
 # ============================================================================
 # AI REASONING/THINKING MODES
@@ -73,10 +62,13 @@ DEEPSEEK_REASONING = os.getenv("DEEPSEEK_REASONING", "false").lower() in ("true"
 ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "false").lower() in ("true", "1", "yes")
 
 # ============================================================================
-# API TIMEOUTS
+# API TIMEOUTS & RATE LIMITS
 # ============================================================================
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 API_TIMEOUT_ANALYSIS = int(os.getenv("API_TIMEOUT_ANALYSIS", "60"))
+
+# НОВОЕ: Rate limit protection
+CLAUDE_RATE_LIMIT_DELAY = float(os.getenv("CLAUDE_RATE_LIMIT_DELAY", "65.0"))  # 1 min 5 sec между запросами
 
 # ============================================================================
 # TRADING PARAMETERS
@@ -110,7 +102,7 @@ CACHE_HOT_PAIRS = int(os.getenv("CACHE_HOT_PAIRS", "100"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
 # ============================================================================
-# TRADING BOT SPECIFIC PARAMETERS
+# TRADING BOT SPECIFIC PARAMETERS - OPTIMIZED
 # ============================================================================
 TIMEFRAME_SHORT = "60"   # 1H
 TIMEFRAME_LONG = "240"   # 4H
@@ -120,14 +112,21 @@ TIMEFRAME_SHORT_NAME = "1H"
 TIMEFRAME_LONG_NAME = "4H"
 TIMEFRAME_HTF_NAME = "1D"
 
-QUICK_SCAN_CANDLES = 48
-AI_BULK_CANDLES = 100
-FINAL_SHORT_CANDLES = 168
-FINAL_LONG_CANDLES = 84
-FINAL_HTF_CANDLES = 30
+# ОПТИМИЗИРОВАНО: Уменьшены свечи для Stage 2
+QUICK_SCAN_CANDLES = 48  # Stage 1: Base filtering
 
-AI_INDICATORS_HISTORY = 60
-FINAL_INDICATORS_HISTORY = 60
+# Stage 2: Compact multi-TF data
+STAGE2_CANDLES_1H = 30   # Последние 30 свечей 1H
+STAGE2_CANDLES_4H = 30   # Последние 30 свечей 4H
+STAGE2_CANDLES_1D = 10   # Последние 10 свечей 1D
+
+# Stage 3: Full analysis (REDUCED from 168/84/30)
+STAGE3_CANDLES_1H = 100  # Было 168
+STAGE3_CANDLES_4H = 60   # Было 84
+STAGE3_CANDLES_1D = 20   # Было 30
+
+AI_INDICATORS_HISTORY = 30  # Было 60
+FINAL_INDICATORS_HISTORY = 30  # Было 60
 
 MAX_BULK_PAIRS = 50
 MAX_FINAL_PAIRS = 3
@@ -158,7 +157,6 @@ OI_CHANGE_DECLINING_THRESHOLD = -5.0
 # ============================================================================
 SELECTION_PROMPT = "prompt_select.txt"
 ANALYSIS_PROMPT = "prompt_analyze.txt"
-VALIDATION_PROMPT = "prompt_validate.txt"
 
 # ============================================================================
 # LOGGING
