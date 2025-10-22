@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - FIXED: AI Router инициализирован
+Trading Bot Runner - OPTIMIZED: Reduced data + rate limit + Stage 4 removed
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime
+import time
 
 CURRENT_DIR = Path(__file__).parent
 sys.path.insert(0, str(CURRENT_DIR))
@@ -22,7 +23,7 @@ from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
 
-# FIXED: Глобальный экземпляр AI Router
+# Глобальный экземпляр AI Router
 ai_router = AIRouter()
 
 
@@ -35,8 +36,8 @@ class TradingBotRunner:
         self.ai_selected_count = 0
         self.analyzed_count = 0
         self.analysis_data_cache = {}
-        # FIXED: Используем глобальный экземпляр
         self.ai_router = ai_router
+        self.last_haiku_call_time = 0  # НОВОЕ: Трекинг времени последнего Haiku запроса
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -106,9 +107,12 @@ class TradingBotRunner:
         return pairs_with_signals
 
     async def stage2_ai_select(self, signal_pairs: list[Dict]) -> list[str]:
-        """Stage 2: AI selection"""
+        """
+        Stage 2: AI selection (Haiku) with COMPACT multi-TF data
+        OPTIMIZED: 1H/4H/1D компактные индикаторы
+        """
         logger.info("=" * 70)
-        logger.info(f"STAGE 2: {config.STAGE2_PROVIDER.upper()} pair selection")
+        logger.info(f"STAGE 2: {config.STAGE2_PROVIDER.upper()} pair selection (COMPACT)")
         logger.info("=" * 70)
 
         if not signal_pairs:
@@ -116,35 +120,78 @@ class TradingBotRunner:
             return []
 
         symbols = [p['symbol'] for p in signal_pairs]
-        candles_map = await self.load_candles_batch(symbols, config.TIMEFRAME_LONG, config.AI_BULK_CANDLES)
+
+        # ОПТИМИЗИРОВАНО: Загружаем МЕНЬШЕ свечей для Stage 2
+        logger.debug(f"Loading compact data: 1H({config.STAGE2_CANDLES_1H}), 4H({config.STAGE2_CANDLES_4H}), 1D({config.STAGE2_CANDLES_1D})")
+
+        candles_1h_map = await self.load_candles_batch(symbols, config.TIMEFRAME_SHORT, config.STAGE2_CANDLES_1H)
+        candles_4h_map = await self.load_candles_batch(symbols, config.TIMEFRAME_LONG, config.STAGE2_CANDLES_4H)
+        candles_1d_map = await self.load_candles_batch(symbols, config.TIMEFRAME_HTF, config.STAGE2_CANDLES_1D)
 
         ai_input_data = []
 
         for pair_data in signal_pairs:
             symbol = pair_data['symbol']
-            if symbol not in candles_map:
+
+            # Нужны минимум 1H и 4H
+            if symbol not in candles_1h_map or symbol not in candles_4h_map:
                 continue
 
-            candles = candles_map[symbol]
-            indicators = calculate_ai_indicators(candles, config.AI_INDICATORS_HISTORY)
+            candles_1h = candles_1h_map[symbol]
+            candles_4h = candles_4h_map[symbol]
+            candles_1d = candles_1d_map.get(symbol, [])  # 1D опционально
 
-            if not indicators:
+            # Компактные индикаторы
+            indicators_1h = calculate_ai_indicators(candles_1h, min(30, len(candles_1h)))
+            indicators_4h = calculate_ai_indicators(candles_4h, min(30, len(candles_4h)))
+            indicators_1d = calculate_ai_indicators(candles_1d, min(10, len(candles_1d))) if candles_1d else {}
+
+            if not indicators_1h or not indicators_4h:
                 continue
 
+            # КОМПАКТНАЯ СТРУКТУРА для Stage 2 (Haiku)
             ai_input_data.append({
                 'symbol': symbol,
                 'confidence': pair_data['confidence'],
                 'direction': pair_data['direction'],
-                'candles_15m': candles,
-                'indicators_15m': indicators
+                # Компактные данные по таймфреймам
+                'candles_1h': candles_1h[-30:],  # Последние 30
+                'candles_4h': candles_4h[-30:],  # Последние 30
+                'candles_1d': candles_1d[-10:] if candles_1d else [],  # Последние 10
+                'indicators_1h': {
+                    'current': indicators_1h.get('current', {}),
+                    'ema5': indicators_1h.get('ema5_history', [])[-30:],
+                    'ema8': indicators_1h.get('ema8_history', [])[-30:],
+                    'ema20': indicators_1h.get('ema20_history', [])[-30:],
+                    'rsi': indicators_1h.get('rsi_history', [])[-30:],
+                    'macd': indicators_1h.get('macd_histogram_history', [])[-30:],
+                },
+                'indicators_4h': {
+                    'current': indicators_4h.get('current', {}),
+                    'ema5': indicators_4h.get('ema5_history', [])[-30:],
+                    'ema8': indicators_4h.get('ema8_history', [])[-30:],
+                    'ema20': indicators_4h.get('ema20_history', [])[-30:],
+                    'rsi': indicators_4h.get('rsi_history', [])[-30:],
+                    'macd': indicators_4h.get('macd_histogram_history', [])[-30:],
+                },
+                'indicators_1d': {
+                    'current': indicators_1d.get('current', {}),
+                    'ema5': indicators_1d.get('ema5_history', [])[-10:] if indicators_1d else [],
+                    'ema8': indicators_1d.get('ema8_history', [])[-10:] if indicators_1d else [],
+                    'ema20': indicators_1d.get('ema20_history', [])[-10:] if indicators_1d else [],
+                    'rsi': indicators_1d.get('rsi_history', [])[-10:] if indicators_1d else [],
+                } if indicators_1d else {}
             })
 
         if not ai_input_data:
             logger.warning("No valid AI input data prepared")
             return []
 
-        logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} for selection")
-        # FIXED: Используем self.ai_router
+        logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} (Haiku) for selection")
+
+        # ЗАПОМИНАЕМ время вызова Haiku
+        self.last_haiku_call_time = time.time()
+
         selected_pairs = await self.ai_router.select_pairs(ai_input_data)
         self.ai_selected_count = len(selected_pairs)
 
@@ -159,30 +206,40 @@ class TradingBotRunner:
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """
-        Stage 3: Unified analysis
-        FIXED: 1D данные опциональны, их отсутствие НЕ блокирует анализ
+        Stage 3: Unified analysis (Sonnet) with FULL data
+        НОВОЕ: Добавлена задержка 65 секунд после Haiku
+        ОПТИМИЗИРОВАНО: Уменьшены свечи Stage 3
         """
         logger.info("=" * 70)
-        logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis")
+        logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis (FULL)")
         logger.info("=" * 70)
 
         if not selected_pairs:
             logger.warning("No pairs for analysis")
             return []
 
-        # Загружаем BTC candles ОДИН РАЗ (1H/4H обязательны, 1D опционально)
-        logger.debug("Loading BTC candles for correlation analysis (1H/4H required, 1D optional)")
+        # ========== RATE LIMIT PROTECTION ==========
+        if self.last_haiku_call_time > 0:
+            elapsed = time.time() - self.last_haiku_call_time
+            required_delay = config.CLAUDE_RATE_LIMIT_DELAY  # 65 секунд
+
+            if elapsed < required_delay:
+                wait_time = required_delay - elapsed
+                logger.info(f"⏳ Rate limit protection: Waiting {wait_time:.1f}s before Stage 3...")
+                await asyncio.sleep(wait_time)
+
+        # Загружаем BTC candles (УМЕНЬШЕНО)
+        logger.debug(f"Loading BTC candles: 1H({config.STAGE3_CANDLES_1H}), 4H({config.STAGE3_CANDLES_4H}), 1D({config.STAGE3_CANDLES_1D})")
         btc_candles_1h, btc_candles_4h, btc_candles_1d = await asyncio.gather(
-            fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
-            fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
-            fetch_klines('BTCUSDT', config.TIMEFRAME_HTF, config.FINAL_HTF_CANDLES)
+            fetch_klines('BTCUSDT', config.TIMEFRAME_SHORT, config.STAGE3_CANDLES_1H),
+            fetch_klines('BTCUSDT', config.TIMEFRAME_LONG, config.STAGE3_CANDLES_4H),
+            fetch_klines('BTCUSDT', config.TIMEFRAME_HTF, config.STAGE3_CANDLES_1D)
         )
 
         if not btc_candles_1h or not btc_candles_4h:
             logger.error("Failed to load BTC 1H/4H candles (critical)")
             return []
 
-        # 1D могут отсутствовать
         if not btc_candles_1d:
             logger.warning("⚠️ BTC 1D candles not available (non-critical)")
         else:
@@ -194,11 +251,11 @@ class TradingBotRunner:
             try:
                 logger.info(f"Analyzing {symbol}...")
 
-                # Загружаем все таймфреймы (1D опционально)
+                # Загружаем таймфреймы (УМЕНЬШЕНО)
                 klines_1h, klines_4h, klines_1d = await asyncio.gather(
-                    fetch_klines(symbol, config.TIMEFRAME_SHORT, config.FINAL_SHORT_CANDLES),
-                    fetch_klines(symbol, config.TIMEFRAME_LONG, config.FINAL_LONG_CANDLES),
-                    fetch_klines(symbol, config.TIMEFRAME_HTF, config.FINAL_HTF_CANDLES)
+                    fetch_klines(symbol, config.TIMEFRAME_SHORT, config.STAGE3_CANDLES_1H),
+                    fetch_klines(symbol, config.TIMEFRAME_LONG, config.STAGE3_CANDLES_4H),
+                    fetch_klines(symbol, config.TIMEFRAME_HTF, config.STAGE3_CANDLES_1D)
                 )
 
                 # 1H и 4H ОБЯЗАТЕЛЬНЫ
@@ -224,7 +281,7 @@ class TradingBotRunner:
                 indicators_1d = {}
                 if has_1d_data:
                     try:
-                        indicators_1d = calculate_ai_indicators(klines_1d, min(30, len(klines_1d)))
+                        indicators_1d = calculate_ai_indicators(klines_1d, min(20, len(klines_1d)))
                         if indicators_1d:
                             logger.debug(f"{symbol}: ✓ 1D indicators calculated")
                     except Exception as e:
@@ -261,7 +318,7 @@ class TradingBotRunner:
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
                     'indicators_1d': indicators_1d,  # Может быть пустым {}
-                    'has_1d_data': has_1d_data,  # НОВОЕ: флаг доступности
+                    'has_1d_data': has_1d_data,  # ФЛАГ доступности
                     'current_price': current_price,
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
@@ -272,7 +329,6 @@ class TradingBotRunner:
                     'btc_candles_1d': btc_candles_1d if btc_candles_1d else []
                 }
 
-                # FIXED: Используем self.ai_router
                 analysis = await self.ai_router.analyze_pair_comprehensive(symbol, comprehensive_data)
 
                 signal_type = analysis.get('signal', 'NO_SIGNAL')
@@ -302,37 +358,6 @@ class TradingBotRunner:
         logger.info(f"Stage 3 complete: {len(final_signals)} signals generated")
         return final_signals
 
-    async def stage4_validation(self, preliminary_signals: list[Dict]) -> Dict[str, Any]:
-        """Stage 4: Signal validation"""
-        logger.info("=" * 70)
-        logger.info(f"STAGE 4: {config.STAGE4_PROVIDER.upper()} signal validation")
-        logger.info("=" * 70)
-
-        if not preliminary_signals:
-            logger.warning("No preliminary signals to validate")
-            return {'validated': [], 'rejected': []}
-
-        logger.info(f"Validating {len(preliminary_signals)} signals...")
-        # FIXED: Передаем self.ai_router
-        validation_result = await validate_signals_simple(self.ai_router, preliminary_signals)
-
-        if validation_result.get('validation_skipped_reason'):
-            logger.warning(f"Validation skipped: {validation_result['validation_skipped_reason']}")
-            return validation_result
-
-        validated = validation_result['validated']
-        rejected = validation_result['rejected']
-
-        for sig in validated:
-            logger.info(
-                f"✓ APPROVED: {sig['symbol']} {sig['signal']} (confidence: {sig['confidence']}%, R/R: {sig.get('risk_reward_ratio', 0):.1f})")
-
-        for rej in rejected:
-            logger.info(f"✗ REJECTED: {rej['symbol']} - {rej.get('rejection_reason', 'Unknown')}")
-
-        logger.info(f"Stage 4 complete: {len(validated)} approved, {len(rejected)} rejected")
-        return validation_result
-
     def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
         """Добавляет данные анализа к сигналу"""
         symbol = signal.get('symbol')
@@ -348,7 +373,7 @@ class TradingBotRunner:
             'indicators_1h': comp_data.get('indicators_1h', {}),
             'indicators_4h': comp_data.get('indicators_4h', {}),
             'indicators_1d': comp_data.get('indicators_1d', {}),
-            'has_1d_data': comp_data.get('has_1d_data', False),  # Флаг доступности
+            'has_1d_data': comp_data.get('has_1d_data', False),
             'current_price': comp_data.get('current_price', 0),
             'market_data': comp_data.get('market_data', {}),
             'correlation_data': comp_data.get('correlation_data', {}),
@@ -361,7 +386,7 @@ class TradingBotRunner:
     async def run_cycle(self) -> Dict[str, Any]:
         """
         Запуск полного цикла бота
-        FIXED: Убран checkpoint manager
+        МОДИФИЦИРОВАНО: Stage 4 убран, валидация через fallback
         """
         import time
         cycle_start = time.time()
@@ -384,7 +409,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_SIGNAL_PAIRS', total_time, [], [])
 
-            # Stage 2
+            # Stage 2 (Haiku with compact data)
             selected_pairs = await self.stage2_ai_select(signal_pairs)
 
             if not selected_pairs:
@@ -392,7 +417,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
-            # Stage 3
+            # Stage 3 (Sonnet with full data + rate limit delay)
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
 
             if not preliminary_signals:
@@ -400,22 +425,17 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_ANALYSIS_SIGNALS', total_time, [], [])
 
-            # Stage 4
-            validation_result = await self.stage4_validation(preliminary_signals)
+            # ========== STAGE 4 УБРАН ==========
+            # Валидация теперь ТОЛЬКО через fallback в simple_validator
+            logger.info("=" * 70)
+            logger.info("STAGE 4: REMOVED (using fallback validation)")
+            logger.info("=" * 70)
+
+            # Простая валидация через ValidationEngine + fallback
+            validation_result = await validate_signals_simple(self.ai_router, preliminary_signals)
 
             validated = validation_result['validated']
             rejected = validation_result['rejected']
-
-            if validation_result.get('validation_skipped_reason'):
-                logger.warning(f"Execution stopped: {validation_result['validation_skipped_reason']}")
-                total_time = time.time() - cycle_start
-                result = {
-                    'timestamp': cycle_id,
-                    'result': 'VALIDATION_SKIPPED',
-                    'reason': validation_result['validation_skipped_reason'],
-                    'stats': self._build_stats(total_time)
-                }
-                return result
 
             total_time = time.time() - cycle_start
 
