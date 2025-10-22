@@ -1,30 +1,24 @@
 """
-AI Router - COMPLETE: Все методы реализованы
-Поддерживает DeepSeek и Anthropic Claude с reasoning/thinking режимами
+AI Router - FIXED: Stage-specific model configuration
 """
 
-import os
 from typing import List, Dict, Optional
 from deepseek import DeepSeekClient
 from config import (
     DEEPSEEK_API_KEY, ANTHROPIC_API_KEY,
-    DEEPSEEK_MODEL, ANTHROPIC_MODEL,
-    DEEPSEEK_REASONING, ANTHROPIC_THINKING,
     STAGE2_PROVIDER, STAGE3_PROVIDER, STAGE4_PROVIDER,
-    AI_TEMPERATURE_SELECT, AI_TEMPERATURE_ANALYZE, AI_TEMPERATURE_VALIDATE,
-    AI_MAX_TOKENS_SELECT, AI_MAX_TOKENS_ANALYZE, AI_MAX_TOKENS_VALIDATE
+    STAGE2_MODEL, STAGE2_TEMPERATURE, STAGE2_MAX_TOKENS,
+    STAGE3_MODEL, STAGE3_TEMPERATURE, STAGE3_MAX_TOKENS,
+    STAGE4_MODEL, STAGE4_TEMPERATURE, STAGE4_MAX_TOKENS,
+    DEEPSEEK_REASONING, ANTHROPIC_THINKING
 )
 
 
 class AIRouter:
-    """
-    Маршрутизатор для работы с несколькими AI провайдерами
-    Поддерживает multi-stage pipeline с разными моделями на каждом этапе
-    """
+    """AI Router с поддержкой stage-specific моделей"""
 
     def __init__(self):
-        """Инициализация роутера"""
-        self.deepseek_client: Optional[DeepSeekClient] = None
+        self.deepseek_clients: Dict[str, DeepSeekClient] = {}
         self.claude_client = None
 
         self.stage_providers = {
@@ -37,31 +31,44 @@ class AIRouter:
         print(f"[AI Router] {'AI ROUTER ИНИЦИАЛИЗАЦИЯ':^70}")
         print(f"[AI Router] {'='*70}")
         print(f"[AI Router] 🎯 Multi-Stage Pipeline:")
-        print(f"[AI Router]    • Stage 2 (выбор пар): {STAGE2_PROVIDER.upper()}")
-        print(f"[AI Router]    • Stage 3 (анализ): {STAGE3_PROVIDER.upper()}")
-        print(f"[AI Router]    • Stage 4 (валидация): {STAGE4_PROVIDER.upper()}")
+        print(f"[AI Router]    • Stage 2: {STAGE2_PROVIDER.upper()} ({STAGE2_MODEL})")
+        print(f"[AI Router]    • Stage 3: {STAGE3_PROVIDER.upper()} ({STAGE3_MODEL})")
+        print(f"[AI Router]    • Stage 4: {STAGE4_PROVIDER.upper()} ({STAGE4_MODEL})")
         print(f"[AI Router] {'='*70}\n")
 
-    async def initialize_deepseek(self):
-        """Инициализирует DeepSeek клиент"""
+    async def _get_deepseek_client(self, stage: str) -> Optional[DeepSeekClient]:
+        """Получить DeepSeek клиент для конкретного stage"""
+        if stage in self.deepseek_clients:
+            return self.deepseek_clients[stage]
+
         if not DEEPSEEK_API_KEY:
             print(f"[AI Router] ⚠️  DEEPSEEK_API_KEY не задан")
-            return False
+            return None
+
+        # Stage-specific configuration
+        if stage == 'stage2':
+            model = STAGE2_MODEL
+        elif stage == 'stage3':
+            model = STAGE3_MODEL
+        elif stage == 'stage4':
+            model = STAGE4_MODEL
+        else:
+            model = "deepseek-chat"
 
         try:
-            self.deepseek_client = DeepSeekClient(
+            client = DeepSeekClient(
                 api_key=DEEPSEEK_API_KEY,
-                model=DEEPSEEK_MODEL,
+                model=model,
                 use_reasoning=DEEPSEEK_REASONING
             )
-            print(f"[AI Router] ✅ DeepSeek клиент инициализирован")
-            return True
+            self.deepseek_clients[stage] = client
+            return client
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка инициализации DeepSeek: {e}")
-            return False
+            print(f"[AI Router] ❌ Ошибка инициализации DeepSeek для {stage}: {e}")
+            return None
 
     async def initialize_claude(self):
-        """Инициализирует Anthropic Claude клиент"""
+        """Инициализирует Claude клиент"""
         if not ANTHROPIC_API_KEY:
             print(f"[AI Router] ⚠️  ANTHROPIC_API_KEY не задан")
             return False
@@ -74,7 +81,6 @@ class AIRouter:
             print(f"[AI Router] {'='*70}")
             print(f"[AI Router] {'ИНИЦИАЛИЗАЦИЯ CLAUDE':^70}")
             print(f"[AI Router] {'='*70}")
-            print(f"[AI Router] ║ Модель: {ANTHROPIC_MODEL:<59} ║")
             print(f"[AI Router] ║ Extended Thinking: {'✅ Включен' if ANTHROPIC_THINKING else '❌ Выключен':<52} ║")
             print(f"[AI Router] {'='*70}")
 
@@ -87,13 +93,12 @@ class AIRouter:
             return False
 
     async def _get_provider_client(self, stage: str):
-        """Получает клиент для конкретного stage"""
+        """Получить клиент для конкретного stage"""
         provider = self.stage_providers.get(stage, 'deepseek')
 
         if provider == 'deepseek':
-            if not self.deepseek_client:
-                await self.initialize_deepseek()
-            return 'deepseek', self.deepseek_client
+            client = await self._get_deepseek_client(stage)
+            return 'deepseek', client
 
         elif provider == 'claude':
             if not self.claude_client:
@@ -109,7 +114,7 @@ class AIRouter:
         pairs_data: List[Dict],
         max_pairs: Optional[int] = None
     ) -> List[str]:
-        """Stage 2: Выбирает лучшие пары через AI"""
+        """Stage 2: Выбор пар"""
         print(f"\n[AI Router] {'='*70}")
         print(f"[AI Router] 🎯 STAGE 2: ВЫБОР ПАР")
         print(f"[AI Router] {'='*70}")
@@ -123,14 +128,17 @@ class AIRouter:
             return []
 
         print(f"[AI Router] 🤖 Провайдер: {provider_name.upper()}")
+        print(f"[AI Router] 📦 Модель: {STAGE2_MODEL}")
+        print(f"[AI Router] 🌡️  Temperature: {STAGE2_TEMPERATURE}")
+        print(f"[AI Router] 🎫 Max tokens: {STAGE2_MAX_TOKENS}")
 
         try:
             if provider_name == 'deepseek':
-                selected = await self.deepseek_client.select_pairs(
+                selected = await client.select_pairs(
                     pairs_data=pairs_data,
                     max_pairs=max_pairs,
-                    temperature=AI_TEMPERATURE_SELECT,
-                    max_tokens=AI_MAX_TOKENS_SELECT
+                    temperature=STAGE2_TEMPERATURE,
+                    max_tokens=STAGE2_MAX_TOKENS
                 )
 
             elif provider_name == 'claude':
@@ -144,7 +152,7 @@ class AIRouter:
 
             print(f"[AI Router] ✅ Stage 2 завершен: выбрано {len(selected)} пар")
             if selected:
-                print(f"[AI Router] 📋 {', '.join(selected)}")
+                print(f"[AI Router] 📋 {selected}")
             print(f"[AI Router] {'='*70}\n")
 
             return selected
@@ -160,9 +168,9 @@ class AIRouter:
         symbol: str,
         comprehensive_data: Dict
     ) -> Dict:
-        """Stage 3: Comprehensive analysis with all data"""
+        """Stage 3: Comprehensive analysis"""
         print(f"\n[AI Router] {'─'*70}")
-        print(f"[AI Router] 🔬 STAGE 3: COMPREHENSIVE ANALYSIS {symbol}")
+        print(f"[AI Router] 🔬 STAGE 3: ANALYSIS {symbol}")
         print(f"[AI Router] {'─'*70}")
 
         provider_name, client = await self._get_provider_client('stage3')
@@ -177,6 +185,9 @@ class AIRouter:
             }
 
         print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
+        print(f"[AI Router] 📦 Model: {STAGE3_MODEL}")
+        print(f"[AI Router] 🌡️  Temperature: {STAGE3_TEMPERATURE}")
+        print(f"[AI Router] 🎫 Max tokens: {STAGE3_MAX_TOKENS}")
 
         try:
             if provider_name == 'claude':
@@ -227,10 +238,7 @@ class AIRouter:
         signal: Dict,
         comprehensive_data: Dict
     ) -> Dict:
-        """
-        Stage 4: Validation with full Stage 3 data
-        FIXED: Теперь реализован полностью
-        """
+        """Stage 4: Validation"""
         symbol = signal.get('symbol', 'UNKNOWN')
 
         print(f"\n[AI Router] {'─'*70}")
@@ -245,6 +253,9 @@ class AIRouter:
             return fallback_validation(signal, comprehensive_data)
 
         print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
+        print(f"[AI Router] 📦 Model: {STAGE4_MODEL}")
+        print(f"[AI Router] 🌡️  Temperature: {STAGE4_TEMPERATURE}")
+        print(f"[AI Router] 🎫 Max tokens: {STAGE4_MAX_TOKENS}")
 
         try:
             if provider_name == 'claude':
@@ -278,10 +289,6 @@ class AIRouter:
             from shared_utils import fallback_validation
             return fallback_validation(signal, comprehensive_data)
 
-    # ========================================================================
-    # CLAUDE METHODS
-    # ========================================================================
-
     async def _claude_select_pairs(
         self,
         pairs_data: List[Dict],
@@ -291,10 +298,8 @@ class AIRouter:
         pairs_info = []
         for pair in pairs_data:
             info = (
-                f"Пара: {pair['ticker']}\n"
-                f"Сигнал: {pair['signal_type']} ({pair['signal_strength']}%)\n"
-                f"Цена: ${pair['price']:.8f}\n"
-                f"Объем 24ч: ${pair.get('volume_24h', 0):,.0f}\n"
+                f"Пара: {pair['symbol']}\n"
+                f"Сигнал: {pair['direction']} ({pair['confidence']}%)\n"
             )
             pairs_info.append(info)
 
@@ -308,9 +313,9 @@ class AIRouter:
         )
 
         kwargs = {
-            'model': ANTHROPIC_MODEL,
-            'max_tokens': AI_MAX_TOKENS_SELECT,
-            'temperature': AI_TEMPERATURE_SELECT,
+            'model': STAGE2_MODEL if 'claude' in STAGE2_MODEL else 'claude-sonnet-4-20250514',
+            'max_tokens': STAGE2_MAX_TOKENS,
+            'temperature': STAGE2_TEMPERATURE,
             'messages': [{'role': 'user', 'content': prompt}]
         }
 
@@ -340,18 +345,19 @@ class AIRouter:
 
         return selected
 
-    # ========================================================================
-    # UTILITY METHODS
-    # ========================================================================
-
     def get_config(self) -> Dict:
         """Возвращает текущую конфигурацию"""
         return {
             'stage_providers': self.stage_providers,
-            'deepseek_model': DEEPSEEK_MODEL,
+            'stage2_model': STAGE2_MODEL,
+            'stage2_temperature': STAGE2_TEMPERATURE,
+            'stage2_max_tokens': STAGE2_MAX_TOKENS,
+            'stage3_model': STAGE3_MODEL,
+            'stage3_temperature': STAGE3_TEMPERATURE,
+            'stage3_max_tokens': STAGE3_MAX_TOKENS,
+            'stage4_model': STAGE4_MODEL,
+            'stage4_temperature': STAGE4_TEMPERATURE,
+            'stage4_max_tokens': STAGE4_MAX_TOKENS,
             'deepseek_reasoning': DEEPSEEK_REASONING,
-            'claude_model': ANTHROPIC_MODEL,
-            'claude_thinking': ANTHROPIC_THINKING,
-            'deepseek_initialized': self.deepseek_client is not None,
-            'claude_initialized': self.claude_client is not None
+            'anthropic_thinking': ANTHROPIC_THINKING
         }
