@@ -258,14 +258,20 @@ class CorrelationAnalyzer:
             'reasoning': reasoning
         }
 
+    """
+    Correlation analysis module - FIXED: Смягченная BTC блокировка
+    """
+
     def check_btc_alignment(
-            self,
             symbol: str,
             signal_direction: str,
             btc_trend: str,
             correlation: float
     ) -> Dict:
-        """Check signal alignment with BTC trend"""
+        """
+        ИСПРАВЛЕНО: Блокировка только при STRONG correlation + CLEAR conflict
+        """
+        # Слабая корреляция - пропускаем
         if abs(correlation) < 0.5:
             return {
                 'aligned': True,
@@ -274,57 +280,63 @@ class CorrelationAnalyzer:
                 'reasoning': f'Weak BTC correlation {correlation:.2f}'
             }
 
-        if correlation > 0.5:
-            if signal_direction == 'LONG' and btc_trend == 'UP':
-                return {
-                    'aligned': True,
-                    'should_block': False,
-                    'confidence_adjustment': +5,
-                    'reasoning': 'LONG aligned with BTC uptrend'
-                }
-            elif signal_direction == 'SHORT' and btc_trend == 'DOWN':
-                return {
-                    'aligned': True,
-                    'should_block': False,
-                    'confidence_adjustment': +5,
-                    'reasoning': 'SHORT aligned with BTC downtrend'
-                }
-            else:
-                return {
-                    'aligned': False,
-                    'should_block': True,
-                    'confidence_adjustment': -20,
-                    'reasoning': f'{signal_direction} against BTC {btc_trend}, correlation {correlation:.2f}, BLOCK'
-                }
+        # НОВОЕ: Блокируем только при ОЧЕНЬ сильной корреляции
+        if abs(correlation) > 0.8:  # Было 0.5, стало 0.8
+            # Положительная корреляция
+            if correlation > 0.8:
+                if signal_direction == 'LONG' and btc_trend == 'UP':
+                    return {
+                        'aligned': True,
+                        'should_block': False,
+                        'confidence_adjustment': +8,
+                        'reasoning': 'LONG aligned with BTC uptrend (strong correlation)'
+                    }
+                elif signal_direction == 'SHORT' and btc_trend == 'DOWN':
+                    return {
+                        'aligned': True,
+                        'should_block': False,
+                        'confidence_adjustment': +8,
+                        'reasoning': 'SHORT aligned with BTC downtrend (strong correlation)'
+                    }
+                else:
+                    # ИСПРАВЛЕНО: Не блокируем, только снижаем confidence
+                    return {
+                        'aligned': False,
+                        'should_block': False,  # Было True!
+                        'confidence_adjustment': -12,  # Было -20
+                        'reasoning': f'{signal_direction} misaligned with BTC {btc_trend}, correlation {correlation:.2f}, WARNING (not blocking)'
+                    }
 
-        elif correlation < -0.5:
-            if signal_direction == 'LONG' and btc_trend == 'DOWN':
-                return {
-                    'aligned': True,
-                    'should_block': False,
-                    'confidence_adjustment': +5,
-                    'reasoning': 'LONG with negative BTC correlation during BTC down'
-                }
-            elif signal_direction == 'SHORT' and btc_trend == 'UP':
-                return {
-                    'aligned': True,
-                    'should_block': False,
-                    'confidence_adjustment': +5,
-                    'reasoning': 'SHORT with negative BTC correlation during BTC up'
-                }
-            else:
-                return {
-                    'aligned': False,
-                    'should_block': True,
-                    'confidence_adjustment': -20,
-                    'reasoning': f'{signal_direction} misaligned with negative BTC correlation, BLOCK'
-                }
+            # Отрицательная корреляция
+            elif correlation < -0.8:
+                if signal_direction == 'LONG' and btc_trend == 'DOWN':
+                    return {
+                        'aligned': True,
+                        'should_block': False,
+                        'confidence_adjustment': +8,
+                        'reasoning': 'LONG with strong negative BTC correlation during BTC down'
+                    }
+                elif signal_direction == 'SHORT' and btc_trend == 'UP':
+                    return {
+                        'aligned': True,
+                        'should_block': False,
+                        'confidence_adjustment': +8,
+                        'reasoning': 'SHORT with strong negative BTC correlation during BTC up'
+                    }
+                else:
+                    return {
+                        'aligned': False,
+                        'should_block': False,  # Было True!
+                        'confidence_adjustment': -12,
+                        'reasoning': f'{signal_direction} misaligned with negative BTC correlation, WARNING (not blocking)'
+                    }
 
+        # Умеренная корреляция (0.5-0.8) - только adjustment
         return {
             'aligned': True,
             'should_block': False,
             'confidence_adjustment': 0,
-            'reasoning': 'Moderate correlation'
+            'reasoning': f'Moderate correlation {correlation:.2f}, monitoring'
         }
 
 

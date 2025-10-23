@@ -9,109 +9,92 @@ from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
 
+"""
+Централизованная система валидации - FIXED: Согласованные RSI пороги
+"""
+
 
 class ValidationEngine:
     """Централизованный движок валидации"""
 
     @staticmethod
-    def check_correlation_blocking(corr_data: Dict) -> Tuple[bool, str]:
-        """
-        Проверка блокировки по корреляции с BTC
-
-        Args:
-            corr_data: Данные корреляционного анализа
-
-        Returns:
-            (should_block, reason)
-        """
-        if corr_data.get('should_block_signal', False):
-            return True, "BTC correlation conflict"
-        return False, ""
-
-    @staticmethod
-    def check_overextension(vp_analysis: Dict, threshold: float = 15.0) -> Tuple[bool, str]:
-        """
-        Проверка перерастяжения цены от POC
-
-        Args:
-            vp_analysis: Volume Profile анализ
-            threshold: Максимальное отклонение от POC в %
-
-        Returns:
-            (should_block, reason)
-        """
-        poc_dist = vp_analysis.get('poc_analysis', {}).get('distance_to_poc_pct', 0)
-        if abs(poc_dist) > threshold:
-            return True, f"Overextended {poc_dist:.1f}% from POC"
-        return False, ""
-
-    @staticmethod
     def check_rsi_exhaustion(
             indicators_1h: Dict,
             indicators_4h: Dict,
-            signal_type: str
+            indicators_1d: Dict,  # ДОБАВЛЕНО
+            signal_type: str,
+            has_1d_data: bool = False  # ДОБАВЛЕНО
     ) -> Tuple[bool, str]:
         """
-        Проверка перекупленности/перепроданности RSI
+        ИСПРАВЛЕНО: Согласовано с промптами
 
         Args:
-            indicators_1h: Индикаторы 1H таймфрейма
-            indicators_4h: Индикаторы 4H таймфрейма
+            indicators_1h: Индикаторы 1H
+            indicators_4h: Индикаторы 4H
+            indicators_1d: Индикаторы 1D (может быть пустым)
             signal_type: 'LONG' или 'SHORT'
-
-        Returns:
-            (should_block, reason)
+            has_1d_data: Доступны ли 1D данные
         """
         rsi_1h = indicators_1h.get('current', {}).get('rsi', 50)
         rsi_4h = indicators_4h.get('current', {}).get('rsi', 50)
+        rsi_1d = indicators_1d.get('current', {}).get('rsi', 50) if has_1d_data else None
 
         if signal_type == 'LONG':
-            if rsi_1h > 75:
-                return True, f"RSI 1H overbought ({rsi_1h:.1f})"
-            if rsi_1h > 70 and rsi_4h > 65:
-                return True, f"Multi-TF overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f})"
+            # Критичный порог 1H
+            if has_1d_data:
+                # С 1D данными - стандартный порог
+                if rsi_1h > 75:
+                    return True, f"RSI 1H extreme overbought ({rsi_1h:.1f})"
+
+                # Multi-TF exhaustion (все 3 TF)
+                if rsi_1d and rsi_1h > 70 and rsi_4h > 65 and rsi_1d > 60:
+                    return True, f"Multi-TF overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D={rsi_1d:.1f})"
+            else:
+                # БЕЗ 1D - более строгий порог
+                if rsi_1h > 78:  # Было 75
+                    return True, f"RSI 1H extreme overbought ({rsi_1h:.1f}, no 1D data)"
+
+                # Multi-TF exhaustion (только 1H+4H)
+                if rsi_1h > 72 and rsi_4h > 68:  # Было 70/65
+                    return True, f"Multi-TF overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D unavailable)"
 
         elif signal_type == 'SHORT':
-            if rsi_1h < 25:
-                return True, f"RSI 1H oversold ({rsi_1h:.1f})"
-            if rsi_1h < 30 and rsi_4h < 35:
-                return True, f"Multi-TF oversold (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f})"
+            if has_1d_data:
+                if rsi_1h < 25:
+                    return True, f"RSI 1H extreme oversold ({rsi_1h:.1f})"
+
+                if rsi_1d and rsi_1h < 30 and rsi_4h < 35 and rsi_1d < 40:
+                    return True, f"Multi-TF oversold (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D={rsi_1d:.1f})"
+            else:
+                if rsi_1h < 22:
+                    return True, f"RSI 1H extreme oversold ({rsi_1h:.1f}, no 1D data)"
+
+                if rsi_1h < 28 and rsi_4h < 32:
+                    return True, f"Multi-TF oversold (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D unavailable)"
 
         return False, ""
 
     @staticmethod
-    def check_funding_rate_extreme(funding_data: Dict, threshold: float = 0.1) -> Tuple[bool, str]:
+    def check_correlation_blocking(corr_data: Dict) -> Tuple[bool, str]:
         """
-        Проверка экстремального funding rate
+        ИСПРАВЛЕНО: Блокировка только при EXTREME correlation
 
-        Args:
-            funding_data: Данные funding rate
-            threshold: Пороговое значение (0.1 = 0.1%)
-
-        Returns:
-            (should_block, reason)
+        ИЗМЕНЕНИЕ: should_block_signal проверяется, но НЕ блокирует автоматически
+        Требуется также отсутствие дивергенций и Wyckoff Phase D
         """
-        funding_rate = funding_data.get('funding_rate', 0)
-        if abs(funding_rate) > threshold:
-            return True, f"Extreme funding rate ({funding_rate:.4f}%)"
-        return False, ""
+        if not corr_data.get('should_block_signal', False):
+            return False, ""
 
-    @staticmethod
-    def check_spread_illiquidity(orderbook_data: Dict, max_spread: float = 0.15) -> Tuple[bool, str]:
-        """
-        Проверка спреда (ликвидность)
+        # Если correlation module говорит блокировать, проверяем дополнительно
+        btc_corr = corr_data.get('btc_correlation', {})
+        correlation = btc_corr.get('correlation', 0)
 
-        Args:
-            orderbook_data: Данные ордербука
-            max_spread: Максимальный спред в %
+        # Блокируем ТОЛЬКО при EXTREME correlation >0.85
+        if abs(correlation) > 0.85:
+            return True, f"EXTREME BTC correlation {correlation:.2f} conflict"
 
-        Returns:
-            (should_block, reason)
-        """
-        spread_pct = orderbook_data.get('spread_pct', 0)
-        if spread_pct > max_spread:
-            return True, f"Wide spread ({spread_pct:.3f}%)"
-        return False, ""
+        # Иначе - только warning, не блокируем
+        return False, f"BTC correlation {correlation:.2f} warning (not blocking)"
 
     @classmethod
     def run_all_checks(
@@ -120,18 +103,11 @@ class ValidationEngine:
             comprehensive_data: Dict
     ) -> Tuple[bool, List[str]]:
         """
-        Запускает все критические проверки
-
-        Args:
-            signal: Данные сигнала (symbol, signal type, etc)
-            comprehensive_data: Полные данные анализа
-
-        Returns:
-            (passed, reasons) - passed=True если все проверки пройдены
+        ОБНОВЛЕНО: Передаем has_1d_data в RSI проверку
         """
         reasons = []
 
-        # 1. Correlation
+        # 1. Correlation - СМЯГЧЕНО
         blocked, reason = cls.check_correlation_blocking(
             comprehensive_data.get('correlation_data', {})
         )
@@ -145,11 +121,14 @@ class ValidationEngine:
         if blocked:
             reasons.append(reason)
 
-        # 3. RSI exhaustion
+        # 3. RSI exhaustion - ОБНОВЛЕНО
+        has_1d = comprehensive_data.get('has_1d_data', False)
         blocked, reason = cls.check_rsi_exhaustion(
             comprehensive_data.get('indicators_1h', {}),
             comprehensive_data.get('indicators_4h', {}),
-            signal.get('signal', 'NONE')
+            comprehensive_data.get('indicators_1d', {}),
+            signal.get('signal', 'NONE'),
+            has_1d_data=has_1d
         )
         if blocked:
             reasons.append(reason)

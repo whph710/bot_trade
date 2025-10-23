@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - UPDATED: Optional Stage 3 delay
+Trading Bot Runner - UPDATED: Improved 1D data validation
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -223,7 +223,7 @@ class TradingBotRunner:
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """
-        Stage 3: Unified analysis with OPTIONAL delay
+        Stage 3: Unified analysis with IMPROVED 1D data check
         """
         red_print("=" * 70)
         red_print(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} UNIFIED ANALYSIS (FULL)")
@@ -290,11 +290,21 @@ class TradingBotRunner:
                     logger.warning(f"{symbol}: Missing 1H/4H data (critical) - SKIP")
                     continue
 
-                has_1d_data = bool(klines_1d and validate_candles(klines_1d, 10))
-
-                if not has_1d_data:
-                    red_print(f"{symbol}: Нет 1D данных (некритично, анализ продолжается)")
-                    logger.info(f"{symbol}: No 1D data available (non-critical, analysis continues)")
+                # ИСПРАВЛЕНО: Проверяем достаточность 1D данных для EMA
+                # Для EMA21 нужно минимум 25-30 свечей
+                has_1d_data = False
+                if klines_1d and validate_candles(klines_1d, 20):
+                    if len(klines_1d) >= 25:  # НОВОЕ: минимум для надежных EMA
+                        has_1d_data = True
+                        red_print(f"{symbol}: ✓ 1D данные достаточны ({len(klines_1d)} свечей)")
+                        logger.debug(f"{symbol}: ✓ 1D data sufficient ({len(klines_1d)} candles)")
+                    else:
+                        red_print(f"{symbol}: 1D данные есть, но недостаточно ({len(klines_1d)} < 25), используем 4H как основной TF")
+                        logger.info(f"{symbol}: 1D data present but insufficient ({len(klines_1d)} < 25 candles), using 4H as major TF")
+                        klines_1d = []  # Очищаем чтобы не путать AI
+                else:
+                    red_print(f"{symbol}: Нет 1D данных, используем 4H как основной TF")
+                    logger.info(f"{symbol}: No 1D data, using 4H as major TF")
                     klines_1d = []
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
@@ -304,15 +314,23 @@ class TradingBotRunner:
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
                 indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
 
+                # Индикаторы 1D только если достаточно данных
                 indicators_1d = {}
                 if has_1d_data:
                     try:
                         indicators_1d = calculate_ai_indicators(klines_1d, min(20, len(klines_1d)))
                         if indicators_1d:
+                            red_print(f"{symbol}: ✓ 1D индикаторы рассчитаны")
                             logger.debug(f"{symbol}: ✓ 1D indicators calculated")
+                        else:
+                            red_print(f"{symbol}: ⚠️ Не удалось рассчитать 1D индикаторы")
+                            logger.warning(f"{symbol}: Failed to calculate 1D indicators")
+                            has_1d_data = False  # Сбрасываем флаг
                     except Exception as e:
-                        logger.debug(f"{symbol}: Failed to calculate 1D indicators (non-critical): {e}")
+                        red_print(f"{symbol}: ⚠️ Ошибка расчета 1D индикаторов: {e}")
+                        logger.debug(f"{symbol}: Failed to calculate 1D indicators: {e}")
                         indicators_1d = {}
+                        has_1d_data = False  # Сбрасываем флаг
 
                 if not indicators_1h or not indicators_4h:
                     logger.warning(f"{symbol}: 1H/4H indicators calculation failed - SKIP")
@@ -338,11 +356,11 @@ class TradingBotRunner:
                     'symbol': symbol,
                     'candles_1h': klines_1h,
                     'candles_4h': klines_4h,
-                    'candles_1d': klines_1d,
+                    'candles_1d': klines_1d,  # Пустой если недостаточно
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
-                    'indicators_1d': indicators_1d,
-                    'has_1d_data': has_1d_data,
+                    'indicators_1d': indicators_1d,  # Пустой если недостаточно
+                    'has_1d_data': has_1d_data,  # КРИТИЧНО: точный флаг
                     'current_price': current_price,
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
