@@ -1,6 +1,5 @@
 """
-Shared utilities for trading bot - WITH ValidationEngine
-МОДИФИКАЦИЯ: fallback_validation использует ValidationEngine
+Shared utilities for trading bot - FINAL
 Файл: trade_bot_programm/shared_utils.py
 """
 
@@ -16,11 +15,11 @@ def fallback_validation(signal: Dict, comp_data: Dict) -> Dict:
     """
     Fallback validation с использованием ValidationEngine
 
-    МОДИФИКАЦИЯ: Использует ValidationEngine.run_all_checks()
+    МОДИФИКАЦИЯ: Единственный метод валидации после удаления Stage 4
     """
     symbol = signal.get('symbol', 'UNKNOWN')
 
-    # Используем ValidationEngine
+    # Используем ValidationEngine для критических проверок
     passed, reasons = ValidationEngine.run_all_checks(signal, comp_data)
 
     if not passed:
@@ -78,7 +77,7 @@ def fallback_validation(signal: Dict, comp_data: Dict) -> Dict:
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': 720,
                     'fallback_used': True,
-                    'validation_notes': f'Fallback validation passed (R/R {rr_ratio})',
+                    'validation_notes': f'Fallback validation passed (R/R {rr_ratio}:1)',
                     'validation_method': 'fallback_enhanced',
                     'market_conditions': market_conditions,
                     'key_levels': key_levels
@@ -86,7 +85,7 @@ def fallback_validation(signal: Dict, comp_data: Dict) -> Dict:
 
     return {
         'approved': False,
-        'rejection_reason': 'Fallback validation failed: insufficient R/R (<2.5)',
+        'rejection_reason': 'Fallback validation failed: insufficient R/R (<2.5:1)',
         'symbol': symbol,
         'confidence': 0,
         'fallback_used': True,
@@ -94,7 +93,7 @@ def fallback_validation(signal: Dict, comp_data: Dict) -> Dict:
         'stop_loss': stop,
         'take_profit_levels': tp_levels,
         'validation_method': 'fallback_blocked',
-        'market_conditions': 'Validation failed',
+        'market_conditions': 'R/R too low',
         'key_levels': ''
     }
 

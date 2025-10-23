@@ -1,6 +1,5 @@
 """
-Simple validator - WITH ValidationEngine
-FIXED: check_trading_hours теперь возвращает tuple
+Simple validator - FINAL: Stage 4 removed, only fallback validation
 Файл: trade_bot_programm/simple_validator.py
 """
 
@@ -8,6 +7,7 @@ from typing import Dict, List
 from datetime import datetime
 import pytz
 from validation_engine import ValidationEngine
+from shared_utils import fallback_validation
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -17,8 +17,6 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
     """
     Проверка торговых часов (по пермскому времени UTC+5)
 
-    FIXED: Теперь всегда возвращает tuple
-
     Returns:
         (is_allowed: bool, reason: str)
     """
@@ -26,12 +24,11 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
         perm_tz = pytz.timezone('Asia/Yekaterinburg')
         perm_time = datetime.now(perm_tz)
 
-    hour = perm_time.hour
-
     # ВРЕМЕННО ОТКЛЮЧЕНО: Все часы разрешены
-    # Раскомментируй блоки ниже для включения ограничений
+    # Для включения ограничений раскомментируй блоки ниже
 
-    # # Критические периоды
+    # hour = perm_time.hour
+    #
     # if 0 <= hour < 3:
     #     return False, "US session end (00:00–03:00): low volumes"
     #
@@ -41,18 +38,15 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
     # if 12 <= hour < 13:
     #     return False, "Asian close gap (12:00–13:00): position fixing"
 
-    # FIXED: Возвращаем tuple в любом случае
     return True, "Trading hours: OK"
 
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
     """
-    Simple validation through AI - WITH ValidationEngine
+    Simple validation - Stage 4 removed, only fallback validation
 
-    МОДИФИКАЦИЯ: Использует ValidationEngine.run_all_checks()
+    МОДИФИКАЦИЯ: Stage 4 полностью убран, используется только fallback_validation
     """
-
-    # Trading hours уже проверены в main.py, здесь не проверяем
 
     if not preliminary_signals:
         logger.warning("No preliminary signals for validation")
@@ -65,6 +59,7 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
     rejected = []
 
     logger.info(f"Starting validation of {len(preliminary_signals)} signal(s)")
+    logger.info("⚠️  Stage 4 removed - using fallback validation only")
 
     for signal in preliminary_signals:
         try:
@@ -75,11 +70,11 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
 
             logger.debug(f"Validating {symbol}: {signal_type} ({confidence}%)")
 
-            # ========== ИСПОЛЬЗУЕМ ValidationEngine ==========
+            # ========== ValidationEngine Pre-checks ==========
             passed, reasons = ValidationEngine.run_all_checks(signal, comprehensive_data)
 
             if not passed:
-                logger.warning(f"❌ {symbol}: BLOCKED - {'; '.join(reasons)}")
+                logger.warning(f"❌ {symbol}: BLOCKED by ValidationEngine - {'; '.join(reasons)}")
                 rejected.append({
                     'symbol': symbol,
                     'signal': signal_type,
@@ -92,15 +87,12 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 })
                 continue
 
-            # ========== PASSED PRE-CHECKS, PROCEED TO AI VALIDATION ==========
+            # ========== FALLBACK VALIDATION (Stage 4 removed) ==========
+            logger.debug(f"✓ {symbol}: Passed pre-checks, using fallback validation")
 
-            logger.debug(f"✓ {symbol}: Passed ValidationEngine checks, sending to AI")
+            validation_result = fallback_validation(signal, comprehensive_data)
 
-            validation_result = await ai_router.validate_signal_with_stage3_data(
-                signal,
-                comprehensive_data
-            )
-
+            # Normalize take_profit_levels
             tp_levels = validation_result.get('take_profit_levels', signal.get('take_profit_levels', [0, 0, 0]))
 
             if not isinstance(tp_levels, list):
@@ -113,11 +105,10 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
             if validation_result.get('approved', False):
                 rr_ratio = validation_result.get('risk_reward_ratio', 0)
 
-                # Гарантируем market_conditions и key_levels
+                # Гарантируем наличие market_conditions и key_levels
                 market_conditions = validation_result.get('market_conditions', '').strip()
                 key_levels = validation_result.get('key_levels', '').strip()
 
-                # Если не заполнены - берем из comprehensive_data
                 if not market_conditions:
                     market_data = comprehensive_data.get('market_data', {})
                     funding = market_data.get('funding_rate', {})
@@ -138,25 +129,25 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 validated_signal = {
                     'symbol': symbol,
                     'signal': signal_type,
-                    'confidence': validation_result.get('final_confidence', confidence),
+                    'confidence': validation_result.get('confidence', confidence),
                     'entry_price': validation_result.get('entry_price', signal['entry_price']),
                     'stop_loss': validation_result.get('stop_loss', signal['stop_loss']),
                     'take_profit_levels': tp_levels,
                     'analysis': signal.get('analysis', ''),
                     'risk_reward_ratio': rr_ratio,
                     'hold_duration_minutes': validation_result.get('hold_duration_minutes', 720),
-                    'validation_notes': validation_result.get('validation_notes', ''),
+                    'validation_notes': validation_result.get('validation_notes', 'Fallback validation passed'),
                     'market_conditions': market_conditions,
                     'key_levels': key_levels,
-                    'validation_method': validation_result.get('validation_method', 'ai'),
+                    'validation_method': validation_result.get('validation_method', 'fallback_enhanced'),
                     'timestamp': signal.get('timestamp', datetime.now().isoformat())
                 }
                 validated.append(validated_signal)
 
-                logger.info(f"✓ {symbol}: APPROVED | R/R: {rr_ratio:.2f}:1 | Duration: {validation_result.get('hold_duration_minutes', 720)}min")
+                logger.info(f"✓ {symbol}: APPROVED (fallback) | R/R: {rr_ratio:.2f}:1 | Duration: {validation_result.get('hold_duration_minutes', 720)}min")
 
             else:
-                rejection_reason = validation_result.get('rejection_reason', 'Validation failed')
+                rejection_reason = validation_result.get('rejection_reason', 'Fallback validation failed')
 
                 rejected_signal = {
                     'symbol': symbol,
@@ -170,7 +161,7 @@ async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) ->
                 }
                 rejected.append(rejected_signal)
 
-                logger.info(f"✗ {symbol}: REJECTED | {rejection_reason}")
+                logger.info(f"✗ {symbol}: REJECTED (fallback) | {rejection_reason}")
 
         except Exception as e:
             logger.error(f"Validation error for {signal['symbol']}: {e}")

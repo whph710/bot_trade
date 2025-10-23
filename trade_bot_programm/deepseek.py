@@ -1,5 +1,6 @@
 """
-DeepSeek AI клиент - FIXED: Unified prompt loading
+DeepSeek AI клиент - FIXED: Stage 2 compact multi-TF support
+Файл: trade_bot_programm/deepseek.py
 """
 
 import os
@@ -10,15 +11,7 @@ from pathlib import Path
 
 
 def load_prompt_unified(prompt_file: str) -> str:
-    """
-    Unified prompt loader - ищет промпт в правильной папке
-
-    Ищет в следующем порядке:
-    1. Прямой путь
-    2. trade_bot_programm/prompts/
-    3. prompts/ (корень проекта)
-    4. ../prompts/
-    """
+    """Unified prompt loader"""
     search_paths = [
         Path(prompt_file),
         Path(__file__).parent / "prompts" / Path(prompt_file).name,
@@ -86,7 +79,6 @@ class DeepSeekClient:
         if prompt_file in self.prompts_cache:
             return self.prompts_cache[prompt_file]
 
-        # FIXED: Используем unified loader
         content = load_prompt_unified(prompt_file)
         self.prompts_cache[prompt_file] = content
         return content
@@ -99,9 +91,7 @@ class DeepSeekClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None
     ) -> List[str]:
-        """
-        Выбор пар через DeepSeek
-        """
+        """Выбор пар через DeepSeek (Stage 2 - compact multi-TF)"""
         try:
             if temperature is None:
                 temperature = float(os.getenv("AI_TEMPERATURE_SELECT", "0.3"))
@@ -114,34 +104,42 @@ class DeepSeekClient:
             for pair in pairs_data:
                 symbol = pair.get('symbol', 'UNKNOWN')
 
-                info = (
-                    f"Symbol: {symbol}\n"
-                    f"Direction: {pair.get('direction', 'NONE')} ({pair.get('confidence', 0)}%)\n"
-                )
+                # Компактная информация из multi-TF данных
+                info = [f"Symbol: {symbol}"]
+                info.append(f"Direction: {pair.get('direction', 'NONE')} ({pair.get('confidence', 0)}%)")
 
-                if pair.get('candles_15m'):
-                    info += f"Candles: {len(pair['candles_15m'])} bars\n"
+                # 1H текущие значения
+                if pair.get('indicators_1h'):
+                    current_1h = pair['indicators_1h'].get('current', {})
+                    if current_1h:
+                        info.append(f"1H: RSI={current_1h.get('rsi', 0):.1f}, Price=${current_1h.get('price', 0):.2f}")
 
-                if pair.get('indicators_15m'):
-                    current = pair['indicators_15m'].get('current', {})
-                    if current:
-                        info += f"Price: ${current.get('price', 0):.4f}\n"
-                        info += f"RSI: {current.get('rsi', 0):.1f}\n"
-                        info += f"Volume ratio: {current.get('volume_ratio', 0):.2f}\n"
+                # 4H текущие значения
+                if pair.get('indicators_4h'):
+                    current_4h = pair['indicators_4h'].get('current', {})
+                    if current_4h:
+                        info.append(f"4H: RSI={current_4h.get('rsi', 0):.1f}, Vol={current_4h.get('volume_ratio', 0):.2f}")
 
-                pairs_info.append(info)
+                # 1D текущие значения (если есть)
+                if pair.get('indicators_1d'):
+                    current_1d = pair['indicators_1d'].get('current', {})
+                    if current_1d:
+                        info.append(f"1D: RSI={current_1d.get('rsi', 0):.1f}")
+
+                pairs_info.append('\n'.join(info))
 
             pairs_text = "\n---\n".join(pairs_info)
 
             limit_text = f"максимум {max_pairs} пар" if max_pairs else "без ограничения количества"
             user_prompt = (
-                f"Проанализируй следующие {len(pairs_data)} торговых пар и выбери {limit_text} "
-                f"с наилучшим потенциалом для торговли:\n\n{pairs_text}\n\n"
+                f"Проанализируй следующие {len(pairs_data)} торговых пар с компактными "
+                f"multi-timeframe данными (1H/4H/1D) и выбери {limit_text} "
+                f"с наилучшим потенциалом для swing trading:\n\n{pairs_text}\n\n"
                 f"Верни ТОЛЬКО JSON в формате: {{\"selected_pairs\": [\"BTCUSDT\", \"ETHUSDT\"]}}"
             )
 
             print(f"\n[DeepSeek] {'─'*60}")
-            print(f"[DeepSeek] 🎯 STAGE 2: ВЫБОР ПАР")
+            print(f"[DeepSeek] 🎯 STAGE 2: ВЫБОР ПАР (COMPACT MULTI-TF)")
             print(f"[DeepSeek] {'─'*60}")
             print(f"[DeepSeek] 📊 Пар на анализ: {len(pairs_data)}")
             print(f"[DeepSeek] 🎚️  Лимит выбора: {limit_text}")

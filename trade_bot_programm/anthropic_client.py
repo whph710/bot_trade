@@ -1,5 +1,6 @@
 """
-Anthropic Claude AI Client - FIXED: Unified prompt loading
+Anthropic Claude AI Client - FIXED: No Stage 4 validation
+Файл: trade_bot_programm/anthropic_client.py
 """
 
 import asyncio
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from anthropic import AsyncAnthropic
 from config import config
-from shared_utils import fallback_validation, extract_json_from_response
+from shared_utils import extract_json_from_response
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -17,25 +18,16 @@ _prompts_cache = {}
 
 
 def load_prompt_cached(filename: str) -> str:
-    """
-    Load prompt with caching - FIXED: Unified search strategy
-
-    Ищет промпт в следующем порядке:
-    1. Прямой путь (если передан полный путь)
-    2. trade_bot_programm/prompts/
-    3. prompts/ (корень проекта)
-    4. ../prompts/ (родительская директория)
-    """
+    """Load prompt with caching - unified search strategy"""
     if filename in _prompts_cache:
         logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
 
-    # Список путей для поиска
     search_paths = [
-        Path(filename),  # Прямой путь
-        Path(__file__).parent / "prompts" / Path(filename).name,  # trade_bot_programm/prompts/
-        Path(__file__).parent.parent / "prompts" / Path(filename).name,  # Корень проекта
-        Path(__file__).parent.parent.parent / "prompts" / Path(filename).name,  # Выше корня
+        Path(filename),
+        Path(__file__).parent / "prompts" / Path(filename).name,
+        Path(__file__).parent.parent / "prompts" / Path(filename).name,
+        Path(__file__).parent.parent.parent / "prompts" / Path(filename).name,
     ]
 
     filepath = None
@@ -66,7 +58,7 @@ def load_prompt_cached(filename: str) -> str:
 
 
 class AnthropicClient:
-    """Anthropic Claude API client"""
+    """Anthropic Claude API client - Stage 3 only (no Stage 4)"""
 
     def __init__(self):
         self.api_key = config.ANTHROPIC_API_KEY
@@ -137,7 +129,7 @@ class AnthropicClient:
             raise
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
-        """Select pairs for analysis"""
+        """Select pairs for analysis (Stage 2 - compact data)"""
         if not pairs_data:
             logger.warning("No pairs data for Claude selection")
             return []
@@ -149,17 +141,17 @@ class AnthropicClient:
 
             logger.info(f"Claude: Selecting pairs from {len(pairs_data)} candidates")
 
+            # Компактные данные для Stage 2
             compact_data = {}
             for item in pairs_data:
                 symbol = item['symbol']
 
-                if 'indicators_15m' not in item or 'candles_15m' not in item:
-                    continue
+                # Берем компактные индикаторы (уже подготовлены в bot_runner)
+                indicators_1h = item.get('indicators_1h', {})
+                indicators_4h = item.get('indicators_4h', {})
+                indicators_1d = item.get('indicators_1d', {})
 
-                candles_15m = item.get('candles_15m', [])
-                indicators_15m = item.get('indicators_15m', {})
-
-                if not candles_15m or not indicators_15m:
+                if not indicators_1h or not indicators_4h:
                     continue
 
                 compact_data[symbol] = {
@@ -167,23 +159,18 @@ class AnthropicClient:
                         'direction': item.get('direction', 'NONE'),
                         'confidence': item.get('confidence', 0)
                     },
-                    'candles_15m': candles_15m[-30:],
-                    'indicators': {
-                        'ema5': indicators_15m.get('ema5_history', [])[-30:],
-                        'ema8': indicators_15m.get('ema8_history', [])[-30:],
-                        'ema20': indicators_15m.get('ema20_history', [])[-30:],
-                        'rsi': indicators_15m.get('rsi_history', [])[-30:],
-                        'macd_histogram': indicators_15m.get('macd_histogram_history', [])[-30:],
-                        'volume_ratio': indicators_15m.get('volume_ratio_history', [])[-30:]
-                    },
-                    'current_state': indicators_15m.get('current', {})
+                    'candles_1h': item.get('candles_1h', [])[-30:],
+                    'candles_4h': item.get('candles_4h', [])[-30:],
+                    'candles_1d': item.get('candles_1d', [])[-10:],
+                    'indicators_1h': indicators_1h,
+                    'indicators_4h': indicators_4h,
+                    'indicators_1d': indicators_1d
                 }
 
             if not compact_data:
                 logger.warning("No valid compact data for Claude selection")
                 return []
 
-            # FIXED: Используем load_prompt_cached
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             json_payload = json.dumps(compact_data, separators=(',', ':'))
 
@@ -213,16 +200,11 @@ class AnthropicClient:
             return []
 
     async def analyze_comprehensive(self, symbol: str, comprehensive_data: Dict) -> Dict:
-        """
-        Comprehensive analysis using full Stage 3 data
-        """
+        """Comprehensive analysis using full Stage 3 data"""
         try:
             logger.debug(f"Claude: Comprehensive analysis for {symbol}")
 
-            # FIXED: Используем load_prompt_cached
             prompt = load_prompt_cached(config.ANALYSIS_PROMPT)
-
-            # Формируем JSON с данными
             data_json = json.dumps(comprehensive_data, separators=(',', ':'))
 
             logger.debug(f"Analysis data size: {len(data_json)} chars")
@@ -257,113 +239,3 @@ class AnthropicClient:
                 'confidence': 0,
                 'rejection_reason': f'Exception: {str(e)[:100]}'
             }
-
-    async def validate_signal(self, signal: Dict, comprehensive_data: Dict) -> Dict:
-        """Validate trading signal - FIXED: гарантируем все поля"""
-        try:
-            symbol = signal.get('symbol', 'UNKNOWN')
-            logger.debug(f"Claude: Validating signal for {symbol}")
-
-            validation_input = {
-                'signal': {
-                    'symbol': symbol,
-                    'signal': signal['signal'],
-                    'confidence': signal['confidence'],
-                    'entry_price': signal['entry_price'],
-                    'stop_loss': signal['stop_loss'],
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'analysis': signal.get('analysis', '')
-                },
-                'comprehensive_data': {
-                    'market_data': comprehensive_data.get('market_data', {}),
-                    'correlation_data': comprehensive_data.get('correlation_data', {}),
-                    'volume_profile': comprehensive_data.get('volume_profile', {}),
-                    'current_price': comprehensive_data.get('current_price', 0)
-                }
-            }
-
-            # FIXED: Используем load_prompt_cached
-            prompt = load_prompt_cached(config.VALIDATION_PROMPT)
-            data_json = json.dumps(validation_input, separators=(',', ':'))
-
-            logger.debug(f"Validation data size: {len(data_json)} chars")
-
-            response = await self.call(
-                prompt=f"{prompt}\n\nValidation data:\n{data_json}",
-                max_tokens=config.AI_MAX_TOKENS_VALIDATE,
-                temperature=config.AI_TEMPERATURE_VALIDATE,
-                stage='validation'
-            )
-
-            result = extract_json_from_response(response)
-
-            if result and 'final_signals' in result:
-                final_signals = result.get('final_signals', [])
-                if final_signals:
-                    validated = final_signals[0]
-                    tp_levels = validated.get('take_profit_levels', signal.get('take_profit_levels', [0, 0, 0]))
-
-                    if not isinstance(tp_levels, list):
-                        tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
-
-                    # FIXED: Гарантируем наличие всех полей
-                    market_conditions = validated.get('market_conditions', '').strip()
-                    key_levels = validated.get('key_levels', '').strip()
-
-                    # Если AI не заполнил - заполняем сами
-                    if not market_conditions:
-                        market_data = comprehensive_data.get('market_data', {})
-                        funding = market_data.get('funding_rate', {})
-                        oi = market_data.get('open_interest', {})
-                        orderbook = market_data.get('orderbook', {})
-
-                        funding_rate = funding.get('funding_rate', 0) if funding else 0
-                        oi_trend = oi.get('oi_trend', 'UNKNOWN') if oi else 'UNKNOWN'
-                        spread_pct = orderbook.get('spread_pct', 0) if orderbook else 0
-
-                        market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
-
-                    if not key_levels:
-                        entry = validated.get('entry_price', signal['entry_price'])
-                        stop = validated.get('stop_loss', signal['stop_loss'])
-                        key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
-
-                    logger.debug(f"Claude: Approved {symbol} with R/R {validated.get('risk_reward_ratio', 0)}")
-
-                    return {
-                        'approved': True,
-                        'final_confidence': validated.get('confidence', signal['confidence']),
-                        'entry_price': validated.get('entry_price', signal['entry_price']),
-                        'stop_loss': validated.get('stop_loss', signal['stop_loss']),
-                        'take_profit_levels': tp_levels,
-                        'risk_reward_ratio': validated.get('risk_reward_ratio', 0),
-                        'hold_duration_minutes': validated.get('hold_duration_minutes', 720),
-                        'validation_notes': validated.get('validation_notes', ''),
-                        'market_conditions': market_conditions,
-                        'key_levels': key_levels,
-                        'validation_method': 'claude'
-                    }
-                else:
-                    rejected_info = result.get('rejected_signals', [{}])[0]
-                    reason = rejected_info.get('reason', 'Claude rejected')
-                    logger.debug(f"Claude: Rejected {symbol} - {reason}")
-
-                    return {
-                        'approved': False,
-                        'rejection_reason': reason,
-                        'entry_price': signal.get('entry_price', 0),
-                        'stop_loss': signal.get('stop_loss', 0),
-                        'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                        'final_confidence': signal.get('confidence', 0),
-                        'validation_method': 'claude'
-                    }
-
-            logger.warning(f"Claude: Invalid validation response for {symbol}")
-            return fallback_validation(signal, comprehensive_data)
-
-        except asyncio.TimeoutError:
-            logger.error(f"Claude validation timeout for {symbol}")
-            return fallback_validation(signal, comprehensive_data)
-        except Exception as e:
-            logger.error(f"Claude validation error for {symbol}: {e}")
-            return fallback_validation(signal, comprehensive_data)
