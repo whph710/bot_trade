@@ -135,11 +135,10 @@ class AnthropicClient:
             return []
 
         try:
-            if len(pairs_data) > config.MAX_BULK_PAIRS:
-                pairs_data = sorted(pairs_data, key=lambda x: x.get('confidence', 0), reverse=True)[:config.MAX_BULK_PAIRS]
-                logger.debug(f"Selection limited to top {config.MAX_BULK_PAIRS} pairs")
+            # ИЗМЕНЕНИЕ: Убрали ограничение MAX_BULK_PAIRS
+            # Теперь передаем ВСЕ пары
 
-            logger.info(f"Claude: Selecting pairs from {len(pairs_data)} candidates")
+            logger.info(f"Claude: Selecting pairs from ALL {len(pairs_data)} candidates")
 
             # Компактные данные для Stage 2
             compact_data = {}
@@ -174,7 +173,7 @@ class AnthropicClient:
             prompt = load_prompt_cached(config.SELECTION_PROMPT)
             json_payload = json.dumps(compact_data, separators=(',', ':'))
 
-            logger.debug(f"Selection data size: {len(json_payload)} chars")
+            logger.debug(f"Selection data size: {len(json_payload)} chars for {len(compact_data)} pairs")
 
             response = await self.call(
                 prompt=f"{prompt}\n\nData:\n{json_payload}",
@@ -185,8 +184,9 @@ class AnthropicClient:
             result = extract_json_from_response(response)
 
             if result and 'selected_pairs' in result:
+                # Claude сам применит лимит согласно промпту (МАКСИМУМ 3)
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
-                logger.info(f"Claude selected {len(selected_pairs)} pairs: {selected_pairs}")
+                logger.info(f"Claude selected {len(selected_pairs)} out of {len(compact_data)} pairs: {selected_pairs}")
                 return selected_pairs
 
             logger.warning("Claude returned no pairs in response")

@@ -1,5 +1,5 @@
 """
-DeepSeek AI клиент - FIXED: Stage 2 compact multi-TF support
+DeepSeek AI клиент - FIXED: Stage 2 compact multi-TF support + max_pairs enforcement
 Файл: trade_bot_programm/deepseek.py
 """
 
@@ -216,12 +216,16 @@ class DeepSeekClient:
                             if 'USDT' in token or token.replace('USDT', '').isalpha():
                                 selected.append(token)
 
-            # Применяем лимит
-            if max_pairs and len(selected) > max_pairs:
-                selected = selected[:max_pairs]
+            # КРИТИЧНО: Применяем лимит СТРОГО
+            if max_pairs:
+                if len(selected) > max_pairs:
+                    print(f"[DeepSeek] ⚠️  Обрезаем с {len(selected)} до {max_pairs} пар")
+                    selected = selected[:max_pairs]
+                elif len(selected) == 0:
+                    print(f"[DeepSeek] ⚠️  Модель не вернула пары - попробуйте снова")
 
             print(f"\n[DeepSeek] {'='*60}")
-            print(f"[DeepSeek] ✅ РЕЗУЛЬТАТ: Выбрано {len(selected)} пар")
+            print(f"[DeepSeek] ✅ РЕЗУЛЬТАТ: Выбрано {len(selected)} пар (лимит: {max_pairs if max_pairs else 'нет'})")
             if selected:
                 print(f"[DeepSeek] 📋 Список: {selected}")
             print(f"[DeepSeek] {'='*60}\n")

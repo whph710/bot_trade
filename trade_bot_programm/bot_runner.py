@@ -123,6 +123,7 @@ class TradingBotRunner:
     async def stage2_ai_select(self, signal_pairs: list[Dict]) -> list[str]:
         """
         Stage 2: DeepSeek отбор пар (COMPACT multi-TF data)
+        FIXED: Передаем max_pairs явно
         """
         red_print("=" * 70)
         red_print(f"STAGE 2: DEEPSEEK ВЫБОР ПАР (COMPACT)")
@@ -199,12 +200,16 @@ class TradingBotRunner:
             logger.warning("No valid AI input data prepared")
             return []
 
-        red_print(f"Отправка {len(ai_input_data)} пар в DeepSeek для отбора")
-        logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} for selection")
+        red_print(f"Отправка {len(ai_input_data)} пар в DeepSeek для отбора (лимит: {config.MAX_FINAL_PAIRS})")
+        logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} for selection (limit: {config.MAX_FINAL_PAIRS})")
 
         self.last_haiku_call_time = time.time()
 
-        selected_pairs = await self.ai_router.select_pairs(ai_input_data)
+        # КРИТИЧНО: Передаем max_pairs явно
+        selected_pairs = await self.ai_router.select_pairs(
+            ai_input_data,
+            max_pairs=config.MAX_FINAL_PAIRS
+        )
         self.ai_selected_count = len(selected_pairs)
 
         if selected_pairs:
