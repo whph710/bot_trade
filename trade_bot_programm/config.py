@@ -181,6 +181,21 @@ class Config:
     AI_INDICATORS_HISTORY = AI_INDICATORS_HISTORY
     FINAL_INDICATORS_HISTORY = FINAL_INDICATORS_HISTORY
 
+# ============================================================================
+# MODULE-LEVEL EXPORTS для совместимости с from config import STAGE2_PROVIDER
+# ============================================================================
+STAGE2_PROVIDER = Config.STAGE2_PROVIDER
+STAGE2_MODEL = Config.STAGE2_MODEL
+STAGE2_TEMPERATURE = Config.STAGE2_TEMPERATURE
+STAGE2_MAX_TOKENS = Config.STAGE2_MAX_TOKENS
+
+STAGE3_PROVIDER = Config.STAGE3_PROVIDER
+STAGE3_MODEL = Config.STAGE3_MODEL
+STAGE3_TEMPERATURE = Config.STAGE3_TEMPERATURE
+STAGE3_MAX_TOKENS = Config.STAGE3_MAX_TOKENS
+
+DEEPSEEK_REASONING = Config.DEEPSEEK_REASONING
+ANTHROPIC_THINKING = Config.ANTHROPIC_THINKING
 
 # Создаём экземпляр для импорта
 config = Config()
