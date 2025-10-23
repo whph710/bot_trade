@@ -1,5 +1,5 @@
 """
-DeepSeek AI клиент - FIXED: Stage 2 compact multi-TF support + max_pairs enforcement
+DeepSeek AI клиент - UPDATED: Added chat() method
 Файл: trade_bot_programm/deepseek.py
 """
 
@@ -194,7 +194,7 @@ class DeepSeekClient:
                 data = json.loads(content)
                 selected_pairs = data.get('selected_pairs', [])
 
-                # Очищаем от лишних символов
+# Очищаем от лишних символов
                 for symbol in selected_pairs:
                     if isinstance(symbol, str):
                         clean_symbol = symbol.strip().strip('"').strip("'").strip('[').strip(']').upper()
@@ -244,7 +244,10 @@ class DeepSeekClient:
         max_tokens: int = 2000,
         temperature: float = 0.7
     ) -> str:
-        """Общий метод для чата с DeepSeek"""
+        """
+        Общий метод для чата с DeepSeek
+        НОВОЕ: Используется для Stage 3 comprehensive analysis
+        """
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -257,7 +260,7 @@ class DeepSeekClient:
                 if hasattr(response.choices[0].message, 'reasoning_content'):
                     reasoning = response.choices[0].message.reasoning_content
                     if reasoning:
-                        print(f"[DeepSeek] 💭 Рассуждения модели:")
+                        print(f"[DeepSeek] 💭 Рассуждения модели (первые 500 символов):")
                         print(f"      {reasoning[:500]}...")
 
             return response.choices[0].message.content.strip()

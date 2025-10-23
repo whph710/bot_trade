@@ -1,5 +1,5 @@
 """
-AI Router - FIXED: Stage 2 compact data + 65s delay + Stage 4 removed
+AI Router - UNIVERSAL: Stage 3 supports both DeepSeek and Claude
 Файл: trade_bot_programm/ai_router.py
 """
 
@@ -164,7 +164,7 @@ class AIRouter:
         symbol: str,
         comprehensive_data: Dict
     ) -> Dict:
-        """Stage 3: Comprehensive analysis (Sonnet)"""
+        """Stage 3: Comprehensive analysis (Claude OR DeepSeek)"""
         print(f"\n[AI Router] {'─'*70}")
         print(f"[AI Router] 🔬 STAGE 3: ANALYSIS {symbol}")
         print(f"[AI Router] {'─'*70}")
@@ -187,12 +187,13 @@ class AIRouter:
 
         try:
             if provider_name == 'claude':
+                # ========== CLAUDE COMPREHENSIVE ANALYSIS ==========
                 from anthropic_client import AnthropicClient
                 claude = AnthropicClient()
                 result = await claude.analyze_comprehensive(symbol, comprehensive_data)
 
                 if result:
-                    print(f"[AI Router] ✅ Stage 3 complete for {symbol}")
+                    print(f"[AI Router] ✅ Claude Stage 3 complete for {symbol}")
                     return result
                 else:
                     return {
@@ -203,12 +204,21 @@ class AIRouter:
                     }
 
             elif provider_name == 'deepseek':
-                return {
-                    'symbol': symbol,
-                    'signal': 'NO_SIGNAL',
-                    'confidence': 0,
-                    'rejection_reason': 'DeepSeek не поддерживает comprehensive analysis'
-                }
+                # ========== DEEPSEEK COMPREHENSIVE ANALYSIS ==========
+                print(f"[AI Router] 🔧 Using DeepSeek for comprehensive analysis")
+
+                result = await self._deepseek_comprehensive_analysis(symbol, comprehensive_data)
+
+                if result and result.get('signal') != 'NO_SIGNAL':
+                    print(f"[AI Router] ✅ DeepSeek Stage 3 complete for {symbol}")
+                    return result
+                else:
+                    return {
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'confidence': 0,
+                        'rejection_reason': result.get('rejection_reason', 'DeepSeek rejected signal')
+                    }
 
             else:
                 return {
@@ -227,6 +237,122 @@ class AIRouter:
                 'signal': 'NO_SIGNAL',
                 'confidence': 0,
                 'rejection_reason': f'Exception: {str(e)[:100]}'
+            }
+
+    async def _deepseek_comprehensive_analysis(
+        self,
+        symbol: str,
+        comprehensive_data: Dict
+    ) -> Dict:
+        """
+        DeepSeek comprehensive analysis implementation
+        НОВОЕ: Полная поддержка Stage 3 через DeepSeek
+        """
+        import json
+        from pathlib import Path
+        from shared_utils import extract_json_from_response
+
+        try:
+            # Загружаем промпт для анализа
+            prompt_path = Path(__file__).parent / "prompts" / "prompt_analyze.txt"
+
+            if not prompt_path.exists():
+                print(f"[AI Router] ❌ Analysis prompt not found: {prompt_path}")
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'Analysis prompt file missing'
+                }
+
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                system_prompt = f.read()
+
+            # Формируем JSON данные для анализа
+            analysis_data = {
+                'symbol': symbol,
+                'has_1d_data': comprehensive_data.get('has_1d_data', False),
+                'candles_1h': comprehensive_data.get('candles_1h', [])[-100:],
+                'candles_4h': comprehensive_data.get('candles_4h', [])[-60:],
+                'candles_1d': comprehensive_data.get('candles_1d', [])[-20:],
+                'indicators_1h': comprehensive_data.get('indicators_1h', {}),
+                'indicators_4h': comprehensive_data.get('indicators_4h', {}),
+                'indicators_1d': comprehensive_data.get('indicators_1d', {}),
+                'current_price': comprehensive_data.get('current_price', 0),
+                'market_data': comprehensive_data.get('market_data', {}),
+                'correlation_data': comprehensive_data.get('correlation_data', {}),
+                'volume_profile': comprehensive_data.get('volume_profile', {}),
+                'vp_analysis': comprehensive_data.get('vp_analysis', {}),
+                'btc_candles_1h': comprehensive_data.get('btc_candles_1h', [])[-100:],
+                'btc_candles_4h': comprehensive_data.get('btc_candles_4h', [])[-60:],
+                'btc_candles_1d': comprehensive_data.get('btc_candles_1d', [])[-20:]
+            }
+
+            data_json = json.dumps(analysis_data, separators=(',', ':'))
+
+            print(f"[AI Router] 📏 Analysis data size: {len(data_json)} chars")
+
+            # Получаем DeepSeek клиент для stage3
+            deepseek = await self._get_deepseek_client('stage3')
+
+            if not deepseek:
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'DeepSeek client unavailable'
+                }
+
+            # Формируем финальный промпт
+            user_prompt = f"{system_prompt}\n\nData:\n{data_json}"
+
+            # Вызов DeepSeek
+            response = await deepseek.chat(
+                messages=[
+                    {"role": "system", "content": "You are an expert institutional swing trader with 20 years experience."},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=STAGE3_MAX_TOKENS,
+                temperature=STAGE3_TEMPERATURE
+            )
+
+            # Парсим JSON ответ
+            result = extract_json_from_response(response)
+
+            if not result:
+                print(f"[AI Router] ⚠️ DeepSeek returned invalid JSON for {symbol}")
+                return {
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'confidence': 0,
+                    'rejection_reason': 'Invalid JSON response from DeepSeek'
+                }
+
+            # Добавляем symbol если отсутствует
+            result['symbol'] = symbol
+
+            # Нормализуем take_profit_levels
+            if 'take_profit_levels' in result:
+                tp_levels = result['take_profit_levels']
+                if not isinstance(tp_levels, list):
+                    tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
+                elif len(tp_levels) < 3:
+                    while len(tp_levels) < 3:
+                        last_tp = tp_levels[-1] if tp_levels else 0
+                        tp_levels.append(last_tp * 1.1)
+                result['take_profit_levels'] = tp_levels
+
+            return result
+
+        except Exception as e:
+            print(f"[AI Router] ❌ DeepSeek analysis error for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'symbol': symbol,
+                'signal': 'NO_SIGNAL',
+                'confidence': 0,
+                'rejection_reason': f'DeepSeek exception: {str(e)[:100]}'
             }
 
     async def _claude_select_pairs(

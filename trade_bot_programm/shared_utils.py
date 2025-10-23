@@ -99,7 +99,10 @@ def fallback_validation(signal: Dict, comp_data: Dict) -> Dict:
 
 
 def extract_json_from_response(text: str) -> Optional[Dict]:
-    """Extract JSON from AI response (unified parser)"""
+    """
+    Extract JSON from AI response (unified parser)
+    ИСПОЛЬЗУЕТСЯ: Stage 3 DeepSeek analysis
+    """
     if not text or len(text) < 10:
         return None
 

@@ -1,6 +1,6 @@
 """
 Trading Bot Configuration
-FINAL FIX: Безопасное преобразование типов + опциональная задержка Stage 3
+FINAL FIX: Экспорт API ключей на уровне модуля + безопасное преобразование типов
 Файл: trade_bot_programm/config.py
 """
 
@@ -23,7 +23,6 @@ def load_env():
 def safe_int(value, default):
     """Безопасное преобразование в int"""
     try:
-        # Убираем .0 если есть
         return int(float(value))
     except (ValueError, TypeError):
         return default
@@ -48,6 +47,13 @@ def safe_bool(value):
 
 # Загружаем переменные окружения при импорте
 load_env()
+
+
+# ============================================================================
+# API KEYS - ЭКСПОРТ НА УРОВНЕ МОДУЛЯ
+# ============================================================================
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 
 # ============================================================================
@@ -87,8 +93,8 @@ class Config:
     """Класс конфигурации для удобного доступа к настройкам"""
 
     # API Keys
-    DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-    ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+    DEEPSEEK_API_KEY = DEEPSEEK_API_KEY
+    ANTHROPIC_API_KEY = ANTHROPIC_API_KEY
 
     # DeepSeek Settings
     DEEPSEEK_URL = os.getenv('DEEPSEEK_URL', 'https://api.deepseek.com')
@@ -124,9 +130,8 @@ class Config:
     MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '70'), 70)
     MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
 
-    # Rate Limiting - FIXED: Безопасное преобразование + опциональная задержка
+    # Rate Limiting
     CLAUDE_RATE_LIMIT_DELAY = safe_int(os.getenv('CLAUDE_RATE_LIMIT_DELAY', '0'), 0)
-    # Если 0 - задержка отключена, если >0 - включена
 
     # Market Data Thresholds
     OI_CHANGE_GROWING_THRESHOLD = safe_float(os.getenv('OI_CHANGE_GROWING_THRESHOLD', '2.0'), 2.0)
