@@ -1,4 +1,4 @@
-# config.py - OPTIMIZED: Reduced data + rate limit protection
+# config.py - UPDATED: Added FORMATTER config + RED logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,31 +25,36 @@ DEEPSEEK_URL = "https://api.deepseek.com"
 # ============================================================================
 # STAGE PROVIDER SELECTION
 # ============================================================================
-STAGE2_PROVIDER = os.getenv("STAGE2_PROVIDER", "claude").lower()  # Haiku для Stage 2
-STAGE3_PROVIDER = os.getenv("STAGE3_PROVIDER", "claude").lower()  # Sonnet для Stage 3
+STAGE2_PROVIDER = os.getenv("STAGE2_PROVIDER", "deepseek").lower()
+STAGE3_PROVIDER = os.getenv("STAGE3_PROVIDER", "claude").lower()
 
 # ============================================================================
-# STAGE 2: PAIR SELECTION (Haiku с multi-TF)
+# STAGE 2: PAIR SELECTION (DeepSeek)
 # ============================================================================
-STAGE2_MODEL = os.getenv("STAGE2_MODEL", "claude-haiku-4-5-20251001")
+STAGE2_MODEL = os.getenv("STAGE2_MODEL", "deepseek-chat")
 STAGE2_TEMPERATURE = float(os.getenv("STAGE2_TEMPERATURE", "0.3"))
 STAGE2_MAX_TOKENS = int(os.getenv("STAGE2_MAX_TOKENS", "2000"))
 
 # ============================================================================
-# STAGE 3: ANALYSIS (Sonnet)
+# STAGE 3: ANALYSIS (Sonnet или DeepSeek)
 # ============================================================================
 STAGE3_MODEL = os.getenv("STAGE3_MODEL", "claude-sonnet-4-20250514")
 STAGE3_TEMPERATURE = float(os.getenv("STAGE3_TEMPERATURE", "0.7"))
 STAGE3_MAX_TOKENS = int(os.getenv("STAGE3_MAX_TOKENS", "3000"))
 
 # ============================================================================
-# STAGE 4: REMOVED
+# FORMATTER: ВСЕГДА DEEPSEEK
 # ============================================================================
+FORMATTER_PROVIDER = "deepseek"  # ВСЕГДА DeepSeek
+FORMATTER_MODEL = os.getenv("FORMATTER_MODEL", "deepseek-chat")
+FORMATTER_TEMPERATURE = float(os.getenv("FORMATTER_TEMPERATURE", "0.3"))
+FORMATTER_MAX_TOKENS = int(os.getenv("FORMATTER_MAX_TOKENS", "1500"))
 
 # ============================================================================
 # BACKWARD COMPATIBILITY
 # ============================================================================
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+DEEPSEEK_MODEL = "deepseek-chat"
 AI_TEMPERATURE_SELECT = STAGE2_TEMPERATURE
 AI_TEMPERATURE_ANALYZE = STAGE3_TEMPERATURE
 AI_MAX_TOKENS_SELECT = STAGE2_MAX_TOKENS
@@ -66,9 +71,7 @@ ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "false").lower() in ("true"
 # ============================================================================
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 API_TIMEOUT_ANALYSIS = int(os.getenv("API_TIMEOUT_ANALYSIS", "60"))
-
-# НОВОЕ: Rate limit protection
-CLAUDE_RATE_LIMIT_DELAY = float(os.getenv("CLAUDE_RATE_LIMIT_DELAY", "65.0"))  # 1 min 5 sec между запросами
+CLAUDE_RATE_LIMIT_DELAY = float(os.getenv("CLAUDE_RATE_LIMIT_DELAY", "65.0"))
 
 # ============================================================================
 # TRADING PARAMETERS
@@ -102,7 +105,7 @@ CACHE_HOT_PAIRS = int(os.getenv("CACHE_HOT_PAIRS", "100"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
 # ============================================================================
-# TRADING BOT SPECIFIC PARAMETERS - OPTIMIZED
+# TRADING BOT SPECIFIC PARAMETERS
 # ============================================================================
 TIMEFRAME_SHORT = "60"   # 1H
 TIMEFRAME_LONG = "240"   # 4H
@@ -112,21 +115,18 @@ TIMEFRAME_SHORT_NAME = "1H"
 TIMEFRAME_LONG_NAME = "4H"
 TIMEFRAME_HTF_NAME = "1D"
 
-# ОПТИМИЗИРОВАНО: Уменьшены свечи для Stage 2
-QUICK_SCAN_CANDLES = 48  # Stage 1: Base filtering
+QUICK_SCAN_CANDLES = 48
 
-# Stage 2: Compact multi-TF data
-STAGE2_CANDLES_1H = 30   # Последние 30 свечей 1H
-STAGE2_CANDLES_4H = 30   # Последние 30 свечей 4H
-STAGE2_CANDLES_1D = 10   # Последние 10 свечей 1D
+STAGE2_CANDLES_1H = 30
+STAGE2_CANDLES_4H = 30
+STAGE2_CANDLES_1D = 10
 
-# Stage 3: Full analysis (REDUCED from 168/84/30)
-STAGE3_CANDLES_1H = 100  # Было 168
-STAGE3_CANDLES_4H = 60   # Было 84
-STAGE3_CANDLES_1D = 20   # Было 30
+STAGE3_CANDLES_1H = 100
+STAGE3_CANDLES_4H = 60
+STAGE3_CANDLES_1D = 20
 
-AI_INDICATORS_HISTORY = 30  # Было 60
-FINAL_INDICATORS_HISTORY = 30  # Было 60
+AI_INDICATORS_HISTORY = 30
+FINAL_INDICATORS_HISTORY = 30
 
 MAX_BULK_PAIRS = 50
 MAX_FINAL_PAIRS = 3
@@ -159,7 +159,7 @@ SELECTION_PROMPT = "prompt_select.txt"
 ANALYSIS_PROMPT = "prompt_analyze.txt"
 
 # ============================================================================
-# LOGGING
+# LOGGING (ВСЁ КРАСНЫМ)
 # ============================================================================
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -167,6 +167,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 SAVE_OPPORTUNITIES_TO_FILE = os.getenv("SAVE_OPPORTUNITIES_TO_FILE", "True").lower() in ("true", "1", "yes")
 OPPORTUNITIES_LOG_FILE = LOGS_DIR / "opportunities.log"
 LOG_LEVEL = int(os.getenv("LOG_LEVEL", "1"))
+LOG_COLOR = os.getenv("LOG_COLOR", "RED").upper()  # NEW
 
 # ============================================================================
 # DIRECTORIES

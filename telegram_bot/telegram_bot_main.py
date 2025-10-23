@@ -1,4 +1,4 @@
-# telegram_bot_main.py - UPDATED with signal_formatter
+# telegram_bot_main.py - UPDATED: DeepSeek форматирование ВСЕГДА
 import asyncio
 import logging
 from datetime import datetime
@@ -21,8 +21,8 @@ from telegram_bot.result_formatter import (
     send_formatted_signals_to_group,
     send_group_message_safe
 )
-# МОДИФИКАЦИЯ: Заменён AI formatter на template formatter
-from trade_bot_programm.signal_formatter import format_multiple_signals
+# МОДИФИКАЦИЯ: AI Formatter для DeepSeek
+from telegram_bot.ai_formatter import AISignalFormatter
 from telegram_bot.stats_manager import StatsManager
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ class TradingBotTelegram:
         self.bot = Bot(token=TG_TOKEN)
         self.dp = Dispatcher()
         self.schedule_manager = ScheduleManager()
-        # МОДИФИКАЦИЯ: Убран self.ai_formatter
+        self.ai_formatter = AISignalFormatter()  # ВСЕГДА DeepSeek
         self.stats_manager = StatsManager()
         self.trading_bot_running = False
         self._typing_task = None
@@ -157,8 +157,8 @@ class TradingBotTelegram:
 
     async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
         """
-        Форматируем сигналы через template и постим в группу
-        МОДИФИКАЦИЯ: Использует signal_formatter вместо AI
+        Форматирование через DeepSeek AI и публикация в группу
+        МОДИФИКАЦИЯ: ВСЕГДА используется DeepSeek для форматирования
         """
         try:
             validated_signals = result.get('validated_signals', [])
@@ -169,24 +169,24 @@ class TradingBotTelegram:
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"📝 <b>Форматирую {len(validated_signals)} сигнал(ов)...</b>",
+                text=f"📝 <b>Форматирую {len(validated_signals)} сигнал(ов) через DeepSeek AI...</b>",
                 parse_mode="HTML"
             )
 
             await self._start_typing_indicator(TG_CHAT_ID)
 
             try:
-                # МОДИФИКАЦИЯ: Используем template formatter (БЕЗ AI)
-                logger.info(f"Formatting {len(validated_signals)} signals via template...")
-                formatted_signals = format_multiple_signals(validated_signals)
+                # МОДИФИКАЦИЯ: Используем DeepSeek AI formatter
+                logger.info(f"Formatting {len(validated_signals)} signals via DeepSeek AI...")
+                formatted_signals = await self.ai_formatter.format_multiple_signals(validated_signals)
             finally:
                 await self._stop_typing_indicator()
 
             if not formatted_signals:
-                logger.warning("Template formatting failed, no signals to post")
+                logger.warning("DeepSeek AI formatting failed, no signals to post")
                 await self.bot.send_message(
                     chat_id=TG_USER_ID,
-                    text="⚠️ <b>Ошибка форматирования сигналов</b>",
+                    text="⚠️ <b>Ошибка форматирования через DeepSeek AI</b>",
                     parse_mode="HTML"
                 )
                 return
@@ -199,11 +199,11 @@ class TradingBotTelegram:
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу</b>",
+                text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу (DeepSeek AI)</b>",
                 parse_mode="HTML"
             )
 
-            logger.info(f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID}")
+            logger.info(f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID} (DeepSeek AI formatted)")
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -228,6 +228,7 @@ class TradingBotTelegram:
             f"⏳ Следующий запуск: {next_run.strftime('%Y-%m-%d %H:%M')}\n"
             f"🟢 Планировщик: активен\n"
             f"📍 Группа: {TG_CHAT_ID}\n"
+            f"🤖 Форматирование: DeepSeek AI\n"
         )
 
         await self.bot.send_message(
@@ -305,7 +306,7 @@ class TradingBotTelegram:
         self.stats_manager.cleanup_old_daily_stats(days_to_keep=30)
 
         self.schedule_manager.setup_schedule(self.bot, self.schedule_callback)
-        logger.info("✅ Telegram bot setup complete")
+        logger.info("✅ Telegram bot setup complete (DeepSeek AI formatter)")
 
         try:
             await self.dp.start_polling(self.bot, allowed_updates=["message"])

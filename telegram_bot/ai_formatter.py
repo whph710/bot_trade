@@ -1,5 +1,6 @@
 """
 AI форматтер для сигналов - использует DeepSeek для форматирования JSON в читаемый текст
+UPDATED: Использует FORMATTER_* конфиг
 Файл: telegram_bot/ai_formatter.py
 """
 
@@ -53,13 +54,23 @@ class AISignalFormatter:
 
     def __init__(self):
         self.api_key = config.DEEPSEEK_API_KEY
-        self.model = config.DEEPSEEK_MODEL
+        self.model = config.FORMATTER_MODEL
         self.base_url = config.DEEPSEEK_URL
-        logger.info(f"AISignalFormatter initialized: model={self.model}")
+        self.temperature = config.FORMATTER_TEMPERATURE
+        self.max_tokens = config.FORMATTER_MAX_TOKENS
+
+        logger.info(f"[Formatter] ╔{'═'*60}╗")
+        logger.info(f"[Formatter] ║ {'AI FORMATTER ИНИЦИАЛИЗАЦИЯ':^60} ║")
+        logger.info(f"[Formatter] ╠{'═'*60}╣")
+        logger.info(f"[Formatter] ║ Провайдер: DeepSeek{'':<44} ║")
+        logger.info(f"[Formatter] ║ Модель: {self.model:<49} ║")
+        logger.info(f"[Formatter] ║ Temperature: {self.temperature:<46} ║")
+        logger.info(f"[Formatter] ║ Max tokens: {self.max_tokens:<47} ║")
+        logger.info(f"[Formatter] ╚{'═'*60}╝")
 
     async def format_signal(self, signal_data: Dict[str, Any]) -> str:
         """
-        Форматировать один сигнал через AI
+        Форматировать один сигнал через DeepSeek AI
 
         Args:
             signal_data: JSON данные сигнала
@@ -81,9 +92,9 @@ class AISignalFormatter:
             # Формируем финальный промпт
             full_prompt = f"{prompt_template}\n\nSignal Data:\n{signal_json}"
 
-            logger.debug(f"Formatting signal {signal_data.get('symbol', 'UNKNOWN')} via AI")
+            logger.debug(f"[Formatter] Formatting signal {signal_data.get('symbol', 'UNKNOWN')} via DeepSeek")
 
-            # Вызов AI
+            # Вызов DeepSeek API
             client = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url
@@ -93,8 +104,8 @@ class AISignalFormatter:
                 client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": full_prompt}],
-                    max_tokens=1500,
-                    temperature=0.3  # Низкая температура для консистентности
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature
                 ),
                 timeout=30
             )
@@ -102,20 +113,20 @@ class AISignalFormatter:
             formatted_text = response.choices[0].message.content.strip()
 
             logger.info(
-                f"Signal {signal_data.get('symbol', 'UNKNOWN')} formatted successfully ({len(formatted_text)} chars)")
+                f"[Formatter] ✅ Signal {signal_data.get('symbol', 'UNKNOWN')} formatted successfully ({len(formatted_text)} chars)")
 
             return formatted_text
 
         except asyncio.TimeoutError:
-            logger.error("AI formatting timeout (30s)")
+            logger.error("[Formatter] ❌ AI formatting timeout (30s)")
             raise
         except Exception as e:
-            logger.error(f"AI formatting error: {e}")
+            logger.error(f"[Formatter] ❌ AI formatting error: {e}")
             raise
 
     async def format_multiple_signals(self, signals: list[Dict[str, Any]]) -> list[str]:
         """
-        Форматировать несколько сигналов параллельно
+        Форматировать несколько сигналов параллельно через DeepSeek
 
         Args:
             signals: Список JSON данных сигналов
@@ -127,19 +138,24 @@ class AISignalFormatter:
             return []
 
         try:
+            logger.info(f"[Formatter] {'='*60}")
+            logger.info(f"[Formatter] 📝 FORMATTING {len(signals)} SIGNAL(S) VIA DEEPSEEK")
+            logger.info(f"[Formatter] {'='*60}")
+
             tasks = [self.format_signal(signal) for signal in signals]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             formatted_signals = []
             for idx, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Failed to format signal {idx}: {result}")
+                    logger.error(f"[Formatter] ❌ Failed to format signal {idx}: {result}")
                     continue
                 formatted_signals.append(result)
 
-            logger.info(f"Formatted {len(formatted_signals)}/{len(signals)} signals successfully")
+            logger.info(f"[Formatter] ✅ Formatted {len(formatted_signals)}/{len(signals)} signals successfully")
+            logger.info(f"[Formatter] {'='*60}")
             return formatted_signals
 
         except Exception as e:
-            logger.error(f"Error in batch formatting: {e}")
+            logger.error(f"[Formatter] ❌ Error in batch formatting: {e}")
             return []
