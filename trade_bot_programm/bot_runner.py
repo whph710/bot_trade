@@ -1,5 +1,5 @@
 """
-Trading Bot Runner - UPDATED: Red console output
+Trading Bot Runner - UPDATED: Optional Stage 3 delay
 Файл: trade_bot_programm/bot_runner.py
 """
 
@@ -123,7 +123,6 @@ class TradingBotRunner:
     async def stage2_ai_select(self, signal_pairs: list[Dict]) -> list[str]:
         """
         Stage 2: DeepSeek отбор пар (COMPACT multi-TF data)
-        FIXED: Передаем max_pairs явно
         """
         red_print("=" * 70)
         red_print(f"STAGE 2: DEEPSEEK ВЫБОР ПАР (COMPACT)")
@@ -205,7 +204,6 @@ class TradingBotRunner:
 
         self.last_haiku_call_time = time.time()
 
-        # КРИТИЧНО: Передаем max_pairs явно
         selected_pairs = await self.ai_router.select_pairs(
             ai_input_data,
             max_pairs=config.MAX_FINAL_PAIRS
@@ -225,7 +223,7 @@ class TradingBotRunner:
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """
-        Stage 3: Unified analysis (Sonnet или DeepSeek) with FULL data
+        Stage 3: Unified analysis with OPTIONAL delay
         """
         red_print("=" * 70)
         red_print(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} UNIFIED ANALYSIS (FULL)")
@@ -238,8 +236,8 @@ class TradingBotRunner:
             logger.warning("No pairs for analysis")
             return []
 
-        # ========== RATE LIMIT PROTECTION ==========
-        if self.last_haiku_call_time > 0:
+        # ========== OPTIONAL RATE LIMIT PROTECTION ==========
+        if config.CLAUDE_RATE_LIMIT_DELAY > 0 and self.last_haiku_call_time > 0:
             elapsed = time.time() - self.last_haiku_call_time
             required_delay = config.CLAUDE_RATE_LIMIT_DELAY
 
@@ -248,6 +246,9 @@ class TradingBotRunner:
                 red_print(f"⏳ Rate limit protection: Ожидание {wait_time:.1f}s перед Stage 3...")
                 logger.info(f"⏳ Rate limit protection: Waiting {wait_time:.1f}s before Stage 3...")
                 await asyncio.sleep(wait_time)
+        elif config.CLAUDE_RATE_LIMIT_DELAY == 0:
+            red_print(f"⚡ Rate limit protection DISABLED (CLAUDE_RATE_LIMIT_DELAY=0)")
+            logger.info(f"⚡ Rate limit protection DISABLED")
 
         # Загружаем BTC candles
         red_print(f"Загрузка BTC свечей: 1H({config.STAGE3_CANDLES_1H}), 4H({config.STAGE3_CANDLES_4H}), 1D({config.STAGE3_CANDLES_1D})")
@@ -443,7 +444,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
-            # Stage 3: Sonnet/DeepSeek анализ (с задержкой rate limit)
+            # Stage 3: Sonnet/DeepSeek анализ (с опциональной задержкой)
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
 
             if not preliminary_signals:

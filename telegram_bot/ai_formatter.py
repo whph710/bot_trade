@@ -1,25 +1,42 @@
 """
 AI форматтер для сигналов - использует DeepSeek для форматирования JSON в читаемый текст
-UPDATED: Использует FORMATTER_* конфиг
+FIXED: Исправлен импорт config
 Файл: telegram_bot/ai_formatter.py
 """
 
 import asyncio
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Dict, Any
 from openai import AsyncOpenAI
-import sys
 
-# Добавляем родительскую директорию в path для импорта config
+# Добавляем родительскую директорию в path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import config
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
 
 _prompt_cache = None
+
+
+# Загружаем переменные окружения напрямую
+def load_env():
+    """Загрузить .env файл"""
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
+
+
+# Загружаем переменные при импорте модуля
+load_env()
 
 
 def load_formatter_prompt() -> str:
@@ -53,11 +70,11 @@ class AISignalFormatter:
     """Форматирует сигналы через DeepSeek AI"""
 
     def __init__(self):
-        self.api_key = config.DEEPSEEK_API_KEY
-        self.model = config.FORMATTER_MODEL
-        self.base_url = config.DEEPSEEK_URL
-        self.temperature = config.FORMATTER_TEMPERATURE
-        self.max_tokens = config.FORMATTER_MAX_TOKENS
+        self.api_key = os.getenv('DEEPSEEK_API_KEY')
+        self.model = os.getenv('FORMATTER_MODEL', 'deepseek-chat')
+        self.base_url = os.getenv('DEEPSEEK_URL', 'https://api.deepseek.com')
+        self.temperature = float(os.getenv('FORMATTER_TEMPERATURE', '0.3'))
+        self.max_tokens = int(os.getenv('FORMATTER_MAX_TOKENS', '2000'))
 
         logger.info(f"[Formatter] ╔{'═'*60}╗")
         logger.info(f"[Formatter] ║ {'AI FORMATTER ИНИЦИАЛИЗАЦИЯ':^60} ║")
