@@ -1,16 +1,15 @@
 """
-Simple validator - OPTIMIZED LOGGING
+Simple validator - DEPRECATED
 Файл: trade_bot_programm/simple_validator.py
-ИЗМЕНЕНИЯ:
-- Удалён мёртвый код check_trading_hours (закомментированные блоки)
-- Упрощена функция до минимума
+
+МОДИФИКАЦИЯ: Stage 4 validation полностью удалён.
+Этот модуль сохранён только для совместимости с импортами.
+Вся валидация теперь происходит в Stage 3 (AI analysis).
 """
 
 from typing import Dict, List
 from datetime import datetime
 import pytz
-from validation_engine import ValidationEngine
-from shared_utils import fallback_validation
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
@@ -31,151 +30,39 @@ def check_trading_hours(perm_time=None) -> tuple[bool, str]:
 
 async def validate_signals_simple(ai_router, preliminary_signals: List[Dict]) -> Dict:
     """
-    Simple validation - Stage 4 removed, only fallback validation
+    DEPRECATED: Stage 4 validation removed
+
+    Этот метод теперь просто возвращает сигналы без валидации,
+    т.к. вся валидация происходит в Stage 3.
+
+    Returns:
+        {
+            'validated': preliminary_signals (as is),
+            'rejected': []
+        }
     """
 
     if not preliminary_signals:
-        logger.warning("No preliminary signals for validation")
+        logger.warning("No signals received for 'validation' (deprecated)")
         return {
             'validated': [],
             'rejected': []
         }
 
-    validated = []
-    rejected = []
+    logger.info(f"Stage 4 validation SKIPPED (deprecated). Passing {len(preliminary_signals)} signal(s) as is.")
 
-    logger.info(f"Validating {len(preliminary_signals)} signal(s) (fallback mode)")
-
-    for signal in preliminary_signals:
-        try:
-            symbol = signal['symbol']
-            signal_type = signal.get('signal', 'UNKNOWN')
-            confidence = signal.get('confidence', 0)
-            comprehensive_data = signal.get('comprehensive_data', {})
-
-            logger.debug(f"Validating {symbol}: {signal_type} ({confidence}%)")
-
-            # ValidationEngine pre-checks
-            passed, reasons = ValidationEngine.run_all_checks(signal, comprehensive_data)
-
-            if not passed:
-                logger.info(f"✗ {symbol}: BLOCKED - {'; '.join(reasons)}")
-                rejected.append({
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'rejection_reason': '; '.join(reasons),
-                    'entry_price': signal.get('entry_price', 0),
-                    'stop_loss': signal.get('stop_loss', 0),
-                    'take_profit_levels': signal.get('take_profit_levels', [0, 0, 0]),
-                    'timestamp': datetime.now().isoformat()
-                })
-                continue
-
-            # Fallback validation
-            logger.debug(f"✓ {symbol}: Passed pre-checks, using fallback validation")
-
-            validation_result = fallback_validation(signal, comprehensive_data)
-
-            # Normalize take_profit_levels
-            tp_levels = validation_result.get('take_profit_levels', signal.get('take_profit_levels', [0, 0, 0]))
-
-            if not isinstance(tp_levels, list):
-                tp_levels = [float(tp_levels), float(tp_levels) * 1.1, float(tp_levels) * 1.2]
-            elif len(tp_levels) < 3:
-                while len(tp_levels) < 3:
-                    last_tp = tp_levels[-1] if tp_levels else 0
-                    tp_levels.append(last_tp * 1.1)
-
-            if validation_result.get('approved', False):
-                rr_ratio = validation_result.get('risk_reward_ratio', 0)
-
-                # Ensure market_conditions and key_levels exist
-                market_conditions = validation_result.get('market_conditions', '').strip()
-                key_levels = validation_result.get('key_levels', '').strip()
-
-                if not market_conditions:
-                    market_data = comprehensive_data.get('market_data', {})
-                    funding = market_data.get('funding_rate', {})
-                    oi = market_data.get('open_interest', {})
-                    orderbook = market_data.get('orderbook', {})
-
-                    funding_rate = funding.get('funding_rate', 0) if funding else 0
-                    oi_trend = oi.get('oi_trend', 'UNKNOWN') if oi else 'UNKNOWN'
-                    spread_pct = orderbook.get('spread_pct', 0) if orderbook else 0
-
-                    market_conditions = f"Funding: {funding_rate:.4f}%, OI: {oi_trend}, Spread: {spread_pct:.4f}%"
-
-                if not key_levels:
-                    entry = validation_result.get('entry_price', signal['entry_price'])
-                    stop = validation_result.get('stop_loss', signal['stop_loss'])
-                    key_levels = f"Entry: ${entry:.4f}, Stop: ${stop:.4f}, TP1: ${tp_levels[0]:.4f}, TP2: ${tp_levels[1]:.4f}, TP3: ${tp_levels[2]:.4f}"
-
-                validated_signal = {
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'confidence': validation_result.get('confidence', confidence),
-                    'entry_price': validation_result.get('entry_price', signal['entry_price']),
-                    'stop_loss': validation_result.get('stop_loss', signal['stop_loss']),
-                    'take_profit_levels': tp_levels,
-                    'analysis': signal.get('analysis', ''),
-                    'risk_reward_ratio': rr_ratio,
-                    'hold_duration_minutes': validation_result.get('hold_duration_minutes', 720),
-                    'validation_notes': validation_result.get('validation_notes', 'Fallback validation passed'),
-                    'market_conditions': market_conditions,
-                    'key_levels': key_levels,
-                    'validation_method': validation_result.get('validation_method', 'fallback_enhanced'),
-                    'timestamp': signal.get('timestamp', datetime.now().isoformat())
-                }
-                validated.append(validated_signal)
-
-                logger.info(f"✓ {symbol}: APPROVED | R/R: {rr_ratio:.2f}:1 | Duration: {validation_result.get('hold_duration_minutes', 720)}min")
-
-            else:
-                rejection_reason = validation_result.get('rejection_reason', 'Fallback validation failed')
-
-                rejected_signal = {
-                    'symbol': symbol,
-                    'signal': signal_type,
-                    'original_confidence': confidence,
-                    'entry_price': validation_result.get('entry_price', signal.get('entry_price', 0)),
-                    'stop_loss': validation_result.get('stop_loss', signal.get('stop_loss', 0)),
-                    'take_profit_levels': tp_levels,
-                    'rejection_reason': rejection_reason,
-                    'timestamp': signal.get('timestamp', datetime.now().isoformat())
-                }
-                rejected.append(rejected_signal)
-
-                logger.info(f"✗ {symbol}: REJECTED | {rejection_reason}")
-
-        except Exception as e:
-            logger.error(f"Validation error for {signal['symbol']}: {e}")
-
-            tp_levels = signal.get('take_profit_levels', [0, 0, 0])
-            if not isinstance(tp_levels, list):
-                tp_levels = [0, 0, 0]
-
-            rejected.append({
-                'symbol': signal['symbol'],
-                'signal': signal.get('signal', 'UNKNOWN'),
-                'original_confidence': signal.get('confidence', 0),
-                'entry_price': signal.get('entry_price', 0),
-                'stop_loss': signal.get('stop_loss', 0),
-                'take_profit_levels': tp_levels,
-                'rejection_reason': f'Exception: {str(e)[:60]}',
-                'timestamp': signal.get('timestamp', datetime.now().isoformat())
-            })
-
-    logger.info(f"Validation complete: {len(validated)} approved, {len(rejected)} rejected")
-
+    # Просто возвращаем сигналы без изменений
     return {
-        'validated': validated,
-        'rejected': rejected
+        'validated': preliminary_signals,
+        'rejected': []
     }
 
 
 def calculate_validation_stats(validated: List[Dict], rejected: List[Dict]) -> Dict:
-    """Calculate validation statistics"""
+    """
+    Calculate validation statistics
+    DEPRECATED: Stage 4 removed, но метод сохранён для совместимости
+    """
     total = len(validated) + len(rejected)
 
     if total == 0:

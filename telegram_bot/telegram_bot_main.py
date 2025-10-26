@@ -1,4 +1,4 @@
-# telegram_bot_main.py - UPDATED: DeepSeek форматирование ВСЕГДА
+# telegram_bot_main.py - NO STAGE 4 VALIDATION
 import asyncio
 import logging
 from datetime import datetime
@@ -21,7 +21,7 @@ from telegram_bot.result_formatter import (
     send_formatted_signals_to_group,
     send_group_message_safe
 )
-# МОДИФИКАЦИЯ: AI Formatter для DeepSeek
+# AI Formatter для DeepSeek
 from telegram_bot.ai_formatter import AISignalFormatter
 from telegram_bot.stats_manager import StatsManager
 
@@ -37,7 +37,7 @@ class TradingBotTelegram:
         self.bot = Bot(token=TG_TOKEN)
         self.dp = Dispatcher()
         self.schedule_manager = ScheduleManager()
-        self.ai_formatter = AISignalFormatter()  # ВСЕГДА DeepSeek
+        self.ai_formatter = AISignalFormatter()
         self.stats_manager = StatsManager()
         self.trading_bot_running = False
         self._typing_task = None
@@ -141,10 +141,11 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
+            # МОДИФИКАЦИЯ: Проверяем validated_signals напрямую (Stage 4 убран)
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
             else:
-                logger.info("ℹ️ No validated signals to post")
+                logger.info("ℹ️ No approved signals to post")
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -158,27 +159,27 @@ class TradingBotTelegram:
     async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
         """
         Форматирование через DeepSeek AI и публикация в группу
-        МОДИФИКАЦИЯ: ВСЕГДА используется DeepSeek для форматирования
+        МОДИФИКАЦИЯ: Stage 4 убран, сигналы готовы после Stage 3
         """
         try:
-            validated_signals = result.get('validated_signals', [])
+            # МОДИФИКАЦИЯ: Сигналы уже одобрены в Stage 3
+            approved_signals = result.get('validated_signals', [])
 
-            if not validated_signals:
-                logger.info("No validated signals to post")
+            if not approved_signals:
+                logger.info("No approved signals to post")
                 return
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"📝 <b>Форматирую {len(validated_signals)} сигнал(ов) через DeepSeek AI...</b>",
+                text=f"📝 <b>Форматирую {len(approved_signals)} сигнал(ов) через DeepSeek AI...</b>",
                 parse_mode="HTML"
             )
 
             await self._start_typing_indicator(TG_CHAT_ID)
 
             try:
-                # МОДИФИКАЦИЯ: Используем DeepSeek AI formatter
-                logger.info(f"Formatting {len(validated_signals)} signals via DeepSeek AI...")
-                formatted_signals = await self.ai_formatter.format_multiple_signals(validated_signals)
+                logger.info(f"Formatting {len(approved_signals)} signals via DeepSeek AI...")
+                formatted_signals = await self.ai_formatter.format_multiple_signals(approved_signals)
             finally:
                 await self._stop_typing_indicator()
 
@@ -199,11 +200,11 @@ class TradingBotTelegram:
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу (DeepSeek AI)</b>",
+                text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу</b>",
                 parse_mode="HTML"
             )
 
-            logger.info(f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID} (DeepSeek AI formatted)")
+            logger.info(f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID}")
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -229,6 +230,7 @@ class TradingBotTelegram:
             f"🟢 Планировщик: активен\n"
             f"📍 Группа: {TG_CHAT_ID}\n"
             f"🤖 Форматирование: DeepSeek AI\n"
+            f"⚡ Валидация: Stage 3 (встроенная)\n"
         )
 
         await self.bot.send_message(
@@ -287,7 +289,7 @@ class TradingBotTelegram:
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
             else:
-                logger.info("ℹ️ No validated signals in this cycle")
+                logger.info("ℹ️ No approved signals in this cycle")
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -306,7 +308,7 @@ class TradingBotTelegram:
         self.stats_manager.cleanup_old_daily_stats(days_to_keep=30)
 
         self.schedule_manager.setup_schedule(self.bot, self.schedule_callback)
-        logger.info("✅ Telegram bot setup complete (DeepSeek AI formatter)")
+        logger.info("✅ Telegram bot setup complete (3-stage pipeline, DeepSeek formatter)")
 
         try:
             await self.dp.start_polling(self.bot, allowed_updates=["message"])

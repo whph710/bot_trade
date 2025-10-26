@@ -1,6 +1,6 @@
 """
 Упрощенный result_formatter.py - базовое форматирование результатов
-AI форматирование вынесено в ai_formatter.py
+МОДИФИКАЦИЯ: Stage 4 убран, термины изменены
 """
 
 from typing import Dict, Any
@@ -21,11 +21,11 @@ def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) 
 
     emoji_map = {
         'SUCCESS': '✅',
-        'NO_VALIDATED_SIGNALS': '⚠️',
+        'NO_APPROVED_SIGNALS': '⚠️',
         'NO_SIGNAL_PAIRS': '❌',
         'NO_AI_SELECTION': '❌',
-        'NO_ANALYSIS_SIGNALS': '❌',
-        'VALIDATION_SKIPPED': '⏱️',
+        'NO_ANALYSIS_SIGNALS': '❌',  # Новое название
+        'TRADING_HOURS_BLOCKED': '⏱️',
         'ERROR': '💥'
     }
 
@@ -41,8 +41,7 @@ def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) 
     result_text += f"  • Сигналов найдено: {stats.get('signal_pairs_found', 0)}\n"
     result_text += f"  • AI отобрал: {stats.get('ai_selected', 0)}\n"
     result_text += f"  • Проанализировано: {stats.get('analyzed', 0)}\n"
-    result_text += f"  • ✅ Одобрено: {stats.get('validated_signals', 0)}\n"
-    result_text += f"  • ❌ Отклонено: {stats.get('rejected_signals', 0)}\n"
+    result_text += f"  • ✅ Одобрено (Stage 3): {stats.get('approved_signals', 0)}\n"
 
     if stats.get('processing_speed'):
         result_text += f"  • Скорость: {stats.get('processing_speed', 0):.1f} пар/сек\n"
