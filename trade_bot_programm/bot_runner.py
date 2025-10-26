@@ -1,6 +1,11 @@
 """
-Trading Bot Runner - UPDATED: Improved 1D data validation
+Trading Bot Runner - OPTIMIZED LOGGING
 Файл: trade_bot_programm/bot_runner.py
+ИЗМЕНЕНИЯ:
+- Удалены все red_print() и print()
+- Оставлен только logger
+- Убраны дублирующиеся сообщения
+- Упрощены заголовки Stage
 """
 
 import asyncio
@@ -19,18 +24,12 @@ from func_trade import calculate_basic_indicators, calculate_ai_indicators, chec
 from ai_router import AIRouter
 from simple_validator import validate_signals_simple, calculate_validation_stats
 from data_storage import storage
-from logging_config import setup_module_logger, ColorCodes
+from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
 
 # Глобальный экземпляр AI Router
 ai_router = AIRouter()
-
-
-def red_print(*args, **kwargs):
-    """Print в красном цвете"""
-    message = ' '.join(map(str, args))
-    print(f"{ColorCodes.RED}{message}{ColorCodes.RESET}", **kwargs)
 
 
 class TradingBotRunner:
@@ -47,7 +46,7 @@ class TradingBotRunner:
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
-        logger.debug(f"Loading candles for {len(pairs)} pairs (interval: {interval}, limit: {limit})")
+        logger.debug(f"Loading candles: {len(pairs)} pairs, interval={interval}, limit={limit}")
 
         requests = [{'symbol': pair, 'interval': interval, 'limit': limit} for pair in pairs]
         results = await batch_fetch_klines(requests)
@@ -60,16 +59,13 @@ class TradingBotRunner:
                 if validate_candles(klines, 20):
                     candles_map[symbol] = klines
 
-        logger.debug(f"Loaded candles for {len(candles_map)}/{len(pairs)} pairs")
+        logger.debug(f"Loaded candles: {len(candles_map)}/{len(pairs)} pairs")
         return candles_map
 
     async def stage1_filter_signals(self) -> list[Dict]:
         """Stage 1: Base signal filtering"""
-        red_print("=" * 70)
-        red_print("STAGE 1: ФИЛЬТРАЦИЯ ПО ИНДИКАТОРАМ")
-        red_print("=" * 70)
         logger.info("=" * 70)
-        logger.info("STAGE 1: Signal filtering")
+        logger.info("STAGE 1: SIGNAL FILTERING")
         logger.info("=" * 70)
 
         pairs = await get_trading_pairs()
@@ -77,12 +73,9 @@ class TradingBotRunner:
             logger.error("Failed to get trading pairs")
             return []
 
-        red_print(f"Найдено {len(pairs)} торговых пар")
         logger.info(f"Found {len(pairs)} trading pairs")
 
         candles_map = await self.load_candles_batch(pairs, config.TIMEFRAME_LONG, config.QUICK_SCAN_CANDLES)
-
-        red_print(f"Загружены свечи для {len(candles_map)} пар")
         logger.info(f"Loaded candles for {len(candles_map)} pairs")
 
         if not candles_map:
@@ -107,7 +100,7 @@ class TradingBotRunner:
                         'direction': signal_check['direction'],
                         'base_indicators': indicators
                     })
-                    logger.debug(f"Signal found: {symbol} {signal_check['direction']} ({signal_check['confidence']}%)")
+                    logger.debug(f"Signal: {symbol} {signal_check['direction']} ({signal_check['confidence']}%)")
 
             except Exception as e:
                 logger.debug(f"Error processing {symbol}: {e}")
@@ -116,19 +109,13 @@ class TradingBotRunner:
         pairs_with_signals.sort(key=lambda x: x['confidence'], reverse=True)
         self.signal_pairs_count = len(pairs_with_signals)
 
-        red_print(f"Stage 1 завершен: {self.processed_pairs} отсканировано, {self.signal_pairs_count} сигналов найдено")
         logger.info(f"Stage 1 complete: {self.processed_pairs} scanned, {self.signal_pairs_count} signals found")
         return pairs_with_signals
 
     async def stage2_ai_select(self, signal_pairs: list[Dict]) -> list[str]:
-        """
-        Stage 2: DeepSeek отбор пар (COMPACT multi-TF data)
-        """
-        red_print("=" * 70)
-        red_print(f"STAGE 2: DEEPSEEK ВЫБОР ПАР (COMPACT)")
-        red_print("=" * 70)
+        """Stage 2: AI pair selection (COMPACT multi-TF data)"""
         logger.info("=" * 70)
-        logger.info(f"STAGE 2: {config.STAGE2_PROVIDER.upper()} pair selection (COMPACT)")
+        logger.info(f"STAGE 2: {config.STAGE2_PROVIDER.upper()} PAIR SELECTION")
         logger.info("=" * 70)
 
         if not signal_pairs:
@@ -137,7 +124,6 @@ class TradingBotRunner:
 
         symbols = [p['symbol'] for p in signal_pairs]
 
-        red_print(f"Загрузка компактных данных: 1H({config.STAGE2_CANDLES_1H}), 4H({config.STAGE2_CANDLES_4H}), 1D({config.STAGE2_CANDLES_1D})")
         logger.debug(f"Loading compact data: 1H({config.STAGE2_CANDLES_1H}), 4H({config.STAGE2_CANDLES_4H}), 1D({config.STAGE2_CANDLES_1D})")
 
         candles_1h_map = await self.load_candles_batch(symbols, config.TIMEFRAME_SHORT, config.STAGE2_CANDLES_1H)
@@ -199,8 +185,7 @@ class TradingBotRunner:
             logger.warning("No valid AI input data prepared")
             return []
 
-        red_print(f"Отправка {len(ai_input_data)} пар в DeepSeek для отбора (лимит: {config.MAX_FINAL_PAIRS})")
-        logger.info(f"Sending {len(ai_input_data)} pairs to {config.STAGE2_PROVIDER} for selection (limit: {config.MAX_FINAL_PAIRS})")
+        logger.info(f"Sending {len(ai_input_data)} pairs to AI (limit: {config.MAX_FINAL_PAIRS})")
 
         self.last_haiku_call_time = time.time()
 
@@ -211,47 +196,35 @@ class TradingBotRunner:
         self.ai_selected_count = len(selected_pairs)
 
         if selected_pairs:
-            red_print(f"Stage 2 завершен: {self.ai_selected_count} пар выбрано")
-            logger.info(f"Stage 2 complete: {self.ai_selected_count} pairs selected")
-            for pair in selected_pairs:
-                red_print(f"  ✓ {pair}")
-                logger.debug(f"  ✓ {pair}")
+            logger.info(f"Stage 2 complete: {self.ai_selected_count} pairs selected - {selected_pairs}")
         else:
             logger.warning("Stage 2: No pairs selected by AI")
 
         return selected_pairs
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
-        """
-        Stage 3: Unified analysis with IMPROVED 1D data check
-        """
-        red_print("=" * 70)
-        red_print(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} UNIFIED ANALYSIS (FULL)")
-        red_print("=" * 70)
+        """Stage 3: Unified analysis"""
         logger.info("=" * 70)
-        logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} unified analysis (FULL)")
+        logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} UNIFIED ANALYSIS")
         logger.info("=" * 70)
 
         if not selected_pairs:
             logger.warning("No pairs for analysis")
             return []
 
-        # ========== OPTIONAL RATE LIMIT PROTECTION ==========
+        # Rate limit protection
         if config.CLAUDE_RATE_LIMIT_DELAY > 0 and self.last_haiku_call_time > 0:
             elapsed = time.time() - self.last_haiku_call_time
             required_delay = config.CLAUDE_RATE_LIMIT_DELAY
 
             if elapsed < required_delay:
                 wait_time = required_delay - elapsed
-                red_print(f"⏳ Rate limit protection: Ожидание {wait_time:.1f}s перед Stage 3...")
-                logger.info(f"⏳ Rate limit protection: Waiting {wait_time:.1f}s before Stage 3...")
+                logger.info(f"Rate limit protection: waiting {wait_time:.1f}s before Stage 3")
                 await asyncio.sleep(wait_time)
         elif config.CLAUDE_RATE_LIMIT_DELAY == 0:
-            red_print(f"⚡ Rate limit protection DISABLED (CLAUDE_RATE_LIMIT_DELAY=0)")
-            logger.info(f"⚡ Rate limit protection DISABLED")
+            logger.info("Rate limit protection: DISABLED")
 
-        # Загружаем BTC candles
-        red_print(f"Загрузка BTC свечей: 1H({config.STAGE3_CANDLES_1H}), 4H({config.STAGE3_CANDLES_4H}), 1D({config.STAGE3_CANDLES_1D})")
+        # Load BTC candles
         logger.debug(f"Loading BTC candles: 1H({config.STAGE3_CANDLES_1H}), 4H({config.STAGE3_CANDLES_4H}), 1D({config.STAGE3_CANDLES_1D})")
 
         btc_candles_1h, btc_candles_4h, btc_candles_1d = await asyncio.gather(
@@ -265,20 +238,17 @@ class TradingBotRunner:
             return []
 
         if not btc_candles_1d:
-            red_print("⚠️ BTC 1D свечи недоступны (некритично)")
-            logger.warning("⚠️ BTC 1D candles not available (non-critical)")
+            logger.warning("BTC 1D candles not available (non-critical)")
         else:
-            red_print(f"✓ BTC свечи загружены: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d)} (1D)")
-            logger.debug(f"✓ BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d)} (1D)")
+            logger.debug(f"BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d)} (1D)")
 
         final_signals = []
 
         for symbol in selected_pairs:
             try:
-                red_print(f"Анализ {symbol}...")
                 logger.info(f"Analyzing {symbol}...")
 
-                # Загружаем таймфреймы
+                # Load timeframes
                 klines_1h, klines_4h, klines_1d = await asyncio.gather(
                     fetch_klines(symbol, config.TIMEFRAME_SHORT, config.STAGE3_CANDLES_1H),
                     fetch_klines(symbol, config.TIMEFRAME_LONG, config.STAGE3_CANDLES_4H),
@@ -286,24 +256,19 @@ class TradingBotRunner:
                 )
 
                 if not klines_1h or not klines_4h:
-                    red_print(f"{symbol}: Отсутствуют 1H/4H данные - ПРОПУСК")
-                    logger.warning(f"{symbol}: Missing 1H/4H data (critical) - SKIP")
+                    logger.warning(f"{symbol}: Missing 1H/4H data - SKIP")
                     continue
 
-                # ИСПРАВЛЕНО: Проверяем достаточность 1D данных для EMA
-                # Для EMA21 нужно минимум 25-30 свечей
+                # Check 1D data sufficiency
                 has_1d_data = False
                 if klines_1d and validate_candles(klines_1d, 20):
-                    if len(klines_1d) >= 25:  # НОВОЕ: минимум для надежных EMA
+                    if len(klines_1d) >= 25:
                         has_1d_data = True
-                        red_print(f"{symbol}: ✓ 1D данные достаточны ({len(klines_1d)} свечей)")
-                        logger.debug(f"{symbol}: ✓ 1D data sufficient ({len(klines_1d)} candles)")
+                        logger.debug(f"{symbol}: 1D data sufficient ({len(klines_1d)} candles)")
                     else:
-                        red_print(f"{symbol}: 1D данные есть, но недостаточно ({len(klines_1d)} < 25), используем 4H как основной TF")
-                        logger.info(f"{symbol}: 1D data present but insufficient ({len(klines_1d)} < 25 candles), using 4H as major TF")
-                        klines_1d = []  # Очищаем чтобы не путать AI
+                        logger.info(f"{symbol}: 1D data insufficient ({len(klines_1d)} < 25), using 4H as major TF")
+                        klines_1d = []
                 else:
-                    red_print(f"{symbol}: Нет 1D данных, используем 4H как основной TF")
                     logger.info(f"{symbol}: No 1D data, using 4H as major TF")
                     klines_1d = []
 
@@ -314,23 +279,20 @@ class TradingBotRunner:
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
                 indicators_4h = calculate_ai_indicators(klines_4h, config.FINAL_INDICATORS_HISTORY)
 
-                # Индикаторы 1D только если достаточно данных
+                # 1D indicators only if sufficient data
                 indicators_1d = {}
                 if has_1d_data:
                     try:
                         indicators_1d = calculate_ai_indicators(klines_1d, min(20, len(klines_1d)))
                         if indicators_1d:
-                            red_print(f"{symbol}: ✓ 1D индикаторы рассчитаны")
-                            logger.debug(f"{symbol}: ✓ 1D indicators calculated")
+                            logger.debug(f"{symbol}: 1D indicators calculated")
                         else:
-                            red_print(f"{symbol}: ⚠️ Не удалось рассчитать 1D индикаторы")
                             logger.warning(f"{symbol}: Failed to calculate 1D indicators")
-                            has_1d_data = False  # Сбрасываем флаг
+                            has_1d_data = False
                     except Exception as e:
-                        red_print(f"{symbol}: ⚠️ Ошибка расчета 1D индикаторов: {e}")
-                        logger.debug(f"{symbol}: Failed to calculate 1D indicators: {e}")
+                        logger.debug(f"{symbol}: 1D indicators error: {e}")
                         indicators_1d = {}
-                        has_1d_data = False  # Сбрасываем флаг
+                        has_1d_data = False
 
                 if not indicators_1h or not indicators_4h:
                     logger.warning(f"{symbol}: 1H/4H indicators calculation failed - SKIP")
@@ -356,11 +318,11 @@ class TradingBotRunner:
                     'symbol': symbol,
                     'candles_1h': klines_1h,
                     'candles_4h': klines_4h,
-                    'candles_1d': klines_1d,  # Пустой если недостаточно
+                    'candles_1d': klines_1d,
                     'indicators_1h': indicators_1h,
                     'indicators_4h': indicators_4h,
-                    'indicators_1d': indicators_1d,  # Пустой если недостаточно
-                    'has_1d_data': has_1d_data,  # КРИТИЧНО: точный флаг
+                    'indicators_1d': indicators_1d,
+                    'has_1d_data': has_1d_data,
                     'current_price': current_price,
                     'market_data': market_snapshot,
                     'correlation_data': corr_analysis,
@@ -384,15 +346,11 @@ class TradingBotRunner:
                     self.analysis_data_cache[symbol] = comprehensive_data
 
                     tp_levels = analysis.get('take_profit_levels', [0, 0, 0])
-                    red_print(f"✓ СИГНАЛ СГЕНЕРИРОВАН: {symbol} {signal_type} (confidence: {confidence}%)")
-                    logger.info(f"✓ SIGNAL GENERATED: {symbol} {signal_type} (confidence: {confidence}%)")
-                    red_print(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
-                    red_print(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
+                    logger.info(f"✓ SIGNAL: {symbol} {signal_type} (confidence: {confidence}%)")
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
                     logger.debug(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
                 else:
                     rejection_reason = analysis.get('rejection_reason', 'Low confidence')
-                    red_print(f"✗ NO_SIGNAL: {symbol} - {rejection_reason}")
                     logger.info(f"✗ NO_SIGNAL: {symbol} - {rejection_reason}")
 
             except Exception as e:
@@ -400,12 +358,11 @@ class TradingBotRunner:
                 continue
 
         self.analyzed_count = len(final_signals)
-        red_print(f"Stage 3 завершен: {len(final_signals)} сигналов сгенерировано")
         logger.info(f"Stage 3 complete: {len(final_signals)} signals generated")
         return final_signals
 
     def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
-        """Добавляет данные анализа к сигналу"""
+        """Добавить данные анализа к сигналу"""
         symbol = signal.get('symbol')
         if symbol not in self.analysis_data_cache:
             return signal
@@ -430,16 +387,9 @@ class TradingBotRunner:
         return signal
 
     async def run_cycle(self) -> Dict[str, Any]:
-        """
-        Запуск полного цикла бота
-        """
-        import time
+        """Запуск полного цикла бота"""
         cycle_start = time.time()
         cycle_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        red_print("\n" + "=" * 70)
-        red_print("🚀 TRADING BOT CYCLE STARTED")
-        red_print("=" * 70 + "\n")
 
         logger.info("╔" + "=" * 68 + "╗")
         logger.info("║" + " TRADING BOT CYCLE STARTED".center(68) + "║")
@@ -454,7 +404,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_SIGNAL_PAIRS', total_time, [], [])
 
-            # Stage 2: DeepSeek отбор
+            # Stage 2: AI отбор
             selected_pairs = await self.stage2_ai_select(signal_pairs)
 
             if not selected_pairs:
@@ -462,7 +412,7 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
-            # Stage 3: Sonnet/DeepSeek анализ (с опциональной задержкой)
+            # Stage 3: AI анализ
             preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
 
             if not preliminary_signals:
@@ -470,12 +420,9 @@ class TradingBotRunner:
                 total_time = time.time() - cycle_start
                 return self._build_result('NO_ANALYSIS_SIGNALS', total_time, [], [])
 
-            # Валидация через fallback
-            red_print("=" * 70)
-            red_print("STAGE 4: VALIDATION (Fallback)")
-            red_print("=" * 70)
+            # Валидация
             logger.info("=" * 70)
-            logger.info("STAGE 4: Validation (Fallback)")
+            logger.info("STAGE 4: VALIDATION (Fallback)")
             logger.info("=" * 70)
 
             validation_result = await validate_signals_simple(self.ai_router, preliminary_signals)
@@ -485,7 +432,7 @@ class TradingBotRunner:
 
             total_time = time.time() - cycle_start
 
-            # Сохраняем данные в storage
+            # Сохранение данных
             if validated:
                 enriched_validated = [self._enrich_signal_with_analysis_data(sig) for sig in validated]
 
@@ -501,17 +448,12 @@ class TradingBotRunner:
                 rejected
             )
 
-            # Сохраняем дневную статистику
+            # Сохранение статистики
             storage.save_daily_statistics(result['stats'])
 
-            # Cleanup раз в день в полночь
+            # Cleanup старых данных
             if datetime.now().hour == 0:
                 storage.cleanup_old_data(days_to_keep=90)
-
-            red_print("╔" + "=" * 68 + "╗")
-            red_print(f"║ CYCLE COMPLETE: {result['result']}".ljust(69) + "║")
-            red_print(f"║ Time: {total_time:.1f}s | Signals: {len(validated)} approved, {len(rejected)} rejected".ljust(69) + "║")
-            red_print("╚" + "=" * 68 + "╝")
 
             logger.info("╔" + "=" * 68 + "╗")
             logger.info(f"║ CYCLE COMPLETE: {result['result']}".ljust(69) + "║")
@@ -529,7 +471,7 @@ class TradingBotRunner:
             await cleanup_api()
 
     def _build_stats(self, total_time: float) -> Dict:
-        """Helper для построения stats"""
+        """Построить статистику"""
         return {
             'pairs_scanned': self.processed_pairs,
             'signal_pairs_found': self.signal_pairs_count,
@@ -542,7 +484,7 @@ class TradingBotRunner:
 
     def _build_result(self, result_type: str, total_time: float, validated: list, rejected: list,
                       error: str = None) -> Dict:
-        """Helper для построения result"""
+        """Построить результат"""
         stats = self._build_stats(total_time)
         stats['validated_signals'] = len(validated)
         stats['rejected_signals'] = len(rejected)
@@ -563,7 +505,7 @@ class TradingBotRunner:
 
 
 async def run_trading_bot() -> Dict[str, Any]:
-    """Главная функция для запуска торгового бота"""
+    """Главная функция запуска бота"""
     bot = TradingBotRunner()
     result = await bot.run_cycle()
     return result

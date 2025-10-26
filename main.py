@@ -1,7 +1,9 @@
 """
-Main Entry Point - Orchestrator для всех модулей
-Интегрирован с Telegram ботом
-МОДИФИКАЦИЯ: Добавлен pre-check trading hours
+Main Entry Point - OPTIMIZED LOGGING
+Файл: main.py
+ИЗМЕНЕНИЯ:
+- Удалены избыточные print() и red_print()
+- Оставлен только logger
 """
 
 import asyncio
@@ -9,7 +11,6 @@ import sys
 import argparse
 from pathlib import Path
 
-# Добавить папку с ботом в PATH
 BOT_DIR = Path(__file__).parent / "trade_bot_programm"
 sys.path.insert(0, str(BOT_DIR))
 
@@ -22,15 +23,14 @@ logger = setup_module_logger(__name__)
 async def run_trading_bot_cycle():
     """
     Выполняет один цикл работы бота с pre-checks
-    МОДИФИКАЦИЯ: Добавлена проверка trading hours ПЕРЕД запуском
     """
     from simple_validator import check_trading_hours
     from datetime import datetime
 
-    # КРИТИЧНО: Проверяем trading hours ПЕРЕД запуском любых операций
+    # Check trading hours before starting
     time_allowed, time_reason = check_trading_hours()
     if not time_allowed:
-        logger.warning(f"⏰ Trading hours blocked: {time_reason}")
+        logger.warning(f"Trading hours blocked: {time_reason}")
         return {
             'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
             'result': 'TRADING_HOURS_BLOCKED',
@@ -46,16 +46,13 @@ async def run_trading_bot_cycle():
             }
         }
 
-    # Proceed with bot cycle
     from bot_runner import run_trading_bot
     result = await run_trading_bot()
     return result
 
 
 async def run_telegram_bot():
-    """
-    Запустить Telegram бота
-    """
+    """Запустить Telegram бота"""
     try:
         from telegram_bot.telegram_bot_main import run_telegram_bot
 
@@ -95,8 +92,7 @@ if __name__ == "__main__":
 
     try:
         if args.mode == 'once':
-            # Запустить один цикл торгового бота
-            logger.info("🚀 Running trading bot ONCE")
+            logger.info("Running trading bot ONCE")
             result = asyncio.run(main_single_cycle())
 
             if result.get('result') in ['SUCCESS', 'NO_VALIDATED_SIGNALS', 'TRADING_HOURS_BLOCKED']:
@@ -105,12 +101,11 @@ if __name__ == "__main__":
                 sys.exit(1)
 
         else:  # telegram mode (default)
-            # Запустить Telegram бота с расписанием
-            logger.info("🤖 Starting Telegram Bot with schedule")
+            logger.info("Starting Telegram Bot with schedule")
             asyncio.run(main_telegram())
 
     except KeyboardInterrupt:
-        print("\n⏹️  Bot stopped by user")
+        logger.info("Bot stopped by user")
         sys.exit(0)
 
     except Exception as e:

@@ -1,6 +1,10 @@
 """
-DeepSeek AI клиент - UPDATED: Added chat() method
+DeepSeek AI клиент - OPTIMIZED LOGGING
 Файл: trade_bot_programm/deepseek.py
+ИЗМЕНЕНИЯ:
+- Удалены все print() в пользу logger
+- Упрощены ASCII-рамки инициализации
+- Убраны избыточные debug-сообщения
 """
 
 import os
@@ -8,6 +12,9 @@ import json
 from openai import AsyncOpenAI
 from typing import Optional, Dict, List
 from pathlib import Path
+from logging_config import setup_module_logger
+
+logger = setup_module_logger(__name__)
 
 
 def load_prompt_unified(prompt_file: str) -> str:
@@ -23,12 +30,11 @@ def load_prompt_unified(prompt_file: str) -> str:
         if path.exists() and path.is_file():
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                print(f"[DeepSeek] 📄 Промпт загружен: {path.name} ({len(content)} символов)")
+                logger.debug(f"Prompt loaded: {path.name} ({len(content)} chars)")
                 return content
 
-    error_msg = f"Промпт файл '{prompt_file}' не найден. Искал в:\n"
-    for path in search_paths:
-        error_msg += f"  - {path.absolute()}\n"
+    error_msg = f"Prompt file '{prompt_file}' not found in search paths"
+    logger.error(error_msg)
     raise FileNotFoundError(error_msg)
 
 
@@ -44,7 +50,7 @@ class DeepSeekClient:
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         if not self.api_key:
-            raise ValueError("DEEPSEEK_API_KEY не задан в .env")
+            raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
         self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
@@ -54,8 +60,7 @@ class DeepSeekClient:
         self.is_reasoning_model = "reasoner" in self.model.lower() or self.model == "deepseek-reasoner"
 
         if self.use_reasoning and not self.is_reasoning_model:
-            print(f"[DeepSeek] ⚠️  ВНИМАНИЕ: DEEPSEEK_REASONING=true, но модель {self.model} не поддерживает reasoning")
-            print(f"[DeepSeek] 🔄 Автоматически отключаем reasoning режим")
+            logger.warning(f"DEEPSEEK_REASONING=true but model {self.model} doesn't support reasoning - disabling")
             self.use_reasoning = False
 
         self.client = AsyncOpenAI(
@@ -65,17 +70,10 @@ class DeepSeekClient:
 
         self.prompts_cache: Dict[str, str] = {}
 
-        print(f"[DeepSeek] ╔{'═'*60}╗")
-        print(f"[DeepSeek] ║ {'ИНИЦИАЛИЗАЦИЯ DEEPSEEK':^60} ║")
-        print(f"[DeepSeek] ╠{'═'*60}╣")
-        print(f"[DeepSeek] ║ Модель: {self.model:<49} ║")
-        print(f"[DeepSeek] ║ Reasoning модель: {'Да' if self.is_reasoning_model else 'Нет':<43} ║")
-        print(f"[DeepSeek] ║ Reasoning режим: {'✅ Включен' if self.use_reasoning else '❌ Выключен':<44} ║")
-        print(f"[DeepSeek] ║ Base URL: {base_url:<47} ║")
-        print(f"[DeepSeek] ╚{'═'*60}╝")
+        logger.info(f"DeepSeek initialized: model={self.model}, reasoning={'ON' if self.use_reasoning else 'OFF'}")
 
     def _load_prompt(self, prompt_file: str) -> str:
-        """Загружает промпт из файла с кэшированием"""
+        """Загрузить промпт из файла с кэшированием"""
         if prompt_file in self.prompts_cache:
             return self.prompts_cache[prompt_file]
 
@@ -104,23 +102,19 @@ class DeepSeekClient:
             for pair in pairs_data:
                 symbol = pair.get('symbol', 'UNKNOWN')
 
-                # Компактная информация из multi-TF данных
                 info = [f"Symbol: {symbol}"]
                 info.append(f"Direction: {pair.get('direction', 'NONE')} ({pair.get('confidence', 0)}%)")
 
-                # 1H текущие значения
                 if pair.get('indicators_1h'):
                     current_1h = pair['indicators_1h'].get('current', {})
                     if current_1h:
                         info.append(f"1H: RSI={current_1h.get('rsi', 0):.1f}, Price=${current_1h.get('price', 0):.2f}")
 
-                # 4H текущие значения
                 if pair.get('indicators_4h'):
                     current_4h = pair['indicators_4h'].get('current', {})
                     if current_4h:
                         info.append(f"4H: RSI={current_4h.get('rsi', 0):.1f}, Vol={current_4h.get('volume_ratio', 0):.2f}")
 
-                # 1D текущие значения (если есть)
                 if pair.get('indicators_1d'):
                     current_1d = pair['indicators_1d'].get('current', {})
                     if current_1d:
@@ -138,16 +132,7 @@ class DeepSeekClient:
                 f"Верни ТОЛЬКО JSON в формате: {{\"selected_pairs\": [\"BTCUSDT\", \"ETHUSDT\"]}}"
             )
 
-            print(f"\n[DeepSeek] {'─'*60}")
-            print(f"[DeepSeek] 🎯 STAGE 2: ВЫБОР ПАР (COMPACT MULTI-TF)")
-            print(f"[DeepSeek] {'─'*60}")
-            print(f"[DeepSeek] 📊 Пар на анализ: {len(pairs_data)}")
-            print(f"[DeepSeek] 🎚️  Лимит выбора: {limit_text}")
-            print(f"[DeepSeek] 📏 Размер данных: {len(pairs_text)} символов")
-            print(f"[DeepSeek] 🤖 Модель: {self.model}")
-            print(f"[DeepSeek] 🌡️  Temperature: {temperature}")
-            print(f"[DeepSeek] 🎫 Max tokens: {max_tokens}")
-            print(f"[DeepSeek] 💭 Reasoning: {'✅' if self.use_reasoning else '❌'}")
+            logger.info(f"DeepSeek Stage 2: analyzing {len(pairs_data)} pairs (limit: {max_pairs}, data size: {len(pairs_text)} chars)")
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -163,22 +148,16 @@ class DeepSeekClient:
                 if hasattr(response.choices[0].message, 'reasoning_content'):
                     reasoning = response.choices[0].message.reasoning_content
                     if reasoning:
-                        print(f"\n[DeepSeek] {'='*60}")
-                        print(f"[DeepSeek] 💭 РАССУЖДЕНИЯ МОДЕЛИ (первые 800 символов):")
-                        print(f"[DeepSeek] {'='*60}")
-                        print(f"{reasoning[:800]}...")
-                        print(f"[DeepSeek] {'='*60}\n")
+                        logger.debug(f"DeepSeek reasoning (first 500 chars): {reasoning[:500]}")
 
             content = response.choices[0].message.content.strip()
+            logger.debug(f"DeepSeek response (first 150 chars): {content[:150]}")
 
-            print(f"[DeepSeek] 📝 Ответ модели (первые 200 символов):")
-            print(f"[DeepSeek]    {content[:200]}...")
-
-            # Парсим JSON response
+            # Parse JSON response
             selected = []
 
             try:
-                # Удаляем markdown блоки если есть
+                # Remove markdown code blocks
                 if '```json' in content:
                     start = content.find('```json') + 7
                     end = content.find('```', start)
@@ -190,11 +169,9 @@ class DeepSeekClient:
                     if end != -1:
                         content = content[start:end].strip()
 
-                # Парсим JSON
                 data = json.loads(content)
                 selected_pairs = data.get('selected_pairs', [])
 
-# Очищаем от лишних символов
                 for symbol in selected_pairs:
                     if isinstance(symbol, str):
                         clean_symbol = symbol.strip().strip('"').strip("'").strip('[').strip(']').upper()
@@ -202,8 +179,7 @@ class DeepSeekClient:
                             selected.append(clean_symbol)
 
             except json.JSONDecodeError:
-                # Fallback: ищем символы вручную
-                print(f"[DeepSeek] ⚠️  JSON parsing failed, using fallback")
+                logger.warning("JSON parsing failed, using fallback")
                 for line in content.split('\n'):
                     line = line.strip()
                     if not line or line.startswith('#') or line.startswith('//'):
@@ -216,24 +192,22 @@ class DeepSeekClient:
                             if 'USDT' in token or token.replace('USDT', '').isalpha():
                                 selected.append(token)
 
-            # КРИТИЧНО: Применяем лимит СТРОГО
+            # Apply limit
             if max_pairs:
                 if len(selected) > max_pairs:
-                    print(f"[DeepSeek] ⚠️  Обрезаем с {len(selected)} до {max_pairs} пар")
+                    logger.debug(f"Trimming from {len(selected)} to {max_pairs} pairs")
                     selected = selected[:max_pairs]
                 elif len(selected) == 0:
-                    print(f"[DeepSeek] ⚠️  Модель не вернула пары - попробуйте снова")
+                    logger.warning("Model returned no pairs")
 
-            print(f"\n[DeepSeek] {'='*60}")
-            print(f"[DeepSeek] ✅ РЕЗУЛЬТАТ: Выбрано {len(selected)} пар (лимит: {max_pairs if max_pairs else 'нет'})")
+            logger.info(f"DeepSeek Stage 2 result: selected {len(selected)} pairs (limit: {max_pairs})")
             if selected:
-                print(f"[DeepSeek] 📋 Список: {selected}")
-            print(f"[DeepSeek] {'='*60}\n")
+                logger.debug(f"Selected pairs: {selected}")
 
             return selected
 
         except Exception as e:
-            print(f"\n[DeepSeek] ❌ ОШИБКА при выборе пар: {e}")
+            logger.error(f"DeepSeek pair selection error: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -244,10 +218,7 @@ class DeepSeekClient:
         max_tokens: int = 2000,
         temperature: float = 0.7
     ) -> str:
-        """
-        Общий метод для чата с DeepSeek
-        НОВОЕ: Используется для Stage 3 comprehensive analysis
-        """
+        """Общий метод для чата с DeepSeek (используется для Stage 3)"""
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -260,11 +231,10 @@ class DeepSeekClient:
                 if hasattr(response.choices[0].message, 'reasoning_content'):
                     reasoning = response.choices[0].message.reasoning_content
                     if reasoning:
-                        print(f"[DeepSeek] 💭 Рассуждения модели (первые 500 символов):")
-                        print(f"      {reasoning[:500]}...")
+                        logger.debug(f"DeepSeek reasoning (first 300 chars): {reasoning[:300]}")
 
             return response.choices[0].message.content.strip()
 
         except Exception as e:
-            print(f"[DeepSeek] ❌ Ошибка чата: {e}")
+            logger.error(f"DeepSeek chat error: {e}")
             raise

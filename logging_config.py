@@ -1,7 +1,10 @@
 """
-Оптимизированная система логирования для торгового бота
-UPDATED: Всё выводится КРАСНЫМ цветом в консоль
-Файл: trade_bot_programm/logging_config.py
+Оптимизированная система логирования
+Файл: logging_config.py
+ИЗМЕНЕНИЯ:
+- Удалён red_print() как мёртвый код
+- Упрощён ColoredFormatter (только красный)
+- Убраны избыточные комментарии
 """
 
 import logging
@@ -10,60 +13,32 @@ from pathlib import Path
 from datetime import datetime
 
 
-# ANSI цветовые коды
 class ColorCodes:
     RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
     RESET = '\033[0m'
-    BOLD = '\033[1m'
 
 
 class ColoredFormatter(logging.Formatter):
-    """Форматтер с красным цветом для всех сообщений"""
-
-    def __init__(self, fmt=None, datefmt=None, force_color='RED'):
-        super().__init__(fmt, datefmt)
-        self.force_color = force_color
-
-        # Цвета для разных уровней (но используем только RED)
-        self.COLORS = {
-            'RED': ColorCodes.RED,
-            'GREEN': ColorCodes.GREEN,
-            'YELLOW': ColorCodes.YELLOW,
-            'WHITE': ColorCodes.WHITE
-        }
+    """Красный цвет для всех сообщений в консоли"""
 
     def format(self, record):
-        # Базовое форматирование
         log_message = super().format(record)
-
-        # Применяем красный цвет ко ВСЕМУ сообщению
-        color = self.COLORS.get(self.force_color, ColorCodes.RED)
-        colored_message = f"{color}{log_message}{ColorCodes.RESET}"
-
-        return colored_message
+        return f"{ColorCodes.RED}{log_message}{ColorCodes.RESET}"
 
 
 def setup_module_logger(module_name: str, log_dir: str = "bot_logs") -> logging.Logger:
     """
-    Настроить логгер для конкретного модуля
-    ВСЁ ВЫВОДИТСЯ КРАСНЫМ в консоль
+    Настройка логгера для модуля
 
     Args:
         module_name: __name__ модуля
-        log_dir: директория для логов
+        log_dir: директория для файлов логов
 
     Returns:
         Настроенный logger
     """
     logger = logging.getLogger(module_name)
 
-    # Если логгер уже настроен - вернуть его
     if logger.handlers:
         return logger
 
@@ -73,20 +48,18 @@ def setup_module_logger(module_name: str, log_dir: str = "bot_logs") -> logging.
     log_path = Path(log_dir)
     log_path.mkdir(exist_ok=True)
 
-    # Формат логов (без цветов для файлов)
+    # Формат логов
     file_formatter = logging.Formatter(
         '%(asctime)s [%(levelname)-8s] %(name)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Формат для консоли (с КРАСНЫМ цветом)
     console_formatter = ColoredFormatter(
         '%(asctime)s [%(levelname)-8s] %(name)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        force_color='RED'  # ВСЁ КРАСНЫМ!
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # FILE: Все логи (БЕЗ цветов)
+    # FILE: Все логи
     file_handler = logging.FileHandler(
         log_path / f"bot_{datetime.now().strftime('%Y%m%d')}.log",
         encoding='utf-8'
@@ -95,7 +68,7 @@ def setup_module_logger(module_name: str, log_dir: str = "bot_logs") -> logging.
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
-    # FILE: Только ошибки (БЕЗ цветов)
+    # FILE: Только ошибки
     error_handler = logging.FileHandler(
         log_path / f"bot_errors_{datetime.now().strftime('%Y%m%d')}.log",
         encoding='utf-8'
@@ -104,22 +77,10 @@ def setup_module_logger(module_name: str, log_dir: str = "bot_logs") -> logging.
     error_handler.setFormatter(file_formatter)
     logger.addHandler(error_handler)
 
-    # CONSOLE: ВСЁ КРАСНЫМ (включая INFO)
+    # CONSOLE: Красный цвет
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)  # Показываем ВСЁ
+    console_handler.setLevel(logging.INFO)  # Только INFO и выше в консоль
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
     return logger
-
-
-# Также перехватываем print() и делаем его красным
-def red_print(*args, **kwargs):
-    """Print в красном цвете"""
-    message = ' '.join(map(str, args))
-    print(f"{ColorCodes.RED}{message}{ColorCodes.RESET}", **kwargs)
-
-
-# Опционально: можно заменить стандартный print
-# import builtins
-# builtins.print = red_print

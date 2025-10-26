@@ -1,6 +1,10 @@
 """
-AI Router - UNIVERSAL: Stage 3 supports both DeepSeek and Claude
+AI Router - OPTIMIZED LOGGING
 Файл: trade_bot_programm/ai_router.py
+ИЗМЕНЕНИЯ:
+- Удалены все print() в пользу logger
+- Убраны ASCII-рамки инициализации
+- Сокращены избыточные debug-сообщения
 """
 
 from typing import List, Dict, Optional
@@ -12,6 +16,9 @@ from config import (
     STAGE3_MODEL, STAGE3_TEMPERATURE, STAGE3_MAX_TOKENS,
     DEEPSEEK_REASONING, ANTHROPIC_THINKING
 )
+from logging_config import setup_module_logger
+
+logger = setup_module_logger(__name__)
 
 
 class AIRouter:
@@ -26,14 +33,7 @@ class AIRouter:
             'stage3': STAGE3_PROVIDER
         }
 
-        print(f"\n[AI Router] {'='*70}")
-        print(f"[AI Router] {'AI ROUTER ИНИЦИАЛИЗАЦИЯ':^70}")
-        print(f"[AI Router] {'='*70}")
-        print(f"[AI Router] 🎯 Multi-Stage Pipeline:")
-        print(f"[AI Router]    • Stage 2: {STAGE2_PROVIDER.upper()} ({STAGE2_MODEL})")
-        print(f"[AI Router]    • Stage 3: {STAGE3_PROVIDER.upper()} ({STAGE3_MODEL})")
-        print(f"[AI Router]    • Stage 4: REMOVED (fallback only)")
-        print(f"[AI Router] {'='*70}\n")
+        logger.info(f"AI Router initialized: Stage2={STAGE2_PROVIDER.upper()} ({STAGE2_MODEL}), Stage3={STAGE3_PROVIDER.upper()} ({STAGE3_MODEL})")
 
     async def _get_deepseek_client(self, stage: str) -> Optional[DeepSeekClient]:
         """Получить DeepSeek клиент для конкретного stage"""
@@ -41,7 +41,7 @@ class AIRouter:
             return self.deepseek_clients[stage]
 
         if not DEEPSEEK_API_KEY:
-            print(f"[AI Router] ⚠️  DEEPSEEK_API_KEY не задан")
+            logger.warning("DEEPSEEK_API_KEY not found")
             return None
 
         if stage == 'stage2':
@@ -60,32 +60,26 @@ class AIRouter:
             self.deepseek_clients[stage] = client
             return client
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка инициализации DeepSeek для {stage}: {e}")
+            logger.error(f"Failed to initialize DeepSeek for {stage}: {e}")
             return None
 
     async def initialize_claude(self):
         """Инициализирует Claude клиент"""
         if not ANTHROPIC_API_KEY:
-            print(f"[AI Router] ⚠️  ANTHROPIC_API_KEY не задан")
+            logger.warning("ANTHROPIC_API_KEY not found")
             return False
 
         try:
             from anthropic import AsyncAnthropic
 
             self.claude_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
-            print(f"[AI Router] {'='*70}")
-            print(f"[AI Router] {'ИНИЦИАЛИЗАЦИЯ CLAUDE':^70}")
-            print(f"[AI Router] {'='*70}")
-            print(f"[AI Router] ║ Extended Thinking: {'✅ Включен' if ANTHROPIC_THINKING else '❌ Выключен':<52} ║")
-            print(f"[AI Router] {'='*70}")
-
+            logger.info(f"Claude initialized: extended_thinking={'ON' if ANTHROPIC_THINKING else 'OFF'}")
             return True
         except ImportError:
-            print(f"[AI Router] ❌ Anthropic SDK не установлен: pip install anthropic")
+            logger.error("Anthropic SDK not installed: pip install anthropic")
             return False
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка инициализации Claude: {e}")
+            logger.error(f"Failed to initialize Claude: {e}")
             return False
 
     async def _get_provider_client(self, stage: str):
@@ -102,7 +96,7 @@ class AIRouter:
             return 'claude', self.claude_client
 
         else:
-            print(f"[AI Router] ❌ Неизвестный провайдер: {provider}")
+            logger.error(f"Unknown provider: {provider}")
             return None, None
 
     async def select_pairs(
@@ -110,23 +104,16 @@ class AIRouter:
         pairs_data: List[Dict],
         max_pairs: Optional[int] = None
     ) -> List[str]:
-        """Stage 2: Выбор пар (Haiku с compact multi-TF data)"""
-        print(f"\n[AI Router] {'='*70}")
-        print(f"[AI Router] 🎯 STAGE 2: ВЫБОР ПАР (COMPACT MULTI-TF)")
-        print(f"[AI Router] {'='*70}")
-        print(f"[AI Router] 📊 Пар на входе: {len(pairs_data)}")
-        print(f"[AI Router] 🎚️  Лимит: {max_pairs if max_pairs else 'без ограничений'}")
+        """Stage 2: Выбор пар"""
+        logger.info(f"Stage 2: selecting from {len(pairs_data)} pairs (limit: {max_pairs})")
 
         provider_name, client = await self._get_provider_client('stage2')
 
         if not client:
-            print(f"[AI Router] ❌ Клиент недоступен для Stage 2")
+            logger.error("Stage 2: Client unavailable")
             return []
 
-        print(f"[AI Router] 🤖 Провайдер: {provider_name.upper()}")
-        print(f"[AI Router] 📦 Модель: {STAGE2_MODEL}")
-        print(f"[AI Router] 🌡️  Temperature: {STAGE2_TEMPERATURE}")
-        print(f"[AI Router] 🎫 Max tokens: {STAGE2_MAX_TOKENS}")
+        logger.debug(f"Stage 2: using {provider_name.upper()} (model={STAGE2_MODEL}, temp={STAGE2_TEMPERATURE})")
 
         try:
             if provider_name == 'deepseek':
@@ -146,15 +133,11 @@ class AIRouter:
             else:
                 return []
 
-            print(f"[AI Router] ✅ Stage 2 завершен: выбрано {len(selected)} пар")
-            if selected:
-                print(f"[AI Router] 📋 {selected}")
-            print(f"[AI Router] {'='*70}\n")
-
+            logger.info(f"Stage 2 complete: selected {len(selected)} pairs")
             return selected
 
         except Exception as e:
-            print(f"[AI Router] ❌ Ошибка в Stage 2: {e}")
+            logger.error(f"Stage 2 error: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -164,15 +147,13 @@ class AIRouter:
         symbol: str,
         comprehensive_data: Dict
     ) -> Dict:
-        """Stage 3: Comprehensive analysis (Claude OR DeepSeek)"""
-        print(f"\n[AI Router] {'─'*70}")
-        print(f"[AI Router] 🔬 STAGE 3: ANALYSIS {symbol}")
-        print(f"[AI Router] {'─'*70}")
+        """Stage 3: Comprehensive analysis"""
+        logger.debug(f"Stage 3: analyzing {symbol}")
 
         provider_name, client = await self._get_provider_client('stage3')
 
         if not client:
-            print(f"[AI Router] ❌ Client unavailable for Stage 3")
+            logger.error(f"Stage 3: Client unavailable for {symbol}")
             return {
                 'symbol': symbol,
                 'signal': 'NO_SIGNAL',
@@ -180,37 +161,30 @@ class AIRouter:
                 'rejection_reason': 'AI client unavailable'
             }
 
-        print(f"[AI Router] 🤖 Provider: {provider_name.upper()}")
-        print(f"[AI Router] 📦 Model: {STAGE3_MODEL}")
-        print(f"[AI Router] 🌡️  Temperature: {STAGE3_TEMPERATURE}")
-        print(f"[AI Router] 🎫 Max tokens: {STAGE3_MAX_TOKENS}")
+        logger.debug(f"Stage 3: using {provider_name.upper()} (model={STAGE3_MODEL})")
 
         try:
             if provider_name == 'claude':
-                # ========== CLAUDE COMPREHENSIVE ANALYSIS ==========
                 from anthropic_client import AnthropicClient
                 claude = AnthropicClient()
                 result = await claude.analyze_comprehensive(symbol, comprehensive_data)
 
                 if result:
-                    print(f"[AI Router] ✅ Claude Stage 3 complete for {symbol}")
+                    logger.debug(f"Stage 3: Claude analysis complete for {symbol}")
                     return result
                 else:
                     return {
                         'symbol': symbol,
                         'signal': 'NO_SIGNAL',
                         'confidence': 0,
-                        'rejection_reason': 'Claude analysis returned no result'
+                        'rejection_reason': 'Claude returned no result'
                     }
 
             elif provider_name == 'deepseek':
-                # ========== DEEPSEEK COMPREHENSIVE ANALYSIS ==========
-                print(f"[AI Router] 🔧 Using DeepSeek for comprehensive analysis")
-
                 result = await self._deepseek_comprehensive_analysis(symbol, comprehensive_data)
 
                 if result and result.get('signal') != 'NO_SIGNAL':
-                    print(f"[AI Router] ✅ DeepSeek Stage 3 complete for {symbol}")
+                    logger.debug(f"Stage 3: DeepSeek analysis complete for {symbol}")
                     return result
                 else:
                     return {
@@ -229,7 +203,7 @@ class AIRouter:
                 }
 
         except Exception as e:
-            print(f"[AI Router] ❌ Error in Stage 3 for {symbol}: {e}")
+            logger.error(f"Stage 3 error for {symbol}: {e}")
             import traceback
             traceback.print_exc()
             return {
@@ -244,20 +218,16 @@ class AIRouter:
         symbol: str,
         comprehensive_data: Dict
     ) -> Dict:
-        """
-        DeepSeek comprehensive analysis implementation
-        НОВОЕ: Полная поддержка Stage 3 через DeepSeek
-        """
+        """DeepSeek comprehensive analysis implementation"""
         import json
         from pathlib import Path
         from shared_utils import extract_json_from_response
 
         try:
-            # Загружаем промпт для анализа
             prompt_path = Path(__file__).parent / "prompts" / "prompt_analyze.txt"
 
             if not prompt_path.exists():
-                print(f"[AI Router] ❌ Analysis prompt not found: {prompt_path}")
+                logger.error(f"Analysis prompt not found: {prompt_path}")
                 return {
                     'symbol': symbol,
                     'signal': 'NO_SIGNAL',
@@ -268,7 +238,6 @@ class AIRouter:
             with open(prompt_path, 'r', encoding='utf-8') as f:
                 system_prompt = f.read()
 
-            # Формируем JSON данные для анализа
             analysis_data = {
                 'symbol': symbol,
                 'has_1d_data': comprehensive_data.get('has_1d_data', False),
@@ -289,10 +258,8 @@ class AIRouter:
             }
 
             data_json = json.dumps(analysis_data, separators=(',', ':'))
+            logger.debug(f"Stage 3 {symbol}: analysis data size = {len(data_json)} chars")
 
-            print(f"[AI Router] 📏 Analysis data size: {len(data_json)} chars")
-
-            # Получаем DeepSeek клиент для stage3
             deepseek = await self._get_deepseek_client('stage3')
 
             if not deepseek:
@@ -303,10 +270,8 @@ class AIRouter:
                     'rejection_reason': 'DeepSeek client unavailable'
                 }
 
-            # Формируем финальный промпт
             user_prompt = f"{system_prompt}\n\nData:\n{data_json}"
 
-            # Вызов DeepSeek
             response = await deepseek.chat(
                 messages=[
                     {"role": "system", "content": "You are an expert institutional swing trader with 20 years experience."},
@@ -316,11 +281,10 @@ class AIRouter:
                 temperature=STAGE3_TEMPERATURE
             )
 
-            # Парсим JSON ответ
             result = extract_json_from_response(response)
 
             if not result:
-                print(f"[AI Router] ⚠️ DeepSeek returned invalid JSON for {symbol}")
+                logger.warning(f"Stage 3 {symbol}: invalid JSON response")
                 return {
                     'symbol': symbol,
                     'signal': 'NO_SIGNAL',
@@ -328,10 +292,9 @@ class AIRouter:
                     'rejection_reason': 'Invalid JSON response from DeepSeek'
                 }
 
-            # Добавляем symbol если отсутствует
             result['symbol'] = symbol
 
-            # Нормализуем take_profit_levels
+            # Normalize take_profit_levels
             if 'take_profit_levels' in result:
                 tp_levels = result['take_profit_levels']
                 if not isinstance(tp_levels, list):
@@ -345,7 +308,7 @@ class AIRouter:
             return result
 
         except Exception as e:
-            print(f"[AI Router] ❌ DeepSeek analysis error for {symbol}: {e}")
+            logger.error(f"Stage 3 DeepSeek analysis error for {symbol}: {e}")
             import traceback
             traceback.print_exc()
             return {
@@ -367,11 +330,9 @@ class AIRouter:
         for pair in pairs_data:
             symbol = pair.get('symbol', 'UNKNOWN')
 
-            # Компактная информация из multi-TF данных
             info_parts = [f"Symbol: {symbol}"]
             info_parts.append(f"Direction: {pair.get('direction', 'NONE')} ({pair.get('confidence', 0)}%)")
 
-            # Текущие значения индикаторов
             if pair.get('indicators_1h'):
                 current_1h = pair['indicators_1h'].get('current', {})
                 if current_1h:
@@ -406,16 +367,13 @@ class AIRouter:
         response = await self.claude_client.messages.create(**kwargs)
 
         if ANTHROPIC_THINKING and hasattr(response, 'thinking'):
-            print(f"[Claude] 💭 Extended Thinking (первые 500 символов):")
-            print(f"     {str(response.thinking)[:500]}...")
+            logger.debug(f"Claude extended thinking (first 300 chars): {str(response.thinking)[:300]}")
 
         content = response.content[0].text.strip()
 
-        # Парсинг ответа
         selected = []
 
         try:
-            # Удаляем markdown блоки
             if '```json' in content:
                 start = content.find('```json') + 7
                 end = content.find('```', start)
@@ -436,7 +394,7 @@ class AIRouter:
                     selected.append(clean)
 
         except json.JSONDecodeError:
-            # Fallback парсинг
+            logger.warning("Claude JSON parsing failed, using fallback")
             for line in content.split('\n'):
                 tokens = line.replace(',', ' ').split()
                 for token in tokens:
