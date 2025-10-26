@@ -1,5 +1,5 @@
 """
-Correlation analysis module
+Correlation analysis module - FIXED: check_btc_alignment теперь статический метод
 """
 
 import numpy as np
@@ -258,10 +258,7 @@ class CorrelationAnalyzer:
             'reasoning': reasoning
         }
 
-    """
-    Correlation analysis module - FIXED: Смягченная BTC блокировка
-    """
-
+    @staticmethod
     def check_btc_alignment(
             symbol: str,
             signal_direction: str,
@@ -269,7 +266,8 @@ class CorrelationAnalyzer:
             correlation: float
     ) -> Dict:
         """
-        ИСПРАВЛЕНО: Блокировка только при STRONG correlation + CLEAR conflict
+        ИСПРАВЛЕНО: Теперь статический метод
+        Блокировка только при STRONG correlation + CLEAR conflict
         """
         # Слабая корреляция - пропускаем
         if abs(correlation) < 0.5:
@@ -280,8 +278,8 @@ class CorrelationAnalyzer:
                 'reasoning': f'Weak BTC correlation {correlation:.2f}'
             }
 
-        # НОВОЕ: Блокируем только при ОЧЕНЬ сильной корреляции
-        if abs(correlation) > 0.8:  # Было 0.5, стало 0.8
+        # Блокируем только при ОЧЕНЬ сильной корреляции
+        if abs(correlation) > 0.8:
             # Положительная корреляция
             if correlation > 0.8:
                 if signal_direction == 'LONG' and btc_trend == 'UP':
@@ -299,11 +297,11 @@ class CorrelationAnalyzer:
                         'reasoning': 'SHORT aligned with BTC downtrend (strong correlation)'
                     }
                 else:
-                    # ИСПРАВЛЕНО: Не блокируем, только снижаем confidence
+                    # Не блокируем, только снижаем confidence
                     return {
                         'aligned': False,
-                        'should_block': False,  # Было True!
-                        'confidence_adjustment': -12,  # Было -20
+                        'should_block': False,
+                        'confidence_adjustment': -12,
                         'reasoning': f'{signal_direction} misaligned with BTC {btc_trend}, correlation {correlation:.2f}, WARNING (not blocking)'
                     }
 
@@ -326,7 +324,7 @@ class CorrelationAnalyzer:
                 else:
                     return {
                         'aligned': False,
-                        'should_block': False,  # Было True!
+                        'should_block': False,
                         'confidence_adjustment': -12,
                         'reasoning': f'{signal_direction} misaligned with negative BTC correlation, WARNING (not blocking)'
                     }
@@ -432,7 +430,8 @@ async def get_comprehensive_correlation_analysis(
 
     btc_trend = determine_trend(btc_prices, window=20)
 
-    alignment_result = analyzer.check_btc_alignment(
+    # ИСПРАВЛЕНО: Теперь вызываем как статический метод
+    alignment_result = CorrelationAnalyzer.check_btc_alignment(
         symbol,
         signal_direction,
         btc_trend,

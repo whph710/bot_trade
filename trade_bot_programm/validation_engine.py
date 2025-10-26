@@ -1,6 +1,5 @@
 """
-Централизованная система валидации торговых сигналов
-Устраняет дублирование логики между simple_validator.py, shared_utils.py и AI промптами
+Централизованная система валидации торговых сигналов - COMPLETE
 Файл: trade_bot_programm/validation_engine.py
 """
 
@@ -8,10 +7,6 @@ from typing import Dict, Tuple, List
 from logging_config import setup_module_logger
 
 logger = setup_module_logger(__name__)
-
-"""
-Централизованная система валидации - FIXED: Согласованные RSI пороги
-"""
 
 
 class ValidationEngine:
@@ -21,12 +16,12 @@ class ValidationEngine:
     def check_rsi_exhaustion(
             indicators_1h: Dict,
             indicators_4h: Dict,
-            indicators_1d: Dict,  # ДОБАВЛЕНО
+            indicators_1d: Dict,
             signal_type: str,
-            has_1d_data: bool = False  # ДОБАВЛЕНО
+            has_1d_data: bool = False
     ) -> Tuple[bool, str]:
         """
-        ИСПРАВЛЕНО: Согласовано с промптами
+        Проверка RSI exhaustion (согласовано с промптами)
 
         Args:
             indicators_1h: Индикаторы 1H
@@ -40,7 +35,6 @@ class ValidationEngine:
         rsi_1d = indicators_1d.get('current', {}).get('rsi', 50) if has_1d_data else None
 
         if signal_type == 'LONG':
-            # Критичный порог 1H
             if has_1d_data:
                 # С 1D данными - стандартный порог
                 if rsi_1h > 75:
@@ -51,11 +45,11 @@ class ValidationEngine:
                     return True, f"Multi-TF overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D={rsi_1d:.1f})"
             else:
                 # БЕЗ 1D - более строгий порог
-                if rsi_1h > 78:  # Было 75
+                if rsi_1h > 78:
                     return True, f"RSI 1H extreme overbought ({rsi_1h:.1f}, no 1D data)"
 
                 # Multi-TF exhaustion (только 1H+4H)
-                if rsi_1h > 72 and rsi_4h > 68:  # Было 70/65
+                if rsi_1h > 72 and rsi_4h > 68:
                     return True, f"Multi-TF overbought (1H={rsi_1h:.1f}, 4H={rsi_4h:.1f}, 1D unavailable)"
 
         elif signal_type == 'SHORT':
@@ -77,10 +71,9 @@ class ValidationEngine:
     @staticmethod
     def check_correlation_blocking(corr_data: Dict) -> Tuple[bool, str]:
         """
-        ИСПРАВЛЕНО: Блокировка только при EXTREME correlation
+        Проверка BTC correlation blocking (смягченная логика)
 
-        ИЗМЕНЕНИЕ: should_block_signal проверяется, но НЕ блокирует автоматически
-        Требуется также отсутствие дивергенций и Wyckoff Phase D
+        Блокировка только при EXTREME correlation >0.85
         """
         if not corr_data.get('should_block_signal', False):
             return False, ""
@@ -96,6 +89,73 @@ class ValidationEngine:
         # Иначе - только warning, не блокируем
         return False, f"BTC correlation {correlation:.2f} warning (not blocking)"
 
+    @staticmethod
+    def check_overextension(vp_analysis: Dict) -> Tuple[bool, str]:
+        """
+        Проверка overextension от Volume Profile POC
+
+        Args:
+            vp_analysis: Результаты анализа Volume Profile
+        """
+        if not vp_analysis:
+            return False, ""
+
+        # Value Area analysis
+        va_analysis = vp_analysis.get('value_area_analysis', {})
+        market_condition = va_analysis.get('market_condition', 'NORMAL')
+
+        if market_condition == 'OVEREXTENDED':
+            return True, "Price overextended from Value Area"
+
+        # POC distance check
+        poc_analysis = vp_analysis.get('poc_analysis', {})
+        distance_pct = poc_analysis.get('distance_to_poc_pct', 0)
+
+        if distance_pct > 15:
+            return True, f"Price {distance_pct:.1f}% from POC (>15% overextended)"
+
+        return False, ""
+
+    @staticmethod
+    def check_funding_rate_extreme(funding_data: Dict) -> Tuple[bool, str]:
+        """
+        Проверка экстремального funding rate
+
+        Args:
+            funding_data: Данные funding rate
+        """
+        if not funding_data:
+            return False, ""
+
+        funding_rate = funding_data.get('funding_rate', 0)
+
+        # Экстремальные значения
+        if funding_rate > 0.001:  # 0.1%
+            return True, f"Extreme positive funding {funding_rate:.4f} (overleveraged longs)"
+
+        if funding_rate < -0.001:
+            return True, f"Extreme negative funding {funding_rate:.4f} (overleveraged shorts)"
+
+        return False, ""
+
+    @staticmethod
+    def check_spread_illiquidity(orderbook_data: Dict) -> Tuple[bool, str]:
+        """
+        Проверка ликвидности через spread
+
+        Args:
+            orderbook_data: Данные orderbook
+        """
+        if not orderbook_data:
+            return False, ""
+
+        spread_pct = orderbook_data.get('spread_pct', 0)
+
+        if spread_pct > 0.15:  # 0.15%
+            return True, f"Illiquid market (spread {spread_pct:.4f}% >0.15%)"
+
+        return False, ""
+
     @classmethod
     def run_all_checks(
             cls,
@@ -103,7 +163,10 @@ class ValidationEngine:
             comprehensive_data: Dict
     ) -> Tuple[bool, List[str]]:
         """
-        ОБНОВЛЕНО: Передаем has_1d_data в RSI проверку
+        Запустить все критические проверки
+
+        Returns:
+            (passed: bool, reasons: List[str])
         """
         reasons = []
 
@@ -121,7 +184,7 @@ class ValidationEngine:
         if blocked:
             reasons.append(reason)
 
-        # 3. RSI exhaustion - ОБНОВЛЕНО
+        # 3. RSI exhaustion
         has_1d = comprehensive_data.get('has_1d_data', False)
         blocked, reason = cls.check_rsi_exhaustion(
             comprehensive_data.get('indicators_1h', {}),
@@ -147,4 +210,5 @@ class ValidationEngine:
         if blocked:
             reasons.append(reason)
 
+        # Возвращаем True если НЕТ причин для блокировки
         return len(reasons) == 0, reasons
