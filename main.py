@@ -1,15 +1,15 @@
 """
-Main Entry Point - OPTIMIZED LOGGING
+Main Entry Point - WITH PROGRESS CALLBACK SUPPORT
 Файл: main.py
 ИЗМЕНЕНИЯ:
-- Удалены избыточные print() и red_print()
-- Оставлен только logger
+- Добавлена поддержка progress_callback для отправки промежуточных результатов
 """
 
 import asyncio
 import sys
 import argparse
 from pathlib import Path
+from typing import Optional, Callable
 
 BOT_DIR = Path(__file__).parent / "trade_bot_programm"
 sys.path.insert(0, str(BOT_DIR))
@@ -20,9 +20,12 @@ from utils import save_bot_result, print_bot_result, cleanup_old_results
 logger = setup_module_logger(__name__)
 
 
-async def run_trading_bot_cycle():
+async def run_trading_bot_cycle(progress_callback: Optional[Callable] = None):
     """
-    Выполняет один цикл работы бота с pre-checks
+    Выполняет один цикл работы бота с pre-checks и progress callback
+
+    Args:
+        progress_callback: Async функция для отправки прогресса (stage, message)
     """
     from simple_validator import check_trading_hours
     from datetime import datetime
@@ -47,7 +50,7 @@ async def run_trading_bot_cycle():
         }
 
     from bot_runner import run_trading_bot
-    result = await run_trading_bot()
+    result = await run_trading_bot(progress_callback=progress_callback)
     return result
 
 

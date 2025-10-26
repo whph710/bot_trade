@@ -1,17 +1,14 @@
 """
-Trading Bot Runner - OPTIMIZED LOGGING
+Trading Bot Runner - WITH PROGRESS CALLBACK
 Файл: trade_bot_programm/bot_runner.py
 ИЗМЕНЕНИЯ:
-- Удалены все red_print() и print()
-- Оставлен только logger
-- Убраны дублирующиеся сообщения
-- Упрощены заголовки Stage
+- Добавлен progress_callback для отправки Stage 2 и Stage 3 результатов
 """
 
 import asyncio
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 import time
 
@@ -35,7 +32,7 @@ ai_router = AIRouter()
 class TradingBotRunner:
     """Класс для запуска торгового бота"""
 
-    def __init__(self):
+    def __init__(self, progress_callback: Optional[Callable] = None):
         self.processed_pairs = 0
         self.signal_pairs_count = 0
         self.ai_selected_count = 0
@@ -43,6 +40,15 @@ class TradingBotRunner:
         self.analysis_data_cache = {}
         self.ai_router = ai_router
         self.last_haiku_call_time = 0
+        self.progress_callback = progress_callback  # НОВОЕ
+
+    async def _send_progress(self, stage: str, message: str):
+        """Отправить прогресс через callback если доступен"""
+        if self.progress_callback:
+            try:
+                await self.progress_callback(stage, message)
+            except Exception as e:
+                logger.error(f"Progress callback error: {e}")
 
     async def load_candles_batch(self, pairs: list[str], interval: str, limit: int) -> Dict[str, list]:
         """Batch load candles"""
@@ -197,6 +203,11 @@ class TradingBotRunner:
 
         if selected_pairs:
             logger.info(f"Stage 2 complete: {self.ai_selected_count} pairs selected - {selected_pairs}")
+
+            # НОВОЕ: Отправляем результат Stage 2 в Telegram
+            stage2_message = f"<b>Выбрано пар:</b> {self.ai_selected_count}\n\n"
+            stage2_message += "\n".join([f"• {pair}" for pair in selected_pairs])
+            await self._send_progress("Stage 2 Complete", stage2_message)
         else:
             logger.warning("Stage 2: No pairs selected by AI")
 
@@ -248,6 +259,9 @@ class TradingBotRunner:
             try:
                 logger.info(f"Analyzing {symbol}...")
 
+                # НОВОЕ: Отправляем прогресс анализа
+                await self._send_progress("Stage 3 Analysis", f"🔍 Анализирую <b>{symbol}</b>...")
+
                 # Load timeframes
                 klines_1h, klines_4h, klines_1d = await asyncio.gather(
                     fetch_klines(symbol, config.TIMEFRAME_SHORT, config.STAGE3_CANDLES_1H),
@@ -257,6 +271,12 @@ class TradingBotRunner:
 
                 if not klines_1h or not klines_4h:
                     logger.warning(f"{symbol}: Missing 1H/4H data - SKIP")
+
+                    # НОВОЕ: Отправляем результат отклонения
+                    await self._send_progress(
+                        "Stage 3 Analysis",
+                        f"❌ <b>{symbol}</b>\n<i>Missing 1H/4H data</i>"
+                    )
                     continue
 
                 # Check 1D data sufficiency
@@ -274,6 +294,11 @@ class TradingBotRunner:
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
                     logger.warning(f"{symbol}: 1H/4H candle validation failed - SKIP")
+
+                    await self._send_progress(
+                        "Stage 3 Analysis",
+                        f"❌ <b>{symbol}</b>\n<i>Candle validation failed</i>"
+                    )
                     continue
 
                 indicators_1h = calculate_ai_indicators(klines_1h, config.FINAL_INDICATORS_HISTORY)
@@ -296,6 +321,11 @@ class TradingBotRunner:
 
                 if not indicators_1h or not indicators_4h:
                     logger.warning(f"{symbol}: 1H/4H indicators calculation failed - SKIP")
+
+                    await self._send_progress(
+                        "Stage 3 Analysis",
+                        f"❌ <b>{symbol}</b>\n<i>Indicators calculation failed</i>"
+                    )
                     continue
 
                 current_price = float(klines_1h[-1][4])
@@ -349,12 +379,35 @@ class TradingBotRunner:
                     logger.info(f"✓ SIGNAL: {symbol} {signal_type} (confidence: {confidence}%)")
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
                     logger.debug(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
+
+                    # НОВОЕ: Отправляем одобренный сигнал
+                    signal_message = (
+                        f"✅ <b>{symbol}</b> {signal_type}\n\n"
+                        f"<b>Confidence:</b> {confidence}%\n"
+                        f"<b>Entry:</b> ${analysis['entry_price']:.4f}\n"
+                        f"<b>Stop:</b> ${analysis['stop_loss']:.4f}\n"
+                        f"<b>TP1/2/3:</b> ${tp_levels[0]:.4f} / ${tp_levels[1]:.4f} / ${tp_levels[2]:.4f}"
+                    )
+                    await self._send_progress("Stage 3 Analysis", signal_message)
+
                 else:
                     rejection_reason = analysis.get('rejection_reason', 'Low confidence')
                     logger.info(f"✗ NO_SIGNAL: {symbol} - {rejection_reason}")
 
+                    # НОВОЕ: Отправляем отклоненный сигнал
+                    rejection_message = (
+                        f"❌ <b>{symbol}</b> NO_SIGNAL\n\n"
+                        f"<i>{rejection_reason}</i>"
+                    )
+                    await self._send_progress("Stage 3 Analysis", rejection_message)
+
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}", exc_info=False)
+
+                await self._send_progress(
+                    "Stage 3 Analysis",
+                    f"❌ <b>{symbol}</b>\n<i>Error: {str(e)[:100]}</i>"
+                )
                 continue
 
         self.analyzed_count = len(final_signals)
@@ -386,8 +439,12 @@ class TradingBotRunner:
 
         return signal
 
-    async def run_cycle(self) -> Dict[str, Any]:
+    async def run_cycle(self, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """Запуск полного цикла бота"""
+        # Переопределяем callback если передан новый
+        if progress_callback:
+            self.progress_callback = progress_callback
+
         cycle_start = time.time()
         cycle_id = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -504,8 +561,8 @@ class TradingBotRunner:
         return result
 
 
-async def run_trading_bot() -> Dict[str, Any]:
+async def run_trading_bot(progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
     """Главная функция запуска бота"""
-    bot = TradingBotRunner()
-    result = await bot.run_cycle()
+    bot = TradingBotRunner(progress_callback=progress_callback)
+    result = await bot.run_cycle(progress_callback=progress_callback)
     return result

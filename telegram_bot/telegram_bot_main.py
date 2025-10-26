@@ -1,4 +1,4 @@
-# telegram_bot_main.py - NO STAGE 4 VALIDATION
+# telegram_bot_main.py - WITH STAGE PROGRESS NOTIFICATIONS
 import asyncio
 import logging
 from datetime import datetime
@@ -21,7 +21,6 @@ from telegram_bot.result_formatter import (
     send_formatted_signals_to_group,
     send_group_message_safe
 )
-# AI Formatter для DeepSeek
 from telegram_bot.ai_formatter import AISignalFormatter
 from telegram_bot.stats_manager import StatsManager
 
@@ -129,7 +128,10 @@ class TradingBotTelegram:
 
             try:
                 from main import run_trading_bot_cycle
-                result = await run_trading_bot_cycle()
+
+                # НОВОЕ: Передаем callback для прогресса
+                result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
+
             finally:
                 await self._stop_typing_indicator()
 
@@ -141,7 +143,6 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
-            # МОДИФИКАЦИЯ: Проверяем validated_signals напрямую (Stage 4 убран)
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
             else:
@@ -156,13 +157,42 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
-    async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
+    async def _send_progress_update(self, stage: str, message: str):
         """
-        Форматирование через DeepSeek AI и публикация в группу
-        МОДИФИКАЦИЯ: Stage 4 убран, сигналы готовы после Stage 3
+        НОВОЕ: Callback для отправки прогресса выполнения
+
+        Args:
+            stage: Название этапа (Stage 2, Stage 3, etc.)
+            message: Сообщение о прогрессе
         """
         try:
-            # МОДИФИКАЦИЯ: Сигналы уже одобрены в Stage 3
+            emoji_map = {
+                'Stage 1': '1️⃣',
+                'Stage 2': '2️⃣',
+                'Stage 3': '3️⃣',
+                'Stage 2 Complete': '✅',
+                'Stage 3 Analysis': '🔍'
+            }
+
+            emoji = emoji_map.get(stage, '📊')
+
+            formatted_message = f"{emoji} <b>{stage}</b>\n\n{message}"
+
+            await self.bot.send_message(
+                chat_id=TG_USER_ID,
+                text=formatted_message,
+                parse_mode="HTML"
+            )
+
+            # Небольшая задержка чтобы не спамить
+            await asyncio.sleep(0.3)
+
+        except Exception as e:
+            logger.error(f"Error sending progress update: {e}")
+
+    async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
+        """Форматирование через DeepSeek AI и публикация в группу"""
+        try:
             approved_signals = result.get('validated_signals', [])
 
             if not approved_signals:
@@ -274,7 +304,10 @@ class TradingBotTelegram:
 
             try:
                 from main import run_trading_bot_cycle
-                result = await run_trading_bot_cycle()
+
+                # НОВОЕ: Передаем callback для прогресса
+                result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
+
             finally:
                 await self._stop_typing_indicator()
 
@@ -304,7 +337,6 @@ class TradingBotTelegram:
                 logger.exception(f"Failed to send error message: {send_error}")
 
     async def start(self):
-        # Очистка старой статистики при запуске
         self.stats_manager.cleanup_old_daily_stats(days_to_keep=30)
 
         self.schedule_manager.setup_schedule(self.bot, self.schedule_callback)
