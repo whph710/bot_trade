@@ -1,6 +1,5 @@
 """
-AI форматтер для сигналов - использует DeepSeek для форматирования JSON в читаемый текст
-FIXED: Исправлен импорт config
+AI форматтер для сигналов - FIXED: Unified prompt loader
 Файл: telegram_bot/ai_formatter.py
 """
 
@@ -40,18 +39,40 @@ load_env()
 
 
 def load_formatter_prompt() -> str:
-    """Загрузить промпт для форматирования"""
+    """
+    Загрузить промпт для форматирования
+    FIXED: Unified search strategy как в других модулях
+    """
     global _prompt_cache
 
     if _prompt_cache:
         return _prompt_cache
 
-    # Ищем промпт в папке prompts
-    prompt_path = Path(__file__).parent / 'prompts' / 'signal_formatter_prompt.txt'
+    # ИСПРАВЛЕНО: Ищем в нескольких местах
+    search_paths = [
+        # 1. В папке telegram_bot/prompts (текущий поиск)
+        Path(__file__).parent / 'prompts' / 'signal_formatter_prompt.txt',
 
-    if not prompt_path.exists():
-        logger.error(f"Prompt file not found: {prompt_path}")
-        raise FileNotFoundError(f"Signal formatter prompt not found at {prompt_path}")
+        # 2. В корневой папке prompts
+        Path(__file__).parent.parent / 'prompts' / 'signal_formatter_prompt.txt',
+
+        # 3. В trade_bot_programm/prompts (где реально лежит)
+        Path(__file__).parent.parent / 'trade_bot_programm' / 'prompts' / 'signal_formatter_prompt.txt',
+    ]
+
+    prompt_path = None
+    for path in search_paths:
+        if path.exists() and path.is_file():
+            prompt_path = path
+            logger.info(f"[Formatter] Prompt found at: {path}")
+            break
+
+    if not prompt_path:
+        error_msg = f"Signal formatter prompt not found. Searched in:\n"
+        for path in search_paths:
+            error_msg += f"  - {path.absolute()}\n"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
 
     try:
         with open(prompt_path, 'r', encoding='utf-8') as f:
@@ -59,10 +80,10 @@ def load_formatter_prompt() -> str:
             if not content:
                 raise ValueError(f"Prompt file is empty: {prompt_path}")
             _prompt_cache = content
-            logger.info(f"Formatter prompt loaded: {len(content)} chars")
+            logger.info(f"[Formatter] Prompt cached: {prompt_path.name} ({len(content)} chars)")
             return content
     except Exception as e:
-        logger.error(f"Error loading formatter prompt: {e}")
+        logger.error(f"[Formatter] Error loading prompt: {e}")
         raise
 
 
@@ -97,10 +118,10 @@ class AISignalFormatter:
         """
         try:
             if not self.api_key:
-                logger.error("DeepSeek API key not configured")
+                logger.error("[Formatter] DeepSeek API key not configured")
                 raise ValueError("DeepSeek API key not found")
 
-            # Загружаем промпт
+            # Загружаем промпт (теперь с unified search)
             prompt_template = load_formatter_prompt()
 
             # Конвертируем данные сигнала в JSON
