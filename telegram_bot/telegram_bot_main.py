@@ -1,4 +1,4 @@
-# telegram_bot_main.py - FIXED: Rejected signals + Error handling
+# telegram_bot_main.py - FIXED: Aggressive HTML escaping
 import asyncio
 import logging
 from datetime import datetime
@@ -6,6 +6,7 @@ from typing import Dict, Any
 import pytz
 from pathlib import Path
 import sys
+import re
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -72,6 +73,33 @@ class TradingBotTelegram:
                 pass
             self._typing_task = None
 
+    def _escape_html(self, text: str) -> str:
+        """
+        Экранировать HTML теги которые не поддерживает Telegram
+
+        Стратегия: сначала экранируем ВСЁ, потом восстанавливаем поддерживаемые теги
+        """
+        if not text:
+            return ""
+
+        # Шаг 1: Экранируем ВСЕ < и >
+        text = text.replace('<', '&lt;').replace('>', '&gt;')
+
+        # Шаг 2: Восстанавливаем поддерживаемые теги
+        supported_tags = [
+            'b', 'i', 'code', 'pre', 'a', 'u', 's', 'tg-spoiler'
+        ]
+
+        for tag in supported_tags:
+            # Открывающий тег
+            text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>')
+            # Закрывающий тег
+            text = text.replace(f'&lt;/{tag}&gt;', f'</{tag}>')
+            # С атрибутами (для <a> и <code>)
+            text = re.sub(f'&lt;{tag} ([^&]+)&gt;', f'<{tag} \\1>', text)
+
+        return text
+
     async def start_command(self, message: Message):
         user_id = message.from_user.id
         if user_id != TG_USER_ID:
@@ -129,7 +157,7 @@ class TradingBotTelegram:
             try:
                 from main import run_trading_bot_cycle
 
-                result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
+                result = await run_trading_bot_cycle(progress_callback=self._send_progress)
 
             finally:
                 await self._stop_typing_indicator()
@@ -142,11 +170,11 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
-            # ИСПРАВЛЕНО: Отправка validated + rejected signals
+            # Отправка validated + rejected signals
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
 
-            # ИСПРАВЛЕНО: Отправка rejected signals в личку
+            # Отправка rejected signals в личку
             if result.get('rejected_signals'):
                 await self._send_rejected_signals(result.get('rejected_signals', []))
 
@@ -159,7 +187,7 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
-    async def _send_progress_update(self, stage: str, message: str):
+    async def _send_progress(self, stage: str, message: str):
         """
         Callback для отправки прогресса выполнения
         """
@@ -174,7 +202,10 @@ class TradingBotTelegram:
 
             emoji = emoji_map.get(stage, '📊')
 
-            formatted_message = f"{emoji} <b>{stage}</b>\n\n{message}"
+            # Экранируем HTML в message
+            safe_message = self._escape_html(message)
+
+            formatted_message = f"{emoji} <b>{stage}</b>\n\n{safe_message}"
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
@@ -190,7 +221,7 @@ class TradingBotTelegram:
 
     async def _send_rejected_signals(self, rejected_signals: list):
         """
-        ИСПРАВЛЕНО: Отправка rejected signals в личку
+        ИСПРАВЛЕНО: Отправка rejected signals в личку с HTML escaping
         """
         if not rejected_signals:
             return
@@ -212,8 +243,11 @@ class TradingBotTelegram:
                     if len(reason) > 200:
                         reason = reason[:197] + "..."
 
+                    # ИСПРАВЛЕНО: Экранируем HTML в rejection reason
+                    safe_reason = self._escape_html(reason)
+
                     message_parts.append(f"\n<b>{symbol}</b>")
-                    message_parts.append(f"<i>{reason}</i>\n")
+                    message_parts.append(f"<i>{safe_reason}</i>\n")
 
                 full_message = "\n".join(message_parts)
 
@@ -262,7 +296,7 @@ class TradingBotTelegram:
                 )
                 return
 
-            # ИСПРАВЛЕНО: Добавлена обработка ошибок при отправке
+            # Отправка в группу с обработкой ошибок
             sent_count = 0
             failed_count = 0
 
@@ -375,7 +409,7 @@ class TradingBotTelegram:
             try:
                 from main import run_trading_bot_cycle
 
-                result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
+                result = await run_trading_bot_cycle(progress_callback=self._send_progress)
 
             finally:
                 await self._stop_typing_indicator()
@@ -391,7 +425,7 @@ class TradingBotTelegram:
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
 
-            # ИСПРАВЛЕНО: Отправка rejected signals
+            # Отправка rejected signals
             if result.get('rejected_signals'):
                 await self._send_rejected_signals(result.get('rejected_signals', []))
 
