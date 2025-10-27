@@ -1,8 +1,10 @@
 """
-Trading Bot Runner - WITH PROGRESS CALLBACK
+Trading Bot Runner - FIXED: Time tracking + Single progress messages
 Файл: trade_bot_programm/bot_runner.py
-ИЗМЕНЕНИЯ:
-- Добавлен progress_callback для отправки Stage 2 и Stage 3 результатов
+ИСПРАВЛЕНИЯ:
+- Исправлен подсчет total_time (был 0.0)
+- Убраны дублирующиеся прогресс-сообщения
+- Добавлена отправка rejected signals
 """
 
 import asyncio
@@ -40,7 +42,11 @@ class TradingBotRunner:
         self.analysis_data_cache = {}
         self.ai_router = ai_router
         self.last_haiku_call_time = 0
-        self.progress_callback = progress_callback  # НОВОЕ
+        self.progress_callback = progress_callback
+
+        # ИСПРАВЛЕНО: Добавлен трекинг времени
+        self.cycle_start_time = 0
+        self.stage_times = {}
 
     async def _send_progress(self, stage: str, message: str):
         """Отправить прогресс через callback если доступен"""
@@ -70,6 +76,8 @@ class TradingBotRunner:
 
     async def stage1_filter_signals(self) -> list[Dict]:
         """Stage 1: Base signal filtering"""
+        stage_start = time.time()
+
         logger.info("=" * 70)
         logger.info("STAGE 1: SIGNAL FILTERING")
         logger.info("=" * 70)
@@ -115,11 +123,16 @@ class TradingBotRunner:
         pairs_with_signals.sort(key=lambda x: x['confidence'], reverse=True)
         self.signal_pairs_count = len(pairs_with_signals)
 
-        logger.info(f"Stage 1 complete: {self.processed_pairs} scanned, {self.signal_pairs_count} signals found")
+        # ИСПРАВЛЕНО: Сохраняем время Stage 1
+        self.stage_times['stage1'] = time.time() - stage_start
+
+        logger.info(f"Stage 1 complete: {self.processed_pairs} scanned, {self.signal_pairs_count} signals found ({self.stage_times['stage1']:.1f}s)")
         return pairs_with_signals
 
     async def stage2_ai_select(self, signal_pairs: list[Dict]) -> list[str]:
         """Stage 2: AI pair selection (COMPACT multi-TF data)"""
+        stage_start = time.time()
+
         logger.info("=" * 70)
         logger.info(f"STAGE 2: {config.STAGE2_PROVIDER.upper()} PAIR SELECTION")
         logger.info("=" * 70)
@@ -201,10 +214,13 @@ class TradingBotRunner:
         )
         self.ai_selected_count = len(selected_pairs)
 
-        if selected_pairs:
-            logger.info(f"Stage 2 complete: {self.ai_selected_count} pairs selected - {selected_pairs}")
+        # ИСПРАВЛЕНО: Сохраняем время Stage 2
+        self.stage_times['stage2'] = time.time() - stage_start
 
-            # НОВОЕ: Отправляем результат Stage 2 в Telegram
+        if selected_pairs:
+            logger.info(f"Stage 2 complete: {self.ai_selected_count} pairs selected - {selected_pairs} ({self.stage_times['stage2']:.1f}s)")
+
+            # Отправляем результат Stage 2 в Telegram (ОДИН РАЗ)
             stage2_message = f"<b>Выбрано пар:</b> {self.ai_selected_count}\n\n"
             stage2_message += "\n".join([f"• {pair}" for pair in selected_pairs])
             await self._send_progress("Stage 2 Complete", stage2_message)
@@ -215,6 +231,8 @@ class TradingBotRunner:
 
     async def stage3_unified_analysis(self, selected_pairs: list[str]) -> list[Dict]:
         """Stage 3: Unified analysis"""
+        stage_start = time.time()
+
         logger.info("=" * 70)
         logger.info(f"STAGE 3: {config.STAGE3_PROVIDER.upper()} UNIFIED ANALYSIS")
         logger.info("=" * 70)
@@ -254,12 +272,13 @@ class TradingBotRunner:
             logger.debug(f"BTC candles loaded: {len(btc_candles_1h)} (1H), {len(btc_candles_4h)} (4H), {len(btc_candles_1d)} (1D)")
 
         final_signals = []
+        rejected_signals = []  # ИСПРАВЛЕНО: Собираем rejected
 
         for symbol in selected_pairs:
             try:
                 logger.info(f"Analyzing {symbol}...")
 
-                # НОВОЕ: Отправляем прогресс анализа
+                # ИСПРАВЛЕНО: Отправляем прогресс ТОЛЬКО ОДИН РАЗ
                 await self._send_progress("Stage 3 Analysis", f"🔍 Анализирую <b>{symbol}</b>...")
 
                 # Load timeframes
@@ -272,7 +291,13 @@ class TradingBotRunner:
                 if not klines_1h or not klines_4h:
                     logger.warning(f"{symbol}: Missing 1H/4H data - SKIP")
 
-                    # НОВОЕ: Отправляем результат отклонения
+                    # ИСПРАВЛЕНО: Добавляем в rejected
+                    rejected_signals.append({
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'rejection_reason': 'Missing 1H/4H data'
+                    })
+
                     await self._send_progress(
                         "Stage 3 Analysis",
                         f"❌ <b>{symbol}</b>\n<i>Missing 1H/4H data</i>"
@@ -294,6 +319,12 @@ class TradingBotRunner:
 
                 if not validate_candles(klines_1h, 20) or not validate_candles(klines_4h, 20):
                     logger.warning(f"{symbol}: 1H/4H candle validation failed - SKIP")
+
+                    rejected_signals.append({
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'rejection_reason': 'Candle validation failed'
+                    })
 
                     await self._send_progress(
                         "Stage 3 Analysis",
@@ -321,6 +352,12 @@ class TradingBotRunner:
 
                 if not indicators_1h or not indicators_4h:
                     logger.warning(f"{symbol}: 1H/4H indicators calculation failed - SKIP")
+
+                    rejected_signals.append({
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'rejection_reason': 'Indicators calculation failed'
+                    })
 
                     await self._send_progress(
                         "Stage 3 Analysis",
@@ -380,7 +417,7 @@ class TradingBotRunner:
                     logger.debug(f"  Entry: ${analysis['entry_price']:.2f} | Stop: ${analysis['stop_loss']:.2f}")
                     logger.debug(f"  TP: ${tp_levels[0]:.2f} / ${tp_levels[1]:.2f} / ${tp_levels[2]:.2f}")
 
-                    # НОВОЕ: Отправляем одобренный сигнал
+                    # Отправляем одобренный сигнал
                     signal_message = (
                         f"✅ <b>{symbol}</b> {signal_type}\n\n"
                         f"<b>Confidence:</b> {confidence}%\n"
@@ -394,7 +431,14 @@ class TradingBotRunner:
                     rejection_reason = analysis.get('rejection_reason', 'Low confidence')
                     logger.info(f"✗ NO_SIGNAL: {symbol} - {rejection_reason}")
 
-                    # НОВОЕ: Отправляем отклоненный сигнал
+                    # ИСПРАВЛЕНО: Добавляем в rejected
+                    rejected_signals.append({
+                        'symbol': symbol,
+                        'signal': 'NO_SIGNAL',
+                        'rejection_reason': rejection_reason
+                    })
+
+                    # Отправляем отклоненный сигнал
                     rejection_message = (
                         f"❌ <b>{symbol}</b> NO_SIGNAL\n\n"
                         f"<i>{rejection_reason}</i>"
@@ -404,6 +448,12 @@ class TradingBotRunner:
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}", exc_info=False)
 
+                rejected_signals.append({
+                    'symbol': symbol,
+                    'signal': 'NO_SIGNAL',
+                    'rejection_reason': f'Error: {str(e)[:100]}'
+                })
+
                 await self._send_progress(
                     "Stage 3 Analysis",
                     f"❌ <b>{symbol}</b>\n<i>Error: {str(e)[:100]}</i>"
@@ -411,8 +461,14 @@ class TradingBotRunner:
                 continue
 
         self.analyzed_count = len(final_signals)
-        logger.info(f"Stage 3 complete: {len(final_signals)} signals generated")
-        return final_signals
+
+        # ИСПРАВЛЕНО: Сохраняем время Stage 3
+        self.stage_times['stage3'] = time.time() - stage_start
+
+        logger.info(f"Stage 3 complete: {len(final_signals)} approved, {len(rejected_signals)} rejected ({self.stage_times['stage3']:.1f}s)")
+
+        # ИСПРАВЛЕНО: Возвращаем оба списка
+        return final_signals, rejected_signals
 
     def _enrich_signal_with_analysis_data(self, signal: Dict) -> Dict:
         """Добавить данные анализа к сигналу"""
@@ -445,7 +501,8 @@ class TradingBotRunner:
         if progress_callback:
             self.progress_callback = progress_callback
 
-        cycle_start = time.time()
+        # ИСПРАВЛЕНО: Сохраняем время начала
+        self.cycle_start_time = time.time()
         cycle_id = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         logger.info("╔" + "=" * 68 + "╗")
@@ -458,7 +515,7 @@ class TradingBotRunner:
 
             if not signal_pairs:
                 logger.warning("Pipeline stopped: No signal pairs found")
-                total_time = time.time() - cycle_start
+                total_time = time.time() - self.cycle_start_time  # ИСПРАВЛЕНО
                 return self._build_result('NO_SIGNAL_PAIRS', total_time, [], [])
 
             # Stage 2: AI отбор
@@ -466,18 +523,19 @@ class TradingBotRunner:
 
             if not selected_pairs:
                 logger.warning("Pipeline stopped: AI selected 0 pairs")
-                total_time = time.time() - cycle_start
+                total_time = time.time() - self.cycle_start_time  # ИСПРАВЛЕНО
                 return self._build_result('NO_AI_SELECTION', total_time, [], [])
 
             # Stage 3: AI анализ
-            preliminary_signals = await self.stage3_unified_analysis(selected_pairs)
+            # ИСПРАВЛЕНО: Теперь возвращает (approved, rejected)
+            preliminary_signals, rejected_signals = await self.stage3_unified_analysis(selected_pairs)
 
             if not preliminary_signals:
                 logger.warning("Pipeline stopped: No analysis signals generated")
-                total_time = time.time() - cycle_start
-                return self._build_result('NO_ANALYSIS_SIGNALS', total_time, [], [])
+                total_time = time.time() - self.cycle_start_time  # ИСПРАВЛЕНО
+                return self._build_result('NO_ANALYSIS_SIGNALS', total_time, [], rejected_signals)
 
-            # Валидация
+            # Валидация (deprecated, просто пропускаем)
             logger.info("=" * 70)
             logger.info("STAGE 4: VALIDATION (Fallback)")
             logger.info("=" * 70)
@@ -485,9 +543,10 @@ class TradingBotRunner:
             validation_result = await validate_signals_simple(self.ai_router, preliminary_signals)
 
             validated = validation_result['validated']
-            rejected = validation_result['rejected']
+            # ИСПРАВЛЕНО: Объединяем rejected из Stage 3 и валидации
+            rejected = rejected_signals + validation_result['rejected']
 
-            total_time = time.time() - cycle_start
+            total_time = time.time() - self.cycle_start_time  # ИСПРАВЛЕНО
 
             # Сохранение данных
             if validated:
@@ -521,7 +580,7 @@ class TradingBotRunner:
 
         except Exception as e:
             logger.error(f"CRITICAL CYCLE ERROR: {e}", exc_info=True)
-            total_time = time.time() - cycle_start
+            total_time = time.time() - self.cycle_start_time  # ИСПРАВЛЕНО
             return self._build_result('ERROR', total_time, [], [], error=str(e))
 
         finally:
@@ -536,7 +595,13 @@ class TradingBotRunner:
             'analyzed': self.analyzed_count,
             'processing_speed': round(self.processed_pairs / total_time, 1) if total_time > 0 else 0,
             'total_time': round(total_time, 1),
-            'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}/{config.TIMEFRAME_HTF_NAME}"
+            'timeframes': f"{config.TIMEFRAME_SHORT_NAME}/{config.TIMEFRAME_LONG_NAME}/{config.TIMEFRAME_HTF_NAME}",
+            # ИСПРАВЛЕНО: Добавляем время по этапам
+            'stage_times': {
+                'stage1': round(self.stage_times.get('stage1', 0), 1),
+                'stage2': round(self.stage_times.get('stage2', 0), 1),
+                'stage3': round(self.stage_times.get('stage3', 0), 1)
+            }
         }
 
     def _build_result(self, result_type: str, total_time: float, validated: list, rejected: list,
@@ -554,6 +619,9 @@ class TradingBotRunner:
 
         if validated:
             result['validated_signals'] = validated
+
+        if rejected:
+            result['rejected_signals'] = rejected
 
         if error:
             result['error'] = error

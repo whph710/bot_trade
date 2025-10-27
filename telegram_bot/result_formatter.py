@@ -1,6 +1,5 @@
 """
-Упрощенный result_formatter.py - базовое форматирование результатов
-МОДИФИКАЦИЯ: Stage 4 убран, термины изменены
+result_formatter.py - FIXED: Better time display
 """
 
 from typing import Dict, Any
@@ -9,22 +8,19 @@ from typing import Dict, Any
 def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) -> str:
     """
     Форматировать результат работы торгового бота для вывода в Telegram
-
-    Args:
-        result: Результат работы бота
-        run_stats: Статистика запусков (total_runs, today_runs)
+    ИСПРАВЛЕНО: Лучшее отображение времени
     """
 
     bot_result = result.get('result', 'UNKNOWN')
-    total_time = result.get('total_time', 0)
+    total_time = result.get('stats', {}).get('total_time', result.get('total_time', 0))  # ИСПРАВЛЕНО
     stats = result.get('stats', {})
 
     emoji_map = {
         'SUCCESS': '✅',
-        'NO_APPROVED_SIGNALS': '⚠️',
+        'NO_VALIDATED_SIGNALS': '⚠️',
         'NO_SIGNAL_PAIRS': '❌',
         'NO_AI_SELECTION': '❌',
-        'NO_ANALYSIS_SIGNALS': '❌',  # Новое название
+        'NO_ANALYSIS_SIGNALS': '❌',
         'TRADING_HOURS_BLOCKED': '⏱️',
         'ERROR': '💥'
     }
@@ -33,15 +29,28 @@ def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) 
 
     result_text = (
         f"<b>{emoji} РЕЗУЛЬТАТ: {bot_result}</b>\n\n"
-        f"⏱️ <b>Время:</b> {total_time:.1f}s\n\n"
+        f"⏱️ <b>Время выполнения:</b> {total_time:.1f}s\n\n"
     )
+
+    # ИСПРАВЛЕНО: Добавляем детализацию по этапам если есть
+    stage_times = stats.get('stage_times', {})
+    if stage_times and any(stage_times.values()):
+        result_text += "<b>⏲️ ВРЕМЯ ПО ЭТАПАМ:</b>\n"
+        if stage_times.get('stage1', 0) > 0:
+            result_text += f"  • Stage 1 (Filter): {stage_times['stage1']:.1f}s\n"
+        if stage_times.get('stage2', 0) > 0:
+            result_text += f"  • Stage 2 (AI Select): {stage_times['stage2']:.1f}s\n"
+        if stage_times.get('stage3', 0) > 0:
+            result_text += f"  • Stage 3 (Analysis): {stage_times['stage3']:.1f}s\n"
+        result_text += "\n"
 
     result_text += "<b>📊 СТАТИСТИКА АНАЛИЗА:</b>\n"
     result_text += f"  • Пар отсканировано: {stats.get('pairs_scanned', 0)}\n"
     result_text += f"  • Сигналов найдено: {stats.get('signal_pairs_found', 0)}\n"
     result_text += f"  • AI отобрал: {stats.get('ai_selected', 0)}\n"
     result_text += f"  • Проанализировано: {stats.get('analyzed', 0)}\n"
-    result_text += f"  • ✅ Одобрено (Stage 3): {stats.get('approved_signals', 0)}\n"
+    result_text += f"  • ✅ Одобрено (Stage 3): {stats.get('validated_signals', 0)}\n"
+    result_text += f"  • ❌ Отклонено: {stats.get('rejected_signals', 0)}\n"
 
     if stats.get('processing_speed'):
         result_text += f"  • Скорость: {stats.get('processing_speed', 0):.1f} пар/сек\n"
@@ -64,14 +73,7 @@ def format_bot_result(result: Dict[str, Any], run_stats: Dict[str, int] = None) 
 async def send_formatted_signals_to_group(bot, chat_id: int, formatted_signals: list[str]) -> int:
     """
     Отправить уже отформатированные сигналы в группу
-
-    Args:
-        bot: Экземпляр Bot
-        chat_id: ID чата
-        formatted_signals: Список уже отформатированных HTML-текстов
-
-    Returns:
-        Количество успешно отправленных сигналов
+    ИСПРАВЛЕНО: Нет изменений, но используется в telegram_bot_main
     """
     if not formatted_signals:
         return 0
@@ -90,7 +92,6 @@ async def send_formatted_signals_to_group(bot, chat_id: int, formatted_signals: 
             sent_count += 1
             print(f"✅ Sent signal {index}/{total_signals} to group")
 
-            # Небольшая задержка между постами
             import asyncio
             await asyncio.sleep(0.5)
 

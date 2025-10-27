@@ -1,4 +1,4 @@
-# telegram_bot_main.py - WITH STAGE PROGRESS NOTIFICATIONS
+# telegram_bot_main.py - FIXED: Rejected signals + Error handling
 import asyncio
 import logging
 from datetime import datetime
@@ -129,7 +129,6 @@ class TradingBotTelegram:
             try:
                 from main import run_trading_bot_cycle
 
-                # НОВОЕ: Передаем callback для прогресса
                 result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
 
             finally:
@@ -143,10 +142,13 @@ class TradingBotTelegram:
                 parse_mode="HTML"
             )
 
+            # ИСПРАВЛЕНО: Отправка validated + rejected signals
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
-            else:
-                logger.info("ℹ️ No approved signals to post")
+
+            # ИСПРАВЛЕНО: Отправка rejected signals в личку
+            if result.get('rejected_signals'):
+                await self._send_rejected_signals(result.get('rejected_signals', []))
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -159,11 +161,7 @@ class TradingBotTelegram:
 
     async def _send_progress_update(self, stage: str, message: str):
         """
-        НОВОЕ: Callback для отправки прогресса выполнения
-
-        Args:
-            stage: Название этапа (Stage 2, Stage 3, etc.)
-            message: Сообщение о прогрессе
+        Callback для отправки прогресса выполнения
         """
         try:
             emoji_map = {
@@ -189,6 +187,48 @@ class TradingBotTelegram:
 
         except Exception as e:
             logger.error(f"Error sending progress update: {e}")
+
+    async def _send_rejected_signals(self, rejected_signals: list):
+        """
+        ИСПРАВЛЕНО: Отправка rejected signals в личку
+        """
+        if not rejected_signals:
+            return
+
+        try:
+            # Группируем по 5 сигналов
+            batch_size = 5
+            for i in range(0, len(rejected_signals), batch_size):
+                batch = rejected_signals[i:i + batch_size]
+
+                message_parts = [
+                    f"❌ <b>ОТКЛОНЕННЫЕ СИГНАЛЫ ({i + 1}-{min(i + batch_size, len(rejected_signals))} из {len(rejected_signals)})</b>\n"]
+
+                for sig in batch:
+                    symbol = sig.get('symbol', 'UNKNOWN')
+                    reason = sig.get('rejection_reason', 'Unknown reason')
+
+                    # Обрезаем длинные причины
+                    if len(reason) > 200:
+                        reason = reason[:197] + "..."
+
+                    message_parts.append(f"\n<b>{symbol}</b>")
+                    message_parts.append(f"<i>{reason}</i>\n")
+
+                full_message = "\n".join(message_parts)
+
+                await self.bot.send_message(
+                    chat_id=TG_USER_ID,
+                    text=full_message,
+                    parse_mode="HTML"
+                )
+
+                await asyncio.sleep(0.5)
+
+            logger.info(f"✅ Sent {len(rejected_signals)} rejected signals to user")
+
+        except Exception as e:
+            logger.error(f"Error sending rejected signals: {e}")
 
     async def _post_signals_to_group(self, result: Dict[str, Any]) -> None:
         """Форматирование через DeepSeek AI и публикация в группу"""
@@ -222,19 +262,49 @@ class TradingBotTelegram:
                 )
                 return
 
-            sent_count = await send_formatted_signals_to_group(
-                self.bot,
-                TG_CHAT_ID,
-                formatted_signals
-            )
+            # ИСПРАВЛЕНО: Добавлена обработка ошибок при отправке
+            sent_count = 0
+            failed_count = 0
 
-            await self.bot.send_message(
-                chat_id=TG_USER_ID,
-                text=f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу</b>",
-                parse_mode="HTML"
-            )
+            for index, formatted_text in enumerate(formatted_signals, 1):
+                try:
+                    await self.bot.send_message(
+                        chat_id=TG_CHAT_ID,
+                        text=formatted_text,
+                        parse_mode="HTML"
+                    )
+                    sent_count += 1
+                    logger.info(f"✅ Sent signal {index}/{len(formatted_signals)} to group")
+                    await asyncio.sleep(0.5)
 
-            logger.info(f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID}")
+                except Exception as send_error:
+                    failed_count += 1
+                    logger.error(f"❌ Failed to send signal {index}/{len(formatted_signals)}: {send_error}")
+
+                    # Отправляем ошибку в личку
+                    try:
+                        await self.bot.send_message(
+                            chat_id=TG_USER_ID,
+                            text=f"⚠️ <b>Ошибка отправки сигнала {index}/{len(formatted_signals)} в группу:</b>\n\n<code>{str(send_error)[:300]}</code>",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+
+            # Итоговое сообщение
+            if sent_count > 0:
+                status_text = f"✅ <b>Опубликовано {sent_count}/{len(formatted_signals)} сигнал(ов) в группу</b>"
+                if failed_count > 0:
+                    status_text += f"\n⚠️ Не удалось отправить: {failed_count}"
+
+                await self.bot.send_message(
+                    chat_id=TG_USER_ID,
+                    text=status_text,
+                    parse_mode="HTML"
+                )
+
+            logger.info(
+                f"✅ Posted {sent_count}/{len(formatted_signals)} signal(s) to group {TG_CHAT_ID} (failed: {failed_count})")
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -242,7 +312,7 @@ class TradingBotTelegram:
 
             await self.bot.send_message(
                 chat_id=TG_USER_ID,
-                text=f"❌ <b>Ошибка при публикации:</b> {str(e)[:100]}",
+                text=f"❌ <b>Ошибка при публикации:</b>\n\n<code>{str(e)[:300]}</code>",
                 parse_mode="HTML"
             )
 
@@ -305,7 +375,6 @@ class TradingBotTelegram:
             try:
                 from main import run_trading_bot_cycle
 
-                # НОВОЕ: Передаем callback для прогресса
                 result = await run_trading_bot_cycle(progress_callback=self._send_progress_update)
 
             finally:
@@ -321,8 +390,10 @@ class TradingBotTelegram:
 
             if result.get('validated_signals'):
                 await self._post_signals_to_group(result)
-            else:
-                logger.info("ℹ️ No approved signals in this cycle")
+
+            # ИСПРАВЛЕНО: Отправка rejected signals
+            if result.get('rejected_signals'):
+                await self._send_rejected_signals(result.get('rejected_signals', []))
 
         except Exception as e:
             await self._stop_typing_indicator()
@@ -331,7 +402,8 @@ class TradingBotTelegram:
             try:
                 await bot.send_message(
                     chat_id=TG_USER_ID,
-                    text=f"❌ Ошибка в запланированном цикле: {str(e)[:100]}"
+                    text=f"❌ Ошибка в запланированном цикле:\n\n<code>{str(e)[:300]}</code>",
+                    parse_mode="HTML"
                 )
             except Exception as send_error:
                 logger.exception(f"Failed to send error message: {send_error}")
