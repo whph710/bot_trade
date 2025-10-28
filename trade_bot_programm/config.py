@@ -1,7 +1,11 @@
 """
-Trading Bot Configuration
-FINAL FIX: Экспорт API ключей на уровне модуля + безопасное преобразование типов
+Trading Bot Configuration — SIMPLIFIED STAGE 1
 Файл: trade_bot_programm/config.py
+
+ИЗМЕНЕНИЯ:
+- Убраны EMA_FAST (5) и EMA_MEDIUM (8)
+- Добавлен EMA_TREND (20) — единственная EMA для Stage 1
+- Новые параметры для упрощённой логики
 """
 
 import os
@@ -50,15 +54,17 @@ load_env()
 
 
 # ============================================================================
-# API KEYS - ЭКСПОРТ НА УРОВНЕ МОДУЛЯ
+# API KEYS
 # ============================================================================
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 
 # ============================================================================
-# TRADING BOT SPECIFIC PARAMETERS
+# STAGE 1 PARAMETERS — SIMPLIFIED
 # ============================================================================
+
+# Timeframes
 TIMEFRAME_SHORT = "60"   # 1H
 TIMEFRAME_LONG = "240"   # 4H
 TIMEFRAME_HTF = "D"      # 1D
@@ -67,7 +73,56 @@ TIMEFRAME_SHORT_NAME = "1H"
 TIMEFRAME_LONG_NAME = "4H"
 TIMEFRAME_HTF_NAME = "1D"
 
-QUICK_SCAN_CANDLES = 48
+# Stage 1 scanning
+QUICK_SCAN_CANDLES = 48  # 48 свечей 4H = 8 дней истории
+
+# ═══════════════════════════════════════════════════════════════
+# УПРОЩЁННЫЕ ИНДИКАТОРЫ (только 3 для Stage 1)
+# ═══════════════════════════════════════════════════════════════
+
+# 1. ТРЕНД (EMA20)
+EMA_TREND = safe_int(os.getenv('EMA_TREND', '20'), 20)
+TREND_THRESHOLD = safe_float(os.getenv('TREND_THRESHOLD', '0.5'), 0.5)  # 0.5% от EMA
+
+# 2. ИМПУЛЬС (RSI)
+RSI_PERIOD = safe_int(os.getenv('RSI_PERIOD', '14'), 14)
+
+# RSI диапазоны для LONG
+RSI_MIN_LONG = safe_int(os.getenv('RSI_MIN_LONG', '50'), 50)
+RSI_MAX_LONG = safe_int(os.getenv('RSI_MAX_LONG', '75'), 75)
+
+# RSI диапазоны для SHORT
+RSI_MIN_SHORT = safe_int(os.getenv('RSI_MIN_SHORT', '25'), 25)
+RSI_MAX_SHORT = safe_int(os.getenv('RSI_MAX_SHORT', '50'), 50)
+
+# 3. ОБЪЁМ
+VOLUME_WINDOW = safe_int(os.getenv('VOLUME_WINDOW', '20'), 20)
+MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
+
+# Минимальная уверенность для отбора
+MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '70'), 70)
+
+# ═══════════════════════════════════════════════════════════════
+# LEGACY PARAMETERS (для Stage 2/3 AI analysis)
+# ═══════════════════════════════════════════════════════════════
+
+# EMA для AI анализа (Stage 2/3)
+EMA_FAST = 5   # используется только в AI indicators
+EMA_MEDIUM = 8
+EMA_SLOW = 20
+
+# MACD (используется только в AI анализа)
+MACD_FAST = safe_int(os.getenv('MACD_FAST', '12'), 12)
+MACD_SLOW = safe_int(os.getenv('MACD_SLOW', '26'), 26)
+MACD_SIGNAL = safe_int(os.getenv('MACD_SIGNAL', '9'), 9)
+
+# ATR (используется только в AI анализа)
+ATR_PERIOD = safe_int(os.getenv('ATR_PERIOD', '14'), 14)
+
+
+# ============================================================================
+# STAGE 2/3 PARAMETERS (без изменений)
+# ============================================================================
 
 # Stage 2 (Compact data для DeepSeek)
 STAGE2_CANDLES_1H = 30
@@ -82,15 +137,15 @@ STAGE3_CANDLES_1D = 0
 AI_INDICATORS_HISTORY = 30
 FINAL_INDICATORS_HISTORY = 30
 
-# Финальный лимит: сколько пар DeepSeek должен ВЫБРАТЬ из всех переданных
+# Финальный лимит пар
 MAX_FINAL_PAIRS = safe_int(os.getenv('MAX_FINAL_PAIRS', '3'), 3)
 
 
 # ============================================================================
-# CONFIG CLASS для совместимости с импортами вида "from config import config"
+# CONFIG CLASS
 # ============================================================================
 class Config:
-    """Класс конфигурации для удобного доступа к настройкам"""
+    """Класс конфигурации"""
 
     # API Keys
     DEEPSEEK_API_KEY = DEEPSEEK_API_KEY
@@ -126,9 +181,39 @@ class Config:
     API_TIMEOUT_ANALYSIS = safe_int(os.getenv('API_TIMEOUT_ANALYSIS', '120'), 120)
     MAX_CONCURRENT = safe_int(os.getenv('MAX_CONCURRENT', '50'), 50)
 
-    # Trading Parameters
-    MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '70'), 70)
-    MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
+    # ═══════════════════════════════════════════════════════════════
+    # SIMPLIFIED STAGE 1 PARAMETERS
+    # ═══════════════════════════════════════════════════════════════
+
+    # Trend
+    EMA_TREND = EMA_TREND
+    TREND_THRESHOLD = TREND_THRESHOLD
+
+    # Momentum
+    RSI_PERIOD = RSI_PERIOD
+    RSI_MIN_LONG = RSI_MIN_LONG
+    RSI_MAX_LONG = RSI_MAX_LONG
+    RSI_MIN_SHORT = RSI_MIN_SHORT
+    RSI_MAX_SHORT = RSI_MAX_SHORT
+
+    # Volume
+    VOLUME_WINDOW = VOLUME_WINDOW
+    MIN_VOLUME_RATIO = MIN_VOLUME_RATIO
+
+    # Confidence
+    MIN_CONFIDENCE = MIN_CONFIDENCE
+
+    # ═══════════════════════════════════════════════════════════════
+    # LEGACY PARAMETERS (for Stage 2/3)
+    # ═══════════════════════════════════════════════════════════════
+
+    EMA_FAST = EMA_FAST
+    EMA_MEDIUM = EMA_MEDIUM
+    EMA_SLOW = EMA_SLOW
+    MACD_FAST = MACD_FAST
+    MACD_SLOW = MACD_SLOW
+    MACD_SIGNAL = MACD_SIGNAL
+    ATR_PERIOD = ATR_PERIOD
 
     # Rate Limiting
     CLAUDE_RATE_LIMIT_DELAY = safe_int(os.getenv('CLAUDE_RATE_LIMIT_DELAY', '0'), 0)
@@ -136,16 +221,6 @@ class Config:
     # Market Data Thresholds
     OI_CHANGE_GROWING_THRESHOLD = safe_float(os.getenv('OI_CHANGE_GROWING_THRESHOLD', '2.0'), 2.0)
     OI_CHANGE_DECLINING_THRESHOLD = safe_float(os.getenv('OI_CHANGE_DECLINING_THRESHOLD', '-2.0'), -2.0)
-
-    # Technical Indicators
-    EMA_FAST = safe_int(os.getenv('EMA_FAST', '5'), 5)
-    EMA_MEDIUM = safe_int(os.getenv('EMA_MEDIUM', '8'), 8)
-    EMA_SLOW = safe_int(os.getenv('EMA_SLOW', '20'), 20)
-    RSI_PERIOD = safe_int(os.getenv('RSI_PERIOD', '14'), 14)
-    MACD_FAST = safe_int(os.getenv('MACD_FAST', '12'), 12)
-    MACD_SLOW = safe_int(os.getenv('MACD_SLOW', '26'), 26)
-    MACD_SIGNAL = safe_int(os.getenv('MACD_SIGNAL', '9'), 9)
-    ATR_PERIOD = safe_int(os.getenv('ATR_PERIOD', '14'), 14)
 
     # Pair Selection
     MAX_FINAL_PAIRS = MAX_FINAL_PAIRS
@@ -181,8 +256,9 @@ class Config:
     AI_INDICATORS_HISTORY = AI_INDICATORS_HISTORY
     FINAL_INDICATORS_HISTORY = FINAL_INDICATORS_HISTORY
 
+
 # ============================================================================
-# MODULE-LEVEL EXPORTS для совместимости с from config import STAGE2_PROVIDER
+# MODULE-LEVEL EXPORTS
 # ============================================================================
 STAGE2_PROVIDER = Config.STAGE2_PROVIDER
 STAGE2_MODEL = Config.STAGE2_MODEL

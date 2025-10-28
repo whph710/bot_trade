@@ -1,205 +1,254 @@
 ═══════════════════════════════════════════════════════════════
-HYBRID DAY TRADING STRATEGY — PROFESSIONAL 65-75% WINRATE
+SWING TRADING ANALYSIS — SIMPLIFIED 75%+ WINRATE
 ═══════════════════════════════════════════════════════════════
 
-ЦЕЛЬ: Отобрать 2-3 HIGH-QUALITY setups для intraday (hold 30мин-3ч).
-Фокус: liquidity + volume + структура. Качество > количество.
+ЗАДАЧА: Найти high-probability SWING entry (hold 4-72ч).
+Минимум R/R = 2.5:1 (swing standard).
+Приоритет: Чёткий тренд + терпеливый вход + структурные уровни.
 
-ФИЛОСОФИЯ:
-- 65-75% WR при R:R 1:1.5 = устойчивая прибыльность
-- НЕ гонимся за 80%+ (это ловушка low R:R)
-- Пропустить 10 средних сигналов лучше чем взять 1 слабый
+ДАННЫЕ:
+- 1H (100 свечей) — краткосрочный timing
+- 4H (60 свечей) — основной trend context
+- 1D (20 свечей) — долгосрочный trend (если доступен)
 
-═══════════════════════════════════════════════════════════════
-ВХОДНЫЕ ДАННЫЕ
-═══════════════════════════════════════════════════════════════
-
-Для каждой пары:
-- Таймфреймы: 1H (context), 15m (entry), 5m (precision)
-- Индикаторы: price, ema5/8/20, rsi, volume_ratio, atr
-- Market data: orderbook, funding, OI
-- BTC correlation (если не BTCUSDT)
+ИНДИКАТОРЫ (УПРОЩЁННЫЕ):
+- EMA20 (единственная EMA)
+- RSI (14)
+- Volume Ratio
 
 ═══════════════════════════════════════════════════════════════
-КРИТЕРИИ ОТБОРА (5 КОМПОНЕНТОВ)
+ШАГ 1 — TREND CONFIRMATION (4H + 1D)
 ═══════════════════════════════════════════════════════════════
 
-**1️⃣ LIQUIDITY STRUCTURE (1H) — 30 баллов**
+✅ LONG setup:
+- EMA20 на 4H uptrend (последние 6-10 свечей)
+- Price выше EMA20 на 4H (или pullback к EMA20)
+- RSI 4H >50 (подтверждение бычьего импульса)
+- 1D EMA20 uptrend (ЕСЛИ has_1d_data == true)
 
-✅ PASS если:
-- Чёткие swing highs/lows на 1H (последние 6-10 свечей)
-- Price тестирует или пробивает swing level
-- Расстояние от swing до текущей цены: 0.5-2.0%
-- НЕТ боковика (EMA5/8/20 не переплетены >6 свечей)
-
-🎯 LIQUIDITY SWEEP PATTERNS (ПРИОРИТЕТ):
-- **False breakout**: пробитие swing high/low → быстрый возврат (<3 свечи)
-- **Stop hunt**: wick выше/ниже swing на 0.3-0.8% → закрытие внутри
-- **Equal highs/lows**: 2-3 одинаковых экстремума → sweep одного из них
+✅ SHORT setup:
+- EMA20 на 4H downtrend (последние 6-10 свечей)
+- Price ниже EMA20 на 4H (или pullback к EMA20)
+- RSI 4H <50 (подтверждение медвежьего импульса)
+- 1D EMA20 downtrend (ЕСЛИ has_1d_data == true)
 
 ❌ REJECT если:
-- Нет чётких swing points
-- Боковик >8 свечей (ranging market)
-- Цена в middle of nowhere (между swing points)
+- EMA20 на 4H флэтовая (horizontal) >6 свечей
+- LONG против 4H downtrend ИЛИ SHORT против 4H uptrend
+- 1D тренд противоположен 4H (ЕСЛИ 1D доступен)
+- EMA20 пересечения туда-сюда последние 8 свечей (choppy)
 
----
+🎯 OPTIMAL ENTRY PATTERNS:
+1. **Pullback to EMA20 4H**: цена вернулась к EMA20 → bounce с volume
+2. **Breakout + retest**: пробой swing high/low → retest → продолжение
+3. **Consolidation breakout**: tight range 6-12 свечей → clean break
 
-**2️⃣ VOLUME CONFIRMATION (15m) — 25 баллов**
+═══════════════════════════════════════════════════════════════
+ШАГ 2 — MOMENTUM CHECK (1H + 4H RSI)
+═══════════════════════════════════════════════════════════════
 
-✅ PASS если:
-- Volume spike >150% на sweep candle
-- Последующие 2-3 свечи: volume снижается (absorption завершён)
-- Volume profile: HVN (High Volume Node) <2% от текущей цены
+**Для LONG:**
+- RSI 1H: 55-75 (импульс есть, но не overbought)
+- RSI 4H: >50 (подтверждение)
+- RSI 1D: >45 (ЕСЛИ has_1d_data == true)
 
-🎯 VOLUME PATTERNS:
-- **Spike + rejection**: volume >180% на wick, закрытие против направления
-- **Climax volume**: паника на экстремуме → reversal
-- **Divergence**: price new high/low БЕЗ volume confirmation (weakness)
-
-⚠️ WARNING если:
-- Volume <120% (слабый интерес)
-- Volume растёт 3+ свечи подряд (exhaustion ещё не достигнут)
-
----
-
-**3️⃣ ORDER FLOW ALIGNMENT (15m) — 20 баллов**
-
-✅ PASS если:
-- Order Block на 15m <1.5% от текущей цены
-- Fair Value Gap (FVG) присутствует
-- Orderbook imbalance >60% (bid/ask ratio для LONG >1.5, для SHORT <0.67)
-
-🎯 ORDER FLOW PATTERNS:
-- **OB proximity**: цена на 50% OB + rejection wick
-- **FVG fill**: price закрывает 50-80% gap + reversal
-- **Absorption**: крупные sell walls исчезают перед LONG (или buy walls перед SHORT)
-
-🚨 RED FLAGS:
-- Spoofing detected (крупные ордера исчезают за 1-2 секунды)
-- Orderbook пустой (depth <0.5% от цены = нет ликвидности)
-
----
-
-**4️⃣ SESSION & TIMING — 15 баллов**
-
-✅ OPTIMAL:
-- **08:00-12:00 UTC** (London open) — +15
-- **12:00-16:00 UTC** (London/NY overlap) — +15 (BEST)
-- **16:00-18:00 UTC** (NY session) — +12
-
-⚠️ ACCEPTABLE:
-- **06:00-08:00 UTC** (pre-London) — +8
-- **18:00-20:00 UTC** (late NY) — +8
-
-❌ AVOID:
-- **00:00-06:00 UTC** (Asian night) — ТОЛЬКО если volume spike >200%
-- **20:00-00:00 UTC** (Sydney) — choppy, low volume
-- За 30 мин до/после major news (Fed, NFP, CPI)
-
----
-
-**5️⃣ RISK CLARITY — 10 баллов**
-
-✅ PASS если:
-- Swing high/low для SL в пределах 1.5-2.5% от entry
-- ATR 1H: 0.8-2.5% (есть запас хода)
-- Projected R:R ≥ 1.5:1 (МИНИМУМ)
-
-🎯 IDEAL SETUP:
-- SL расстояние: 1.0-2.0% (tight but safe)
-- TP расстояние: 1.5-3.0% (1.5-2× risk)
-- ATR volatility: 1.2-2.0% (optimal for movement)
+**Для SHORT:**
+- RSI 1H: 25-45 (импульс есть, но не oversold)
+- RSI 4H: <50 (подтверждение)
+- RSI 1D: <55 (ЕСЛИ has_1d_data == true)
 
 ❌ REJECT если:
-- SL >3% (слишком широкий)
-- ATR <0.5% (мёртвый рынок) или >3.5% (overextended)
-- R:R <1.5:1 (не стоит риска)
+- **LONG**: RSI 1H >78 ИЛИ (RSI 1H >72 И RSI 4H >68)
+- **SHORT**: RSI 1H <22 ИЛИ (RSI 1H <28 И RSI 4H <32)
+- Multi-TF RSI exhaustion = reversal risk
+
+✅ BONUS SIGNALS:
+- **RSI divergence 4H**: price new high/low, RSI не подтверждает
+- **RSI reset**: был extreme >75/<25, затем вернулся в зону 50-70/30-50
+- **RSI breakout**: вышел из consolidation zone (45-55)
 
 ═══════════════════════════════════════════════════════════════
-SCORING SYSTEM (MAX 100, MIN 75)
+ШАГ 3 — VOLUME CONFIRMATION (4H)
 ═══════════════════════════════════════════════════════════════
 
-**Liquidity Structure (1H)** — 30
-**Volume Confirmation (15m)** — 25
-**Order Flow Alignment (15m)** — 20
-**Session & Timing** — 15
-**Risk Clarity** — 10
+✅ REQUIRED:
+- Volume Ratio 4H >1.2 на последней свече (+20% minimum)
+- Volume spike на setup свече >1.5 (+50% preferred)
 
-**МИНИМУМ ДЛЯ ОТБОРА: 75 БАЛЛОВ**
+🎯 STRONG SIGNALS:
+- **Climax volume**: spike >2.0 на ключевой свече (breakout/bounce)
+- **Volume expansion**: рост объёма 3-4 свечи подряд (accumulation)
+- **Volume divergence**: price растёт, volume падает = weakness
 
-**PRIORITY TIERS:**
-- **90-100**: EXCEPTIONAL (immediate action)
-- **80-89**: HIGH (strong setup)
-- **75-79**: ACCEPTABLE (take with caution)
-- **<75**: REJECT (wait for better)
-
-═══════════════════════════════════════════════════════════════
-АВТОИСКЛЮЧЕНИЕ (HARD BLOCKS)
-═══════════════════════════════════════════════════════════════
-
-❌ Score <75
-❌ Боковик 1H >8 свечей (EMA переплетены)
-❌ Нет liquidity sweep pattern за последние 10 свечей
-❌ Volume <120% на setup свече
-❌ Funding rate >|0.0008| (overleveraged)
-❌ Spread >0.10% (illiquid market)
-❌ Asian session БЕЗ volume spike >200%
-❌ ATR >3.5% (exhausted) или <0.5% (dead)
-❌ BTC correlation >0.85 + противоречие (если НЕ BTCUSDT)
+❌ REJECT если:
+- Volume Ratio <1.15 (слабый интерес)
+- Volume declining 3+ свечи при движении (exhaustion)
+- Volume spike против направления (rejection candle)
 
 ═══════════════════════════════════════════════════════════════
-ПРИМЕРЫ SCORING
+ШАГ 4 — STOP LOSS PLACEMENT (4H STRUCTURE)
 ═══════════════════════════════════════════════════════════════
 
-**ПРИМЕР #1: EXCEPTIONAL SETUP (Score 92)**
-- Liquidity: False breakout swing low 1H + volume 185% → 30/30
-- Volume: Spike + rejection wick, HVN <1% → 25/25
-- Order Flow: OB proximity 0.8%, FVG present, imbalance 68% → 20/20
-- Session: London/NY overlap 13:30 UTC → 15/15
-- Risk: SL 1.8%, TP 2.7%, R:R 1:1.5, ATR 1.6% → 10/10
-- **VERDICT: TAKE IMMEDIATELY**
+**Для LONG:**
+- SL ниже swing low 4H (буфер 0.5-0.8%)
+- Максимум SL = 3% от entry
 
-**ПРИМЕР #2: MARGINAL SETUP (Score 77)**
-- Liquidity: Swing test без пробития, EMA aligned → 22/30
-- Volume: 140% spike (okay but not strong) → 18/25
-- Order Flow: OB 2.1% далеко, FVG нет, imbalance 58% → 12/20
-- Session: Pre-London 07:15 UTC → 8/15
-- Risk: SL 2.3%, TP 3.5%, R:R 1:1.52, ATR 1.9% → 9/10
-- **VERDICT: BORDERLINE, consider passing for better setup**
+**Для SHORT:**
+- SL выше swing high 4H (буфер 0.5-0.8%)
+- Максимум SL = 3%
 
-**ПРИМЕР #3: REJECTED (Score 68)**
-- Liquidity: Price в боковике, нет swing pattern → 15/30
-- Volume: 115% (weak) → 10/25
-- Order Flow: OB 3.5% слишком далеко → 8/20
-- Session: Asian 04:00 UTC → 0/15
-- Risk: SL 2.8%, R:R 1:1.2 ниже минимума → 5/10
-- **VERDICT: REJECT, wait for London open**
+❌ REJECT если:
+- Нет чёткого swing point 4H в пределах 3%
+- Swing point слишком далеко (>3%) = плохой R/R
+- Последний swing старше 20 свечей 4H (устаревший)
+
+🎯 IDEAL:
+- Swing point 1.5-2.5% от entry (tight but safe)
+- Multiple swing tests (2-3 касания) = сильная поддержка/сопротивление
+- Confluence с round numbers ИЛИ Volume Profile POC
 
 ═══════════════════════════════════════════════════════════════
-OUTPUT (JSON)
+ШАГ 5 — TAKE PROFIT LEVELS (SWING R/R 2.5:1+)
+═══════════════════════════════════════════════════════════════
+
+**Базовая формула (ATR-based for swing):**
+risk = |entry - SL|
+
+**TP calculation:**
+- TP1 = entry + (2.5 × risk) — первый target (swing minimum)
+- TP2 = entry + (4.0 × risk) — основной target
+- TP3 = entry + (6.0 × risk) — runner (momentum continuation)
+
+**Adjustments based on structure:**
+- Если ближайший resistance <TP1 → reduce TP1 к resistance -0.3%
+- Если Volume Profile POC рядом → align TP2 с POC
+- Если round number (1000, 5000, 10000) рядом → align TP близко
+
+**Минимум R/R = 2.5:1 (TP1), иначе NO_SIGNAL**
+
+═══════════════════════════════════════════════════════════════
+REJECTION TRIGGERS (КРИТИЧНО ДЛЯ SWING)
+═══════════════════════════════════════════════════════════════
+
+❌ Против 4H тренда (EMA20 направление)
+❌ 1D тренд противоположен 4H (ЕСЛИ 1D доступен)
+❌ RSI multi-TF exhaustion:
+   - LONG: RSI 1H >78 ИЛИ (1H >72 И 4H >68)
+   - SHORT: RSI 1H <22 ИЛИ (1H <28 И 4H <32)
+❌ Volume Ratio 4H <1.15 (dead market)
+❌ Нет swing point 4H в пределах 3% (невозможен tight SL)
+❌ R/R <2.5:1 для TP1 (недостаточная награда)
+❌ Боковик 4H >10 свечей (ranging market, не trending)
+❌ EMA20 пересечения 4H >3 раз за последние 12 свечей (choppy)
+❌ Funding rate >|0.001| (overleveraged market)
+❌ Spread >0.15% (illiquid)
+
+**⚠️ 1D DATA HANDLING:**
+- ЕСЛИ has_1d_data == false → НЕ отклоняй сигнал!
+- Просто используй 4H как major timeframe
+- Требуй более чёткие сигналы на 4H (EMA trend >8 свечей)
+
+═══════════════════════════════════════════════════════════════
+CONFIDENCE SCORING (0-100)
+═══════════════════════════════════════════════════════════════
+
+Base = 65 (для swing)
+
+**Плюсы:**
++15 4H EMA20 clear trend >8 свечей
++10 1D EMA20 aligned (ЕСЛИ has_1d_data == true)
++12 Pullback to EMA20 4H + bounce
++10 RSI 1H в optimal зоне (60-72 LONG, 28-40 SHORT)
++8 RSI 4H aligned (>55 LONG, <45 SHORT)
++10 Volume spike >1.8 на setup свече
++8 Clear swing structure (HH/HL или LH/LL)
++7 Volume Profile POC <2% от entry
++5 Round number proximity <1%
+
+**Минусы:**
+-20 Против 4H тренда
+-15 1D против 4H (ЕСЛИ 1D доступен)
+-12 RSI approaching extreme (1H >75 или <25)
+-10 Volume declining при движении
+-10 Боковик 4H >8 свечей
+-8 Spread >0.10%
+-5 Funding rate >|0.0005|
+
+**Минимум для swing: 75 (не 85!)**
+
+**Если has_1d_data == false:**
+- База confidence увеличена до 70 (компенсация)
+- Требуется минимум 77 для APPROVE
+
+═══════════════════════════════════════════════════════════════
+OUTPUT JSON
 ═══════════════════════════════════════════════════════════════
 
 {
-  "selected_pairs": ["BTCUSDT", "ETHUSDT"],
-  "scoring_details": {
-    "BTCUSDT": {
-      "total_score": 92,
-      "liquidity": 30,
-      "volume": 25,
-      "order_flow": 20,
-      "session": 15,
-      "risk": 10,
-      "tier": "EXCEPTIONAL"
-    },
-    "ETHUSDT": {
-      "total_score": 82,
-      "tier": "HIGH"
-    }
-  }
+  "signal": "LONG" | "SHORT" | "NO_SIGNAL",
+  "confidence": int,
+  "entry_price": float,
+  "stop_loss": float,
+  "take_profit_levels": [tp1, tp2, tp3],
+  "analysis": "до 120 слов (фокус на 4H trend + swing structure + R/R)",
+  "rejection_reason": "string или null"
 }
 
-Если нет пар ≥75:
+**Примеры:**
+
+✅ APPROVE (С 1D DATA):
 {
-  "selected_pairs": [],
-  "reason": "No setups meet minimum 75 score threshold"
+  "signal": "LONG",
+  "confidence": 83,
+  "entry_price": 43280.50,
+  "stop_loss": 42650.00,
+  "take_profit_levels": [44855.75, 46180.00, 48030.00],
+  "analysis": "4H бычий тренд (EMA20 uptrend 9 свечей). Pullback к EMA20 с volume spike 1.95. RSI 1H 67, RSI 4H 58 aligned. 1D EMA20 aligned. Clear swing low $42,650 (1.45% risk). R/R 2.5/4.0/6.0. Structure: HH/HL pattern. Optimal swing entry.",
+  "rejection_reason": null
 }
+
+✅ APPROVE (БЕЗ 1D DATA):
+{
+  "signal": "SHORT",
+  "confidence": 79,
+  "entry_price": 2350.00,
+  "stop_loss": 2425.00,
+  "take_profit_levels": [2162.50, 2050.00, 1900.00],
+  "analysis": "4H медвежий тренд (EMA20 downtrend 10 свечей, 1D data unavailable). Breakout swing low + retest. RSI 1H 35, RSI 4H 42 aligned. Volume spike 2.1 на breakout. Clear swing high $2,425 (3.19% risk). R/R 2.5/4.0/6.0. Structure: LH/LL pattern. Swing setup confirmed.",
+  "rejection_reason": null
+}
+
+❌ REJECT:
+{
+  "signal": "NO_SIGNAL",
+  "confidence": 62,
+  "entry_price": 0,
+  "stop_loss": 0,
+  "take_profit_levels": [0,0,0],
+  "analysis": "LONG signal против 4H downtrend (EMA20 направлена вниз 7 свечей). RSI 1H 68 approaching overbought. Volume Ratio 1.18 слабый. Боковик последние 9 свечей. 1D unavailable. Insufficient swing setup.",
+  "rejection_reason": "LONG против 4H downtrend + RSI near extreme + low volume + choppy structure"
+}
+
+═══════════════════════════════════════════════════════════════
+КРИТИЧЕСКИЕ ОТЛИЧИЯ ОТ INTRADAY
+═══════════════════════════════════════════════════════════════
+
+✅ SWING APPROACH:
+- 4H как ОСНОВНОЙ таймфрейм (не 15m)
+- R/R минимум 2.5:1 (не 1.5:1)
+- Hold time 4-72h (не 30мин-4ч)
+- Confidence минимум 75 (не 70)
+- EMA20 ТОЛЬКО (не EMA5/8/20)
+- Stop loss на 4H swing points (не 15m)
+- Volume на 4H (не 5m)
+
+❌ НЕ ищи:
+- Liquidity sweeps на 15m (для swing не критично)
+- Order Blocks на 1H (слишком краткосрочно)
+- Intraday session timing (swing игнорирует сессии)
+
+✅ ИЩИ:
+- Чистые 4H тренды (8+ свечей)
+- Структурные swing points для SL
+- Volume confirmation на 4H
+- Терпеливые входы (pullbacks к EMA20)

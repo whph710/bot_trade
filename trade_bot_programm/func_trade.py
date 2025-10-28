@@ -1,5 +1,11 @@
 """
-Technical indicators and trading logic
+Technical indicators and trading logic — SIMPLIFIED VERSION
+Файл: trade_bot_programm/func_trade.py
+
+ИЗМЕНЕНИЯ:
+- Упрощена логика до 3 индикаторов: EMA20 + RSI + Volume
+- Убраны: EMA5, EMA8, MACD, ATR
+- Новая система scoring: более прозрачная и эффективная
 """
 
 import numpy as np
@@ -130,8 +136,185 @@ def calculate_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
         return np.full_like(prices, 50.0)
 
 
+def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray:
+    """Calculate volume ratios"""
+    try:
+        volumes = np.array([safe_float(v) for v in volumes])
+
+        if len(volumes) < window:
+            return np.ones_like(volumes)
+
+        ratios = np.ones_like(volumes)
+
+        for i in range(window, len(volumes)):
+            avg_volume = np.mean(volumes[max(0, i-window):i])
+            if avg_volume > 0:
+                ratios[i] = volumes[i] / avg_volume
+            else:
+                ratios[i] = 1.0
+
+        return ratios
+    except Exception as e:
+        logger.error(f"Volume ratios calculation error: {e}")
+        return np.ones_like(volumes)
+
+
+def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
+    """
+    Calculate SIMPLIFIED indicators for Stage 1
+
+    ТОЛЬКО 3 индикатора:
+    - EMA20 (тренд)
+    - RSI (импульс)
+    - Volume Ratio (интерес)
+    """
+    if not validate_candles(candles, 20):
+        return {}
+
+    try:
+        closes = np.array([safe_float(c[4]) for c in candles])
+        volumes = np.array([safe_float(c[5]) for c in candles])
+
+        if len(closes) < 20 or np.all(closes == 0) or np.all(volumes == 0):
+            return {}
+
+        # Только EMA20 (убрали EMA5 и EMA8)
+        ema20 = calculate_ema(closes, config.EMA_TREND)
+
+        # RSI для импульса
+        rsi = calculate_rsi(closes, config.RSI_PERIOD)
+
+        # Volume ratio для подтверждения
+        volume_ratios = calculate_volume_ratios(volumes, config.VOLUME_WINDOW)
+
+        return {
+            'price': safe_float(closes[-1]),
+            'ema20': safe_float(ema20[-1]),
+            'rsi': safe_float(rsi[-1]),
+            'volume_ratio': safe_float(volume_ratios[-1]),
+            # Сохраняем историю для Stage 2/3
+            'ema20_history': [safe_float(x) for x in ema20[-10:]],
+            'rsi_history': [safe_float(x) for x in rsi[-10:]],
+            'volume_history': [safe_float(x) for x in volume_ratios[-10:]]
+        }
+
+    except Exception as e:
+        logger.error(f"Basic indicators calculation error: {e}")
+        return {}
+
+
+def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    УПРОЩЁННАЯ ПРОВЕРКА СИГНАЛА
+
+    Принцип: Тренд + Импульс + Объём
+
+    1. ТРЕНД (EMA20): Price должна быть выше/ниже EMA20 на 0.5%+
+    2. ИМПУЛЬС (RSI): RSI в правильной зоне (не extreme)
+    3. ОБЪЁМ: Volume spike минимум +20%
+    """
+    if not indicators:
+        return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+    try:
+        price = safe_float(indicators.get('price', 0))
+        ema20 = safe_float(indicators.get('ema20', 0))
+        rsi = safe_float(indicators.get('rsi', 50))
+        volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
+
+        if price <= 0 or ema20 <= 0:
+            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+        if not (0 <= rsi <= 100):
+            rsi = 50
+
+        # ═══════════════════════════════════════════════════════
+        # 1️⃣ ОПРЕДЕЛЯЕМ ТРЕНД (EMA20)
+        # ═══════════════════════════════════════════════════════
+
+        trend_threshold = config.TREND_THRESHOLD  # 0.5% по умолчанию
+
+        if price > ema20 * (1 + trend_threshold / 100):
+            trend = 'LONG'
+            # Сила тренда: чем дальше от EMA, тем сильнее (макс 5%)
+            trend_strength = min(((price - ema20) / ema20) * 100, 5.0)
+        elif price < ema20 * (1 - trend_threshold / 100):
+            trend = 'SHORT'
+            trend_strength = min(((ema20 - price) / ema20) * 100, 5.0)
+        else:
+            # Цена слишком близко к EMA20 — нет чёткого тренда
+            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+        # ═══════════════════════════════════════════════════════
+        # 2️⃣ ПРОВЕРЯЕМ ИМПУЛЬС (RSI)
+        # ═══════════════════════════════════════════════════════
+
+        if trend == 'LONG':
+            # RSI должен быть в зоне роста (50-75)
+            if rsi < config.RSI_MIN_LONG or rsi > config.RSI_MAX_LONG:
+                return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+            # Momentum score: нелинейная шкала для более агрессивной оценки
+            # RSI 50 → 40%, RSI 62.5 (середина) → 70%, RSI 75 → 100%
+            rsi_normalized = (rsi - config.RSI_MIN_LONG) / (config.RSI_MAX_LONG - config.RSI_MIN_LONG)
+            momentum_score = 40 + (rsi_normalized ** 0.7) * 60  # степень 0.7 для выпуклости
+
+        else:  # SHORT
+            # RSI должен быть в зоне падения (25-50)
+            if rsi > config.RSI_MAX_SHORT or rsi < config.RSI_MIN_SHORT:
+                return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+            # Momentum score: аналогично для SHORT
+            rsi_normalized = (config.RSI_MAX_SHORT - rsi) / (config.RSI_MAX_SHORT - config.RSI_MIN_SHORT)
+            momentum_score = 40 + (rsi_normalized ** 0.7) * 60
+
+        # ═══════════════════════════════════════════════════════
+        # 3️⃣ ПРОВЕРЯЕМ ОБЪЁМ
+        # ═══════════════════════════════════════════════════════
+
+        if volume_ratio < config.MIN_VOLUME_RATIO:
+            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+        # Volume score: 1.2→10%, 3.0→100%
+        volume_score = min((volume_ratio - 1.0) * 50, 100)
+
+        # ═══════════════════════════════════════════════════════
+        # 🎯 ФИНАЛЬНЫЙ CONFIDENCE (прозрачная формула)
+        # ═══════════════════════════════════════════════════════
+
+        # Нормализуем trend_strength: 0-5% → 0-100%
+        trend_score = (trend_strength / 5.0) * 100  # макс 100%
+
+        confidence = int(
+            trend_score * 0.25 +        # 25% веса (тренд важен, но не критичен)
+            momentum_score * 0.50 +     # 50% веса (импульс = главное!)
+            volume_score * 0.25         # 25% веса (объём подтверждает)
+        )
+
+        # Clip to 0-100
+        confidence = max(0, min(100, confidence))
+
+        # Проверка минимального порога
+        if confidence < config.MIN_CONFIDENCE:
+            return {'signal': False, 'confidence': confidence, 'direction': 'NONE'}
+
+        return {
+            'signal': True,
+            'confidence': confidence,
+            'direction': trend
+        }
+
+    except Exception as e:
+        logger.error(f"Signal check error: {e}")
+        return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
+
+
+# ═══════════════════════════════════════════════════════════════
+# ФУНКЦИИ ДЛЯ STAGE 2/3 (AI АНАЛИЗ) — БЕЗ ИЗМЕНЕНИЙ
+# ═══════════════════════════════════════════════════════════════
+
 def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, np.ndarray]:
-    """Calculate MACD"""
+    """Calculate MACD (используется только в Stage 2/3)"""
     zero_array = np.zeros_like(prices)
 
     if len(prices) < max(fast, slow):
@@ -152,7 +335,7 @@ def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: i
 
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
-    """Calculate ATR"""
+    """Calculate ATR (используется только в Stage 2/3)"""
     if not validate_candles(candles, period + 1):
         return 0.0
 
@@ -185,70 +368,14 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
         return 0.0
 
 
-def calculate_volume_ratios(volumes: np.ndarray, window: int = 20) -> np.ndarray:
-    """Calculate volume ratios"""
-    try:
-        volumes = np.array([safe_float(v) for v in volumes])
-
-        if len(volumes) < window:
-            return np.ones_like(volumes)
-
-        ratios = np.ones_like(volumes)
-
-        for i in range(window, len(volumes)):
-            avg_volume = np.mean(volumes[max(0, i-window):i])
-            if avg_volume > 0:
-                ratios[i] = volumes[i] / avg_volume
-            else:
-                ratios[i] = 1.0
-
-        return ratios
-    except Exception as e:
-        logger.error(f"Volume ratios calculation error: {e}")
-        return np.ones_like(volumes)
-
-
-def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
-    """Calculate basic indicators for quick scanning"""
-    if not validate_candles(candles, 20):
-        return {}
-
-    try:
-        closes = np.array([safe_float(c[4]) for c in candles])
-        volumes = np.array([safe_float(c[5]) for c in candles])
-
-        if len(closes) < 20 or np.all(closes == 0) or np.all(volumes == 0):
-            return {}
-
-        ema5 = calculate_ema(closes, config.EMA_FAST)
-        ema8 = calculate_ema(closes, config.EMA_MEDIUM)
-        ema20 = calculate_ema(closes, config.EMA_SLOW)
-
-        rsi = calculate_rsi(closes, config.RSI_PERIOD)
-        macd = calculate_macd(closes, config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
-        atr = calculate_atr(candles, config.ATR_PERIOD)
-        volume_ratios = calculate_volume_ratios(volumes)
-
-        return {
-            'price': safe_float(closes[-1]),
-            'ema5': safe_float(ema5[-1]),
-            'ema8': safe_float(ema8[-1]),
-            'ema20': safe_float(ema20[-1]),
-            'rsi': safe_float(rsi[-1]),
-            'macd_line': safe_float(macd['line'][-1]),
-            'macd_signal': safe_float(macd['signal'][-1]),
-            'macd_histogram': safe_float(macd['histogram'][-1]),
-            'atr': safe_float(atr),
-            'volume_ratio': safe_float(volume_ratios[-1])
-        }
-
-    except Exception as e:
-        logger.error(f"Basic indicators calculation error: {e}")
-        return {}
-
-
 def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Dict[str, Any]:
-    """Calculate indicators with history for AI analysis"""
+    """
+    Calculate indicators with history for AI analysis (Stage 2/3)
+
+    ИЗМЕНЕНИЯ:
+    - EMA5/8 убраны, оставлена только EMA20
+    - Остальные индикаторы без изменений
+    """
     if not validate_candles(candles, max(history_length, 20)):
         return {}
 
@@ -259,12 +386,10 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
         if len(closes) < history_length or np.all(closes == 0):
             return {}
 
-        ema5 = calculate_ema(closes, config.EMA_FAST)
-        ema8 = calculate_ema(closes, config.EMA_MEDIUM)
-        ema20 = calculate_ema(closes, config.EMA_SLOW)
+        ema20 = calculate_ema(closes, config.EMA_TREND)
         rsi = calculate_rsi(closes, config.RSI_PERIOD)
         macd = calculate_macd(closes, config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
-        volume_ratios = calculate_volume_ratios(volumes)
+        volume_ratios = calculate_volume_ratios(volumes, config.VOLUME_WINDOW)
 
         def safe_history(arr, length):
             """Safe history extraction"""
@@ -280,8 +405,6 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
                 return [0.0] * length
 
         return {
-            'ema5_history': safe_history(ema5, history_length),
-            'ema8_history': safe_history(ema8, history_length),
             'ema20_history': safe_history(ema20, history_length),
             'rsi_history': safe_history(rsi, history_length),
             'macd_line_history': safe_history(macd['line'], history_length),
@@ -290,8 +413,6 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
             'volume_ratio_history': safe_history(volume_ratios, history_length),
             'current': {
                 'price': safe_float(closes[-1]),
-                'ema5': safe_float(ema5[-1]),
-                'ema8': safe_float(ema8[-1]),
                 'ema20': safe_float(ema20[-1]),
                 'rsi': safe_float(rsi[-1]),
                 'macd_line': safe_float(macd['line'][-1]),
@@ -304,62 +425,3 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
     except Exception as e:
         logger.error(f"AI indicators calculation error: {e}")
         return {}
-
-
-def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
-    """Check for basic trading signal"""
-    if not indicators:
-        return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
-
-    try:
-        price = safe_float(indicators.get('price', 0))
-        ema5 = safe_float(indicators.get('ema5', 0))
-        ema8 = safe_float(indicators.get('ema8', 0))
-        ema20 = safe_float(indicators.get('ema20', 0))
-        rsi = safe_float(indicators.get('rsi', 50))
-        macd_hist = safe_float(indicators.get('macd_histogram', 0))
-        volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
-        atr = safe_float(indicators.get('atr', 0))
-
-        if price <= 0 or ema5 <= 0 or ema8 <= 0 or ema20 <= 0:
-            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
-
-        if not (0 <= rsi <= 100):
-            rsi = 50
-
-        conditions = []
-
-        if price > ema5 and ema5 > ema8 and ema8 > ema20:
-            conditions.append(('LONG', 25))
-
-        if price < ema5 and ema5 < ema8 and ema8 < ema20:
-            conditions.append(('SHORT', 25))
-
-        if 30.0 < rsi < 70.0:
-            conditions.append(('ANY', 15))
-
-        if abs(macd_hist) > 0.001:
-            conditions.append(('ANY', 15))
-
-        if volume_ratio >= config.MIN_VOLUME_RATIO:
-            conditions.append(('ANY', 20))
-
-        if atr > 0.001:
-            conditions.append(('ANY', 10))
-
-        if not conditions:
-            return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
-
-        long_score = sum(score for direction, score in conditions if direction in ['LONG', 'ANY'])
-        short_score = sum(score for direction, score in conditions if direction in ['SHORT', 'ANY'])
-
-        if long_score > short_score and long_score >= config.MIN_CONFIDENCE:
-            return {'signal': True, 'confidence': int(long_score), 'direction': 'LONG'}
-        elif short_score > long_score and short_score >= config.MIN_CONFIDENCE:
-            return {'signal': True, 'confidence': int(short_score), 'direction': 'SHORT'}
-        else:
-            return {'signal': False, 'confidence': int(max(long_score, short_score)), 'direction': 'NONE'}
-
-    except Exception as e:
-        logger.error(f"Signal check error: {e}")
-        return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
