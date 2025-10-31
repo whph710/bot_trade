@@ -1,6 +1,10 @@
 """
-Anthropic Claude AI Client - FIXED: No Stage 4 validation
+Anthropic Claude AI Client - БЕЗ 1D ДАННЫХ
 Файл: trade_bot_programm/anthropic_client.py
+ИЗМЕНЕНИЯ:
+- Убраны все упоминания 1D свечей
+- Убраны indicators_1d
+- Убран флаг has_1d_data
 """
 
 import asyncio
@@ -18,7 +22,7 @@ _prompts_cache = {}
 
 
 def load_prompt_cached(filename: str) -> str:
-    """Load prompt with caching - unified search strategy"""
+    """Load prompt with caching"""
     if filename in _prompts_cache:
         logger.debug(f"Prompt loaded from cache: {filename}")
         return _prompts_cache[filename]
@@ -58,7 +62,7 @@ def load_prompt_cached(filename: str) -> str:
 
 
 class AnthropicClient:
-    """Anthropic Claude API client - Stage 3 only (no Stage 4)"""
+    """Anthropic Claude API client - Stage 3 only (БЕЗ 1D)"""
 
     def __init__(self):
         self.api_key = config.ANTHROPIC_API_KEY
@@ -129,26 +133,20 @@ class AnthropicClient:
             raise
 
     async def select_pairs(self, pairs_data: List[Dict]) -> List[str]:
-        """Select pairs for analysis (Stage 2 - compact data)"""
+        """Select pairs for analysis (Stage 2 - БЕЗ 1D)"""
         if not pairs_data:
             logger.warning("No pairs data for Claude selection")
             return []
 
         try:
-            # ИЗМЕНЕНИЕ: Убрали ограничение MAX_BULK_PAIRS
-            # Теперь передаем ВСЕ пары
-
             logger.info(f"Claude: Selecting pairs from ALL {len(pairs_data)} candidates")
 
-            # Компактные данные для Stage 2
             compact_data = {}
             for item in pairs_data:
                 symbol = item['symbol']
 
-                # Берем компактные индикаторы (уже подготовлены в bot_runner)
                 indicators_1h = item.get('indicators_1h', {})
                 indicators_4h = item.get('indicators_4h', {})
-                indicators_1d = item.get('indicators_1d', {})
 
                 if not indicators_1h or not indicators_4h:
                     continue
@@ -160,10 +158,8 @@ class AnthropicClient:
                     },
                     'candles_1h': item.get('candles_1h', [])[-30:],
                     'candles_4h': item.get('candles_4h', [])[-30:],
-                    'candles_1d': item.get('candles_1d', [])[-10:],
                     'indicators_1h': indicators_1h,
-                    'indicators_4h': indicators_4h,
-                    'indicators_1d': indicators_1d
+                    'indicators_4h': indicators_4h
                 }
 
             if not compact_data:
@@ -184,7 +180,6 @@ class AnthropicClient:
             result = extract_json_from_response(response)
 
             if result and 'selected_pairs' in result:
-                # Claude сам применит лимит согласно промпту (МАКСИМУМ 3)
                 selected_pairs = result['selected_pairs'][:config.MAX_FINAL_PAIRS]
                 logger.info(f"Claude selected {len(selected_pairs)} out of {len(compact_data)} pairs: {selected_pairs}")
                 return selected_pairs
@@ -200,7 +195,7 @@ class AnthropicClient:
             return []
 
     async def analyze_comprehensive(self, symbol: str, comprehensive_data: Dict) -> Dict:
-        """Comprehensive analysis using full Stage 3 data"""
+        """Comprehensive analysis using full Stage 3 data (БЕЗ 1D)"""
         try:
             logger.debug(f"Claude: Comprehensive analysis for {symbol}")
 

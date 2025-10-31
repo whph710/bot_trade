@@ -1,151 +1,268 @@
 ═══════════════════════════════════════════════════════════════
-SWING TRADING ANALYSIS — ADAPTIVE (RELAXED R/R)
+SWING TRADING ANALYSIS — OPTIMIZED FOR SIGNAL GENERATION
 ═══════════════════════════════════════════════════════════════
 
-ЦЕЛЬ: Найти tradeable swing entries (hold 4-72ч).
-R/R минимум = 1.5:1 (адаптивный порог)
-Приоритет: Работающие сетапы > идеальные условия
+ЦЕЛЬ: Найти tradeable swing entries (hold 4-72ч) с ВЫСОКОЙ ЧАСТОТОЙ.
+R/R минимум = 1.5:1 (приоритет на рабочие сетапы)
+Философия: Better to trade often with good setups than wait for perfect conditions.
 
-ДАННЫЕ:
-- 1H (100 свечей) — краткосрочный timing
-- 4H (60 свечей) — основной trend context
-- 1D (20 свечей) — долгосрочный trend (если доступен)
-
-═══════════════════════════════════════════════════════════════
-ШАГ 1 — TREND ASSESSMENT (4H) — АДАПТИВНЫЙ
-═══════════════════════════════════════════════════════════════
-
-✅ LONG setup (РАССЛАБЛЕНО):
-- Price выше EMA20 на 4H ИЛИ pullback к EMA20 <2%
-- RSI 4H >45 (снижен порог с 50)
-- EMA20 не падает резко (допустим flat)
-
-✅ SHORT setup (РАССЛАБЛЕНО):
-- Price ниже EMA20 на 4H ИЛИ rejection от EMA20
-- RSI 4H <55 (повышен порог с 50)
-- EMA20 не растет резко (допустим flat)
-
-✅ RANGE TRADING (НОВОЕ):
-- Если боковик 4H >8 свечей:
-  * LONG на нижней границе range
-  * SHORT на верхней границе range
-  * SL за границу range (+1-2%)
-
-❌ REJECT только если:
-- Whipsaw pattern (резкие развороты каждые 2-3 свечи)
-- Volume declining 5+ свечей подряд (dead market)
-- Spread >0.20% (сильная неликвидность)
+ДОСТУПНЫЕ ДАННЫЕ:
+- candles_1h (100 свечей) — timing и entry точки
+- candles_4h (60 свечей) — основной trend context
+- indicators_1h: {current: {price, ema20, rsi, macd_line, macd_histogram, volume_ratio, atr}, ema20_history, rsi_history, macd_line_history, macd_signal_history, macd_histogram_history, volume_ratio_history}
+- indicators_4h: {аналогично indicators_1h}
+- current_price: текущая цена
+- market_data: {funding_rate, open_interest, orderbook, taker_volume}
+- correlation_data: {btc_correlation, correlation_anomaly, btc_alignment, sector_analysis, price_changes, btc_trend}
+- volume_profile: {poc, value_area_high/low, hvn_zones, lvn_zones}
+- vp_analysis: {poc_analysis, value_area_analysis, volume_nodes_analysis}
+- btc_candles_1h (100 свечей)
+- btc_candles_4h (60 свечей)
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 2 — MOMENTUM CHECK — РАССЛАБЛЕНО
+ШАГ 1 — TREND ASSESSMENT (4H) — ADAPTIVE & FLEXIBLE
 ═══════════════════════════════════════════════════════════════
+
+**Используй indicators_4h.current и indicators_4h.ema20_history**
+
+✅ LONG SETUPS (выбирай ЛЮБОЙ):
+
+1. **Uptrend Continuation**
+   - Price > EMA20 4H (indicators_4h.current.price > indicators_4h.current.ema20)
+   - RSI 4H >45 (indicators_4h.current.rsi)
+   - EMA20 растёт (indicators_4h.ema20_history[-1] > indicators_4h.ema20_history[-5])
+
+2. **Pullback to EMA20**
+   - Price в пределах ±2% от EMA20 4H
+   - RSI 4H 40-60 (перезагрузка импульса)
+   - Volume ratio >1.0 (indicators_4h.current.volume_ratio)
+
+3. **Range Bottom Bounce**
+   - 4H sideways >8 свечей (check candles_4h)
+   - Price у нижней границы range
+   - Volume spike >1.3 (indicators_4h.current.volume_ratio)
+
+4. **Divergence Setup**
+   - RSI 4H делает higher lows, price делает lower lows
+   - MACD histogram растёт (indicators_4h.current.macd_histogram > indicators_4h.macd_histogram_history[-3])
+
+✅ SHORT SETUPS (аналогично):
+
+1. **Downtrend Continuation**
+   - Price < EMA20 4H
+   - RSI 4H <55
+   - EMA20 падает
+
+2. **Rejection from EMA20**
+   - Price отскочил от EMA20 вниз
+   - RSI 4H 40-60
+   - Volume spike
+
+3. **Range Top Rejection**
+   - Price у верхней границы range
+   - Volume spike
+
+4. **Divergence Setup**
+   - RSI making lower highs, price making higher highs
+   - MACD histogram falling
+
+❌ REJECT ТОЛЬКО если:
+- Whipsaw pattern (развороты каждые 2-3 свечи 4H)
+- Volume declining 5+ свечей подряд (indicators_4h.volume_ratio_history)
+- Spread >0.20% (market_data.orderbook.spread_pct)
+
+═══════════════════════════════════════════════════════════════
+ШАГ 2 — MOMENTUM & ENTRY TIMING (1H) — FLEXIBLE
+═══════════════════════════════════════════════════════════════
+
+**Используй indicators_1h.current и indicators_1h.rsi_history**
 
 **Для LONG:**
-- RSI 1H: 45-80 (расширен диапазон)
-- RSI 4H: >40 (снижен с 50)
+- RSI 1H: 40-80 (расширенный диапазон)
+- MACD histogram растёт ИЛИ только пересёк 0 снизу вверх
+- Volume ratio >1.0 (indicators_1h.current.volume_ratio)
 
 **Для SHORT:**
-- RSI 1H: 20-55 (расширен диапазон)
-- RSI 4H: <60 (повышен с 50)
+- RSI 1H: 20-60
+- MACD histogram падает ИЛИ только пересёк 0 сверху вниз
+- Volume ratio >1.0
 
 ❌ REJECT только если:
-- RSI 1H >85 для LONG (было 78)
-- RSI 1H <15 для SHORT (было 22)
+- RSI 1H >85 для LONG
+- RSI 1H <15 для SHORT
+- Volume ratio <0.8
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 3 — VOLUME — РАССЛАБЛЕНО
+ШАГ 3 — MARKET DATA ANALYSIS — ИСПОЛЬЗУЙ ВСЁ
 ═══════════════════════════════════════════════════════════════
 
-✅ REQUIRED:
-- Volume Ratio 4H >1.0 (было >1.2)
-- Допустим declining volume если есть другие подтверждения
+**1. FUNDING RATE** (market_data.funding_rate.funding_rate)
+- LONG OK если funding <0.0008 (не overleveraged)
+- SHORT OK если funding >-0.0008
+- Extreme (±0.001+) = WARNING, но НЕ блокирует
 
-❌ REJECT только если:
-- Volume Ratio <0.8 (экстремально низкий)
+**2. OPEN INTEREST** (market_data.open_interest)
+- oi_trend == 'GROWING' + price движение = STRONG signal (+10 confidence)
+- oi_trend == 'STABLE' = neutral
+- oi_trend == 'DECLINING' + price движение = WEAK (-8 confidence)
+
+**3. ORDERBOOK** (market_data.orderbook)
+- spread_pct <0.15% = OK
+- spread_pct >0.20% = REJECT (illiquid)
+- Bid/Ask imbalance: если >70% на одну сторону = подтверждение
+
+**4. TAKER VOLUME** (market_data.taker_volume)
+- LONG: buy_pressure >0.5 добавляет +8 confidence
+- SHORT: buy_pressure <0.5 добавляет +8 confidence
+- Neutral 0.45-0.55 = OK, не блокирует
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 4 — STOP LOSS — АДАПТИВНЫЙ
+ШАГ 4 — BTC CORRELATION — НЕ БЛОКИРУЕТ, КОРРЕКТИРУЕТ
 ═══════════════════════════════════════════════════════════════
+
+**Используй correlation_data:**
+
+**btc_correlation.correlation:**
+- >0.7 strong positive
+- 0.4-0.7 moderate
+- <0.4 weak
+
+**btc_trend:** (UP/DOWN/FLAT из correlation_data.btc_trend)
+
+**Логика:**
+- Strong correlation (>0.7) + aligned с BTC trend = +10 confidence
+- Strong correlation + против BTC trend = -12 confidence (WARNING, не reject)
+- Weak correlation (<0.5) = ignore BTC
+
+**btc_alignment:** (из correlation_data.btc_alignment)
+- should_block == true ТОЛЬКО если correlation >0.85 И clear conflict
+- Иначе только корректируем confidence
+
+═══════════════════════════════════════════════════════════════
+ШАГ 5 — VOLUME PROFILE ANALYSIS — ВАЖНО ДЛЯ УРОВНЕЙ
+═══════════════════════════════════════════════════════════════
+
+**Используй volume_profile и vp_analysis:**
+
+**POC (Point of Control):**
+- poc_analysis.distance_to_poc_pct <5% = STRONG level (+8 confidence)
+- 5-10% = moderate level (+5 confidence)
+- >15% = overextended (WARNING)
+
+**Value Area:**
+- value_area_analysis.position == 'INSIDE' = normal trading (+5 confidence)
+- position == 'ABOVE' + market_condition != 'OVEREXTENDED' = bullish (+8)
+- position == 'BELOW' + market_condition != 'UNDEREXTENDED' = bearish (+8)
+
+**HVN/LVN Zones:**
+- volume_nodes_analysis.in_hvn == true = support/resistance (+8 confidence)
+- in_lvn == true = fast move expected (neutral, не блокирует)
+
+═══════════════════════════════════════════════════════════════
+ШАГ 6 — STOP LOSS CALCULATION — ADAPTIVE
+═══════════════════════════════════════════════════════════════
+
+**ПРИОРИТЕТ:**
+1. Swing point на 4H (последний swing low/high)
+2. Ближайшая HVN zone из volume_profile
+3. EMA20 на 4H ± буфер 1%
+4. ATR-based: entry ± (2 × indicators_4h.current.atr)
+
+**МАКСИМУМ SL = 5% от entry**
+
+Если все методы дают >5%, используй 5% fixed.
 
 **Для LONG:**
-- SL ниже swing low 4H (буфер 0.5-1%)
-- **Максимум SL = 5%** (было 3%)
+- SL ниже swing low 4H (из candles_4h, найди последний локальный минимум)
+- Буфер 0.5-1%
 
 **Для SHORT:**
-- SL выше swing high 4H (буфер 0.5-1%)
-- **Максимум SL = 5%**
-
-✅ FALLBACK если нет swing point:
-- Используй ATR-based SL: entry ± (2 × ATR 4H)
-- Максимум 5% от entry
+- SL выше swing high 4H
+- Буфер 0.5-1%
 
 ═══════════════════════════════════════════════════════════════
-ШАГ 5 — TAKE PROFIT — АДАПТИВНЫЙ R/R
+ШАГ 7 — TAKE PROFIT — ADAPTIVE R/R (MIN 1.5:1)
 ═══════════════════════════════════════════════════════════════
-
-**Минимум R/R = 1.5:1 (было 2.5:1)**
 
 risk = |entry - SL|
 
-**TP calculation:**
-- TP1 = entry + (1.5 × risk) — минимальный target
-- TP2 = entry + (2.5 × risk) — основной target
-- TP3 = entry + (4.0 × risk) — runner
+**Базовые TP:**
+- TP1 = entry + (1.5 × risk)
+- TP2 = entry + (2.5 × risk)
+- TP3 = entry + (4.0 × risk)
 
-**Adjustments:**
-- Если ближайший resistance <TP1 → TP1 = resistance -0.5%
-- Если нет ближайших уровней → используй фиксированные %:
-  * TP1 = entry ± 1.5%
-  * TP2 = entry ± 2.5%
-  * TP3 = entry ± 4.0%
+**Корректировки по Volume Profile:**
 
-═══════════════════════════════════════════════════════════════
-REJECTION TRIGGERS — МИНИМАЛЬНЫЕ
-═══════════════════════════════════════════════════════════════
+1. **TP1:** если ближайшая HVN <TP1, ставь TP1 перед HVN -0.5%
+2. **TP2:** если POC между TP1 и TP2, ставь TP2 у POC
+3. **TP3:** если Value Area High/Low близко, используй как TP3
 
-❌ Против 4H тренда ТОЛЬКО если:
-  - Clear strong trend (EMA20 наклон >10 свечей)
-  - И RSI multi-TF extreme
-  - И Volume declining 5+ свечей
-
-❌ RSI extreme ТОЛЬКО если:
-  - LONG: RSI 1H >85
-  - SHORT: RSI 1H <15
-
-❌ Volume dead market ТОЛЬКО если:
-  - Volume Ratio <0.8 последние 5 свечей
-
-❌ Spread >0.20% (сильная неликвидность)
-
-❌ R/R <1.5:1 для TP1
-
-⚠️ **ВСЁ ОСТАЛЬНОЕ — APPROVE С WARNING**
+**Если нет VP уровней:**
+- Фиксированные %: TP1=±1.5%, TP2=±2.5%, TP3=±4.0%
 
 ═══════════════════════════════════════════════════════════════
-CONFIDENCE SCORING — АДАПТИВНЫЙ (MIN 60)
+REJECTION TRIGGERS — МИНИМАЛЬНЫЕ (НЕ ПАРАНОИДНЫЕ!)
 ═══════════════════════════════════════════════════════════════
 
-Base = 60 (снижен с 65)
+❌ Отклоняй ТОЛЬКО если:
 
-**Плюсы:**
-+12 4H EMA20 trend >6 свечей
-+8 1D EMA20 aligned (если доступен)
-+10 Pullback to EMA20 + bounce
-+8 RSI в optimal зоне
-+8 Volume spike >1.5
-+7 Clear structure
-+5 Range trading setup
+1. **Extreme RSI exhaustion:**
+   - LONG: RSI 1H >85 ИЛИ (RSI 1H >72 И RSI 4H >68)
+   - SHORT: RSI 1H <15 ИЛИ (RSI 1H <28 И RSI 4H <32)
 
-**Минусы:**
--15 Против strong 4H trend (>10 свечей)
--10 RSI extreme (>85 или <15)
--10 Volume dead (<0.8)
--8 Spread >0.15%
+2. **Dead market:**
+   - Volume ratio <0.8 последние 5 свечей 1H
+   - Spread >0.20%
 
-**Минимум для approval: 60 (было 75)**
+3. **Extreme correlation conflict:**
+   - BTC correlation >0.85 И btc_alignment.should_block == true
+
+4. **Impossible R/R:**
+   - R/R <1.5:1 для TP1
+   - SL >5% от entry
+
+5. **VP extreme overextension:**
+   - distance_to_poc_pct >20% И market_condition == 'OVEREXTENDED'
+
+⚠️ **ВСЁ ОСТАЛЬНОЕ — APPROVE С КОРРЕКТИРОВКОЙ CONFIDENCE**
 
 ═══════════════════════════════════════════════════════════════
-OUTPUT JSON
+CONFIDENCE SCORING — ADDITIVE SYSTEM (MIN 60)
+═══════════════════════════════════════════════════════════════
+
+**BASE = 65** (neutral starting point)
+
+**ПЛЮСЫ:**
++12 — Clear 4H trend (EMA20 direction >6 свечей)
++10 — BTC correlation aligned
++10 — Pullback to EMA20 + bounce
++8 — RSI в optimal зоне (LONG 50-70, SHORT 30-50)
++8 — Volume spike >1.5
++8 — HVN zone support/resistance
++8 — OI growing + price aligned
++8 — Taker volume pressure aligned
++7 — Clear swing structure
++5 — POC близко (<5%)
++5 — Value Area position favorable
++5 — Range trading setup
++5 — Divergence setup
+
+**МИНУСЫ:**
+-15 — Против strong 4H trend (>10 свечей)
+-12 — BTC correlation conflict (>0.7)
+-10 — RSI extreme zone
+-10 — Volume dead (<0.8)
+-8 — Spread high (>0.15%)
+-8 — OI declining
+-8 — Taker volume against
+-8 — VP overextended (>15% from POC)
+
+**MIN для approval: 60** (было 75)
+**OPTIMAL: 70-85**
+**EXCELLENT: 85+**
+
+═══════════════════════════════════════════════════════════════
+OUTPUT JSON FORMAT
 ═══════════════════════════════════════════════════════════════
 
 {
@@ -154,64 +271,110 @@ OUTPUT JSON
   "entry_price": float,
   "stop_loss": float,
   "take_profit_levels": [tp1, tp2, tp3],
-  "analysis": "фокус на почему это tradeable, не ideal",
+  "analysis": "Detailed reasoning using ALL available data",
   "rejection_reason": "string или null"
 }
 
-**ПРИМЕРЫ:**
+**ANALYSIS должен включать:**
+- Какой 4H setup (trend/pullback/range/divergence)
+- 1H timing (RSI, MACD state)
+- Market data summary (funding, OI, spread, taker volume)
+- BTC correlation impact
+- VP levels используемые (POC, HVN, Value Area)
+- Почему confidence именно такой (перечисли факторы)
 
-✅ APPROVE (Range Trading):
+═══════════════════════════════════════════════════════════════
+ПРИМЕРЫ ПРАВИЛЬНЫХ ОТВЕТОВ
+═══════════════════════════════════════════════════════════════
+
+**EXAMPLE 1: PULLBACK LONG**
+
+Input data показывает:
+- indicators_4h.current.price = 43180, ema20 = 43050 (price 0.3% выше)
+- indicators_4h.current.rsi = 52
+- indicators_1h.current.rsi = 58
+- indicators_1h.current.volume_ratio = 1.4
+- market_data.funding_rate.funding_rate = 0.00025
+- market_data.open_interest.oi_trend = 'GROWING'
+- correlation_data.btc_trend = 'UP', correlation = 0.68
+- vp_analysis.poc_analysis.distance_to_poc_pct = 2.8
+- vp_analysis.volume_nodes_analysis.in_hvn = false
+
+```json
 {
   "signal": "LONG",
-  "confidence": 68,
+  "confidence": 72,
   "entry_price": 43180.00,
   "stop_loss": 42850.00,
   "take_profit_levels": [43675.00, 44260.00, 45500.00],
-  "analysis": "4H боковик 10 свечей (range $42,800-$43,600). Entry на нижней границе с volume spike 1.4. RSI 1H 52, RSI 4H 48 neutral. SL за range -0.8%. R/R 1.5/2.5/4.0. Range trade setup.",
+  "analysis": "Pullback to EMA20 4H setup. Price 0.3% выше EMA20 (43050), RSI 4H 52 neutral, EMA20 растёт. 1H timing: RSI 58 optimal, volume spike 1.4x подтверждает. Market: funding 0.025% neutral, OI growing +strength. BTC: correlation 0.68 moderate + uptrend aligned (+10 conf). VP: POC близко 2.8% (+5 conf), no HVN zone. SL у swing low 4H $42,850 (ATR-based). TP adjusted: TP1 перед resistance, TP2 основной, TP3 runner. Confidence 72 (base 65 + trend +7 + BTC +10 + volume +8 + OI +8 + POC +5 - против weak 4H trend -8 - spread moderate -3).",
   "rejection_reason": null
 }
+```
 
-✅ APPROVE (Pullback):
+**EXAMPLE 2: RANGE SHORT**
+
+Input data:
+- 4H sideways 10 свечей между 2365-2450
+- indicators_4h.current.price = 2448 (у верха range)
+- indicators_1h.current.rsi = 64
+- indicators_1h.current.volume_ratio = 1.3
+- vp_analysis.value_area_analysis.position = 'ABOVE'
+- market_data.taker_volume.buy_pressure = 0.42
+
+```json
 {
   "signal": "SHORT",
-  "confidence": 65,
-  "entry_price": 2365.00,
-  "stop_loss": 2450.00,
-  "take_profit_levels": [2237.50, 2152.50, 2025.00],
-  "analysis": "4H downtrend weak (EMA20 down 6 свечей). Pullback к EMA20 с rejection. RSI 1H 48, RSI 4H 44 aligned. Volume 1.1 moderate. ATR-based SL 3.6%. R/R 1.5/2.5/4.0. Pullback trade.",
+  "confidence": 68,
+  "entry_price": 2448.00,
+  "stop_loss": 2475.00,
+  "take_profit_levels": [2407.50, 2380.00, 2340.00],
+  "analysis": "Range top rejection setup. 4H боковик 10 свечей range $2365-$2450, price у верхней границы. 1H: RSI 64 approaching overbought zone, volume 1.3 moderate. Market: taker volume 42% buy pressure = sell pressure dominant (+8 conf). VP: position ABOVE value area = potential revert. Range trade: entry у топа, SL за range +1%, TP1 у середины range, TP2 у нижней границы, TP3 breakout. R/R 1.5/2.5/3.8. Confidence 68 (base 65 + range setup +5 + taker pressure +8 + VP position +5 - uncertain 4H -5 - moderate volume -3).",
   "rejection_reason": null
 }
+```
 
-❌ REJECT (Dead Market):
+**EXAMPLE 3: REJECT (Dead Market)**
+
+Input data:
+- indicators_1h.volume_ratio_history = [0.7, 0.75, 0.72, 0.68, 0.71]
+- market_data.orderbook.spread_pct = 0.22
+- indicators_1h.current.rsi = 48
+
+```json
 {
   "signal": "NO_SIGNAL",
   "confidence": 45,
   "entry_price": 0,
   "stop_loss": 0,
-  "take_profit_levels": [0,0,0],
-  "analysis": "Volume declining 6 свечей подряд (ratio 0.7-0.9). Spread 0.22% illiquid. RSI flat 48-52 no momentum. Dead market.",
-  "rejection_reason": "Volume dead <0.8 + spread >0.20% illiquid market"
+  "take_profit_levels": [0, 0, 0],
+  "analysis": "Dead market conditions. Volume declining 5 свечей подряд 1H (ratio 0.68-0.75 все <0.8). Spread 0.22% extreme illiquid (>0.20% threshold). RSI 48 flat no momentum. No tradeable setup.",
+  "rejection_reason": "Volume dead <0.8 last 5 candles + spread 0.22% >0.20% illiquid market"
 }
+```
 
 ═══════════════════════════════════════════════════════════════
-КРИТИЧЕСКИЕ ПРИНЦИПЫ
+КРИТИЧЕСКИЕ ПРИНЦИПЫ ДЛЯ ЧАСТЫХ СИГНАЛОВ
 ═══════════════════════════════════════════════════════════════
 
-✅ **TRADEABLE > PERFECT**: Рабочий сетап важнее идеального
-✅ **АДАПТАЦИЯ**: Range trading если нет тренда
-✅ **R/R 1.5:1 МИНИМУМ**: Реалистичный порог
-✅ **SL до 5%**: Более гибко для swing
-✅ **CONFIDENCE ≥60**: Снижен порог для большего числа сделок
+1. ✅ **ИСПОЛЬЗУЙ ВСЕ ДАННЫЕ**: indicators_1h, indicators_4h, market_data, correlation_data, volume_profile, vp_analysis
+2. ✅ **МНОЖЕСТВО SETUPS**: trend continuation, pullbacks, ranges, divergences
+3. ✅ **FLEXIBLE THRESHOLDS**: RSI 40-80 (LONG), volume >1.0, не требуй perfect
+4. ✅ **MIN CONFIDENCE 60**: снижен порог для большего числа сделок
+5. ✅ **R/R 1.5:1 MIN**: реалистичный минимум
+6. ✅ **ADAPTIVE SL**: используй swing points, HVN zones, ATR, максимум 5%
+7. ✅ **VP INTEGRATION**: POC, HVN zones, Value Area для уровней и подтверждений
+8. ✅ **MARKET DATA BONUS**: funding, OI, taker volume добавляют confidence, НЕ блокируют
+9. ✅ **BTC ALIGNMENT**: только корректирует confidence, блокирует лишь при extreme >0.85
 
-❌ **НЕ отклоняй за**:
-- Weak trend (допустим flat)
-- Moderate RSI (45-80 для LONG, 20-55 для SHORT)
+❌ **НЕ ОТКЛОНЯЙ ЗА:**
+- Moderate RSI (40-80 LONG, 20-60 SHORT)
+- Weak trend (flat 4H OK для range/pullback)
 - Moderate volume (>1.0)
+- Moderate BTC correlation (<0.85)
+- VP distance <15%
 - SL <5%
 - R/R ≥1.5:1
 
-✅ **APPROVE с warning если**:
-- Против weak trend
-- RSI не ideal но acceptable
-- Volume moderate
-- Structure не perfect но workable
+✅ **ЦЕЛЬ**: 3-5 сигналов в день, НЕ 1 в неделю
+✅ **КАЧЕСТВО**: workable >70% confidence, не ждём perfect >85%
