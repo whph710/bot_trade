@@ -1,319 +1,453 @@
 ═══════════════════════════════════════════════════════════════
-СТРАТЕГИЯ ЛОЖНОГО ПРОБОЯ (ЛП) — ПОЛНЫЙ АНАЛИЗ (Stage 3)
+SMC + VOLUME PROFILE + ZLMA — ПОЛНЫЙ АНАЛИЗ (Stage 3)
 ═══════════════════════════════════════════════════════════════
 
-ФИЛОСОФИЯ: Ложный пробой — это неспособность инструмента обновить экстремумы.
-Крупный игрок использует ЛП для манипуляции ликвидностью и сбора стопов.
+ФИЛОСОФИЯ: Smart Money Concepts (SMC) — институционалы оставляют следы:
+- **Order Blocks** (зоны накопления/распределения)
+- **Volume Profile** (POC, Value Area, HVN/LVN zones)
+- **ZLMA треугольники** (манипуляции ликвидности)
+- **Taker Volume** (направление Smart Money)
+- **Open Interest** (институциональный интерес)
 
-ЦЕЛЬ: Найти точную точку входа на ложном пробое сильного уровня.
+ЦЕЛЬ: Найти институциональный setup с чётким entry, stop и TP levels.
 
 R/R минимум = 3:1
 Hold: 4-72 часа (swing trading)
 
 ДОСТУПНЫЕ ДАННЫЕ:
 - candles_1h (100), candles_4h (60)
-- indicators_1h/4h: {current: {price, ema20, rsi, volume_ratio, atr}, histories...}
+- indicators_1h/4h: {current: {price, ema20, rsi, macd_histogram, volume_ratio, atr}, histories...}
 - current_price
 - market_data: {funding_rate, open_interest, orderbook, taker_volume}
-- correlation_data: {btc_correlation, btc_trend...}
-- volume_profile: {poc, value_area, hvn_zones, lvn_zones}
-- vp_analysis
+- correlation_data: {btc_correlation, btc_trend, btc_alignment}
+- volume_profile: {poc, value_area_high/low, hvn_zones, lvn_zones, profile}
+- vp_analysis: {poc_analysis, value_area_analysis, volume_nodes_analysis}
 - btc_candles_1h/4h
+- ZLMA data из Stage 1 (через comprehensive_data если передано)
 
 ═══════════════════════════════════════════════════════════════
-ФАЗА 1 — ИДЕНТИФИКАЦИЯ СИЛЬНОГО УРОВНЯ (4H)
+PHASE 1 — ORDER BLOCK DETECTION (Институциональные зоны)
 ═══════════════════════════════════════════════════════════════
 
-**Используй candles_4h и indicators_4h.current**
+**Используй candles_1h и candles_4h + indicators_1h/4h**
 
-✅ СИЛЬНЫЙ УРОВЕНЬ (выбери ЛУЧШИЙ):
+✅ ORDER BLOCK = Последний противоположный бар перед сильным импульсом
 
-1. **Круглое число** (приоритет #1):
-   - Price ±1% от психологического уровня: 100, 500, 1000, 5000, 10000, 43000, 44000
-   - Там концентрируется крупный капитал
-   - **Вес: +35 confidence**
+**Алгоритм поиска:**
 
-2. **EMA20 на 4H**:
-   - Price ±2% от indicators_4h.current.ema20
-   - Динамический уровень поддержки/сопротивления
-   - **Вес: +25 confidence**
+1. **Ищи volume spike** (последние 10-20 баров):
+   - Volume ratio >200% (extreme) ИЛИ >150% (strong)
+   - Это бар где институционалы открыли позиции
 
-3. **POC (Point of Control)** из volume_profile:
-   - distance_to_poc_pct <3%
-   - Зона максимального объема = скопление интереса
-   - **Вес: +30 confidence**
+2. **Определи тип Order Block:**
 
-4. **HVN zones** (High Volume Nodes):
-   - Price в зоне HVN или близко (<2%)
-   - Исторические уровни с высокой концентрацией объема
-   - **Вес: +20 confidence**
+   **BULLISH ORDER BLOCK (для LONG):**
+   - Последний DOWN бар (close < open) ПЕРЕД сильным движением вверх
+   - OB зона = 50% тела этого DOWN бара (от mid к low)
+   - Пример: DOWN бар $43,000-$42,800 → OB zone $42,900-$42,800
 
-5. **Концентрация ударов** (исторические хаи/лаи):
-   - 3+ отскока от одного уровня на 4H за последние 20-30 свечей
-   - Место скопления лимитных ордеров
-   - **Вес: +20 confidence**
+   **BEARISH ORDER BLOCK (для SHORT):**
+   - Последний UP бар (close > open) ПЕРЕД сильным движением вниз
+   - OB zone = 50% тела этого UP бара (от mid к high)
+   - Пример: UP бар $44,000-$44,200 → OB zone $44,100-$44,200
 
-6. **Зона зараженности**:
-   - Видимое скопление свечей около уровня
-   - Плотное накопление объема
-   - **Вес: +15 confidence**
+3. **Импульс после OB:**
+   - Минимум 3 свечи в направлении сигнала
+   - Суммарное движение >3% от OB level
+
+**Приоритет:**
+- OB на 4H + volume >250% = +35 confidence (STRONG)
+- OB на 1H + volume >200% = +25 confidence (GOOD)
+- OB на 4H + pullback к OB = +15 confidence (setup готов)
+
+**Confluence с другими уровнями:**
+- OB совпадает с POC (±1%) = +20 confidence (EXCELLENT)
+- OB совпадает с HVN zone = +15 confidence (STRONG)
+- OB совпадает с ZLMA box boundary = +25 confidence (PREMIUM setup)
 
 ❌ ОТКЛОНИ если:
-- Price >5% от всех сильных уровней
-- Нет ни одного четкого уровня
+- Нет OB в последних 20 барах (ни на 1H, ни на 4H)
+- Volume spike <150%
+- Нет импульса после OB (<3% движение)
 
 ═══════════════════════════════════════════════════════════════
-ФАЗА 2 — АНАЛИЗ ПРЕДПОСЫЛОК ПОДХОДА (Конъюнктура)
+PHASE 2 — VOLUME PROFILE ANALYSIS (Институциональные уровни)
 ═══════════════════════════════════════════════════════════════
 
-**Используй candles_4h, indicators_4h**
+**Используй volume_profile и vp_analysis**
 
-НЕЛЬЗЯ торговать только паттерн ЛП. Нужен анализ КАК цена подошла к уровню.
+**1. POC (POINT OF CONTROL) — Магнит цены**
 
-**1. РЕЗКИЙ ПОДХОД** (необходимое условие):
+✅ POC = Уровень максимального объёма = fair value:
 
-✅ Проверь последние 5-7 свечей 4H:
-- Паранормальные бары (тело >2% каждая)
-- Безоткатное движение (без глубоких коррекций >20%)
-- Высокая волатильность (ATR растет)
-- **Вес: +25 confidence**
+- **distance_to_poc_pct <3%:**
+  - Price притягивается к POC
+  - **Scoring: +30 confidence** (STRONG магнит)
+  - **Setup:** Если OB near POC → PREMIUM entry
+
+- **distance_to_poc_pct 3-7%:**
+  - Price близко, но не на POC
+  - **Scoring: +15 confidence** (MODERATE)
+  - **Setup:** Ждём подход к POC
+
+- **distance_to_poc_pct 7-15%:**
+  - Price далеко от POC
+  - **Scoring: +5 confidence** (WEAK)
+  - **Setup:** POC как TP target
+
+- **distance_to_poc_pct >15%:**
+  - Price OVEREXTENDED от fair value
+  - **Scoring: -15 confidence** (WARNING: revert к POC возможен)
+  - **Setup:** Только если сильный OB + ZLMA треугольник
+
+---
+
+**2. VALUE AREA (70% объёма) — Fair Value зона**
+
+✅ Используй value_area_analysis:
+
+- **Position INSIDE Value Area:**
+  - market_condition = "NORMAL"
+  - Price в fair value зоне
+  - **Scoring: 0 adjustment** (neutral)
+  - **Setup:** Ждём breakout из VA
+
+- **Position ABOVE Value Area >3%:**
+  - market_condition = "OVEREXTENDED"
+  - expected_move = "REVERT_TO_VA"
+  - **Scoring: -15 confidence** (reversal risk)
+  - **Setup:** Только SHORT с сильным подтверждением
+
+- **Position BELOW Value Area >3%:**
+  - market_condition = "UNDEREXTENDED"
+  - expected_move = "REVERT_TO_VA"
+  - **Scoring: -15 confidence** (reversal risk)
+  - **Setup:** Только LONG с сильным подтверждением
+
+---
+
+**3. HVN ZONES (HIGH VOLUME NODES) — Support/Resistance**
+
+✅ Используй hvn_zones из volume_profile:
+
+- **Price в HVN zone:**
+  - **Scoring: +15 confidence** (support/resistance подтверждён)
+  - **Setup:** Entry в HVN zone = сильный уровень
+  - **TP:** Nearest HVN выше (для LONG) или ниже (для SHORT)
+
+- **Price между HVN zones:**
+  - **Scoring: 0 adjustment** (neutral)
+  - **Setup:** Используй HVN как TP levels
+
+---
+
+**4. LVN ZONES (LOW VOLUME NODES) — Fast Move зоны**
+
+✅ Используй lvn_zones из volume_profile:
+
+- **Price в LVN zone:**
+  - **Scoring: +10 confidence** (fast move ожидается)
+  - **Setup:** Breakout через LVN = explosive move
+  - **TP:** Nearest HVN за LVN zone
+
+- **LVN zone между price и target:**
+  - **Setup:** TP3 = за LVN zone (расширенный target)
+
+═══════════════════════════════════════════════════════════════
+PHASE 3 — ZLMA TREND LEVELS (Liquidity Manipulation)
+═══════════════════════════════════════════════════════════════
+
+**Используй comprehensive_data (если передано Stage 1 ZLMA data)**
+
+✅ ZLMA ТРЕУГОЛЬНИК = Институциональная манипуляция ликвидности
+
+**Типы манипуляций:**
+
+**1. ТРЕУГОЛЬНИК ▲ UP (Bullish Manipulation):**
+
+- **Что произошло:**
+  - Price пробила ZLMA box_top (коробка = ZLMA + ATR200) вверх
+  - Затем price вернулась обратно ЗА box_top
+  - Институционалы собрали sell-side liquidity выше
+
+- **Интерпретация:**
+  - Ложный пробой вверх = manipulation
+  - Smart Money накопили LONG позиции после sweep
+  - **Setup: LONG** на возврате за box_top
+
+- **Scoring:**
+  - Треугольник 0-3 бара назад = +40 confidence (FRESH)
+  - Треугольник 4-6 баров назад = +20 confidence (RELEVANT)
+  - Треугольник >6 баров = ignore (expired)
+
+---
+
+**2. ТРЕУГОЛЬНИК ▼ DOWN (Bearish Manipulation):**
+
+- **Что произошло:**
+  - Price пробила ZLMA box_bottom (коробка = ZLMA - ATR200) вниз
+  - Затем price вернулась обратно ЗА box_bottom
+  - Институционалы собрали buy-side liquidity ниже
+
+- **Интерпретация:**
+  - Ложный пробой вниз = manipulation
+  - Smart Money накопили SHORT позиции после sweep
+  - **Setup: SHORT** на возврате за box_bottom
+
+- **Scoring:**
+  - Треугольник 0-3 бара назад = +40 confidence (FRESH)
+  - Треугольник 4-6 баров назад = +20 confidence (RELEVANT)
+  - Треугольник >6 баров = ignore (expired)
+
+---
+
+**3. CONFLUENCE OB + ZLMA BOX:**
+
+✅ Если ZLMA box boundary СОВПАДАЕТ с Order Block (±1%):
+
+- **Scoring: +25 confidence** (PREMIUM setup!)
+- **Интерпретация:** Двойное подтверждение институционального уровня
+- **Setup:** Entry = OB zone = ZLMA box boundary
+
+---
+
+**4. ZLMA CROSSOVER (без треугольника):**
+
+- Если есть только ZLMA × EMA crossover (signalUp/signalDn):
+  - **Scoring: +10 confidence** (базовый тренд, но без манипуляции)
+  - **Setup:** Менее приоритетный, используй только если strong OB + POC
 
 ❌ ОТКЛОНИ если:
-- Медленное поджатие маленькими барами
-- Глубокие коррекции (>40% от волны)
-- Это признак истинного пробоя (накопление энергии)
-
-**2. ПЕРЕГРЕВ / ИСЧЕРПАНИЕ ATR**:
-
-✅ Рассчитай пройденный путь:
-- Возьми indicators_4h.current.atr
-- Измерь длину последней волны на 4H (от swing low/high до current_price)
-- Если пройдено >70% ATR → ПЕРЕГРЕВ
-
-**Интерпретация:**
-- ATR >70% + сильный уровень = РАЗВОРОТНЫЙ СЕТАП
-  - **Вес: +30 confidence**
-- ATR >100% + круглый уровень = СИЛЬНЫЙ РАЗВОРОТ
-  - **Вес: +40 confidence**
-- ATR <70% + уровень = продолжение тренда маловероятно
-  - **Вес: +10 confidence**
-
-❌ ОТКЛОНИ если:
-- ATR >70% пройдено БЕЗ сильного уровня впереди
-- Нет места для разворота
-
-**3. ДИСТРИБУЦИЯ** (признак апогея):
-
-✅ Проверь candles_4h:
-- Появление гэповых разрывов между барами
-- После 3-5 паранормальных баров (сильный рост/падение)
-- Объем снижается на последних барах
-- **Вес: +20 confidence**
-
-**4. ОТСУТСТВИЕ ПОДЖАТИЯ** (на 1H):
-
-✅ Проверь candles_1h (последние 10-15 свечей):
-- НЕТ медленного, поступательного движения маленькими барами
-- НЕТ консолидации перед уровнем
-- Отсутствие накопления = крупный игрок не готов к истинному пробою
-- **Вес: +15 confidence**
-
-❌ ОТКЛОНИ если:
-- Видно четкое поджатие на 1H (маленькие бары, сужение диапазона)
-- Это признак истинного пробоя
-
-**5. ЗОНА ЗАРАЖЕННОСТИ** (над/под уровнем):
-
-✅ Используй HVN zones из volume_profile:
-- Если HVN zone находится ПРЯМО НАД уровнем (для LONG) или ПОД уровнем (для SHORT)
-- Скопление лимитных ордеров = с первого раза не пробьет
-- **Вес: +15 confidence**
+- Нет ZLMA треугольника или crossover в последних 6 барах
+- Price далеко от ZLMA box (>2%)
 
 ═══════════════════════════════════════════════════════════════
-ФАЗА 3 — ИДЕНТИФИКАЦИЯ ПАТТЕРНА ЛП (1H)
+PHASE 4 — SMART MONEY CONFIRMATION (Market Data)
 ═══════════════════════════════════════════════════════════════
 
-**Используй candles_1h для тайминга входа**
+**1. TAKER VOLUME (направление Smart Money)**
 
-Определи ТИП ложного пробоя:
+✅ Используй market_data.taker_volume:
 
-**1. ЛП ОДНИМ БАРОМ** (самый простой):
+- **LONG setup:**
+  - buy_pressure >0.60 = +15 confidence (агрессивная покупка)
+  - buy_pressure 0.50-0.60 = +8 confidence (умеренная)
+  - buy_pressure <0.50 = -10 confidence (WARNING: weak buying)
 
-✅ Условия:
-- Бар (1H) пробивает уровень
-- Этот же бар ЗАКРЫВАЕТСЯ обратно за уровнем
-- Хвост ложного пробоя короткий (10-15% ATR)
+- **SHORT setup:**
+  - buy_pressure <0.40 = +15 confidence (агрессивная продажа)
+  - buy_pressure 0.40-0.50 = +8 confidence (умеренная)
+  - buy_pressure >0.50 = -10 confidence (WARNING: weak selling)
 
-**Вход:**
-- На возврате обратно за уровень (уже произошел)
-- Дистанция от уровня ≤5 центов (≤0.15%)
-- **Вес: +20 confidence**
+---
 
-**2. ЛП ДВУМЯ БАРАМИ** (ложное закрепление):
+**2. OPEN INTEREST (институциональный интерес)**
 
-✅ Условия:
-- Первый бар (1H) пробивает уровень И закрывается выше/ниже него
-- Второй бар входит обратно за уровень (разворот)
-- Volume spike на первом баре >1.5 (сбор стопов)
+✅ Используй market_data.open_interest:
 
-**Вход:**
-- На втором баре при возврате за уровень
-- Дистанция ≤5 центов
-- **Вес: +25 confidence** (дает больше времени, собирает больше стопов)
+- **OI trend = "GROWING" + price aligned:**
+  - LONG: OI растёт + price вверх = +15 confidence (institutional interest)
+  - SHORT: OI растёт + price вниз = +15 confidence
 
-**3. ЛП МНОЖЕСТВОМ БАРОВ** (N > 3):
+- **OI trend = "DECLINING":**
+  - **Scoring: -10 confidence** (WARNING: positions closing, weak move)
 
-✅ Условия:
-- Инструмент заходит за уровень
-- Консолидируется выше/ниже 3+ бара (1H)
-- НЕ идет дальше (нет импульса)
+- **OI trend = "STABLE":**
+  - **Scoring: 0 adjustment** (neutral)
 
-**Вход:**
-- После консолидации, при попытке разворота
-- Или при возврате за уровень
-- **Вес: +15 confidence** (более сложный паттерн)
+---
 
-❌ ОТКЛОНИ если:
-- Нет четкого паттерна ЛП (нет пробоя + возврата)
-- Volume на пробое <1.2 (нет сбора стопов)
-- Цена ушла далеко от уровня (>1%)
+**3. FUNDING RATE (leverage check)**
 
-═══════════════════════════════════════════════════════════════
-ФАЗА 4 — ТОЧКИ ВХОДА И СТОПА (Правила Арарата)
-═══════════════════════════════════════════════════════════════
+✅ Используй market_data.funding_rate:
 
-**ENTRY PRICE:**
+- **Neutral funding (|funding| <0.0005):**
+  - **Scoring: +5 confidence** (здоровый рынок)
 
-✅ Правила входа:
-1. Вход на ВОЗВРАТЕ инструмента обратно за уровень
-2. Дистанция от уровня ≤5 центов (≤0.15% от current_price)
-3. Гибкость: переключайся между 1м и 5м для поиска точной точки
-4. Entry = current_price (если уже вернулся за уровень)
+- **Moderate funding:**
+  - LONG: funding 0.0005-0.001 = 0 adjustment (acceptable)
+  - SHORT: funding -0.001 to -0.0005 = 0 adjustment (acceptable)
 
-**Пример:**
-- Уровень: $44,000
-- ЛП хай: $44,050 (пробой на +0.11%)
-- Возврат: $43,980 (обратно за уровень)
-- Entry: $43,980-$44,020 (дистанция ≤5 центов от уровня)
+- **EXTREME funding (БЛОКИРУЕТ сигнал):**
+  - LONG: funding >0.001 = ❌ REJECT (overleveraged longs)
+  - SHORT: funding <-0.001 = ❌ REJECT (overleveraged shorts)
 
-**STOP LOSS:**
+---
 
-✅ Короткий стоп (против тренда):
-- SL за хвост ложного пробоя
-- ИЛИ за пробойный бар (swing high/low последнего бара ЛП)
-- Буфер +0.5-1% для волатильности
+**4. ORDERBOOK (liquidity check)**
 
-**Формула:**
-- LONG: SL = (хвост ЛП low) - 0.5-1%
-- SHORT: SL = (хвост ЛП high) + 0.5-1%
+✅ Используй market_data.orderbook:
 
-**ПРАВИЛО:** Если инструмент развернется, он заберет любой стоп.
-Нет смысла ставить стоп далеко.
+- **Spread <0.10%:**
+  - **Scoring: +5 confidence** (liquid market, low slippage)
 
-**Максимум SL:** ≤3% от entry (для swing trading)
+- **Spread 0.10-0.15%:**
+  - **Scoring: 0 adjustment** (acceptable)
 
-❌ ОТКЛОНИ если:
-- SL >3% (слишком широкий)
-- R/R <3:1
+- **Spread >0.15%:**
+  - ❌ **REJECT** (illiquid market, high slippage risk)
 
 ═══════════════════════════════════════════════════════════════
-ФАЗА 5 — TAKE PROFIT (MIN 3:1)
+PHASE 5 — ENTRY, STOP LOSS, TAKE PROFIT
 ═══════════════════════════════════════════════════════════════
 
-risk = |entry - stop_loss|
+**ENTRY PRIORITY (выбери ЛУЧШИЙ доступный):**
+
+**1️⃣ Order Block Pullback (HIGHEST PRIORITY):**
+- Entry = 50% зона Order Block
+- Ждём pullback к OB после импульса
+- Пример: Bullish OB $42,800-$43,000 → Entry $42,900
+
+**2️⃣ ZLMA Box Boundary:**
+- Entry = возврат за ZLMA box после треугольника
+- Дистанция ≤0.5% от box boundary
+- Пример: ZLMA box_bottom $43,200 → Entry $43,150-$43,250
+
+**3️⃣ POC Proximity:**
+- Entry = near POC (±0.5%) если aligned с OB/ZLMA
+- POC = магнит, высокая вероятность bounce
+
+**4️⃣ HVN Zone:**
+- Entry = внутри HVN zone (support/resistance)
+
+**ПРАВИЛО:** Если OB + ZLMA + POC совпадают (±1%) = PREMIUM entry (+50 confidence boost!)
+
+---
+
+**STOP LOSS (tight но безопасный):**
+
+**1️⃣ За Order Block (PREFERRED):**
+- LONG: stop ниже bullish OB low - 0.5% buffer
+- SHORT: stop выше bearish OB high + 0.5% buffer
+- Пример: Bullish OB $42,800-$43,000 → Stop $42,750
+
+**2️⃣ За Swing Low/High (1H):**
+- Последний swing low (для LONG) или swing high (для SHORT)
+- Buffer +0.5% для волатильности
+- Максимум 5 баров назад
+
+**3️⃣ За ZLMA Box (если нет OB):**
+- LONG: stop ниже ZLMA box_bottom - 0.5%
+- SHORT: stop выше ZLMA box_top + 0.5%
+
+**МАКСИМУМ:** Stop loss ≤3% от entry (для swing trading)
+
+❌ ОТКЛОНИ если SL >3% (слишком широкий, плохой R/R)
+
+---
+
+**TAKE PROFIT (минимум 3:1 R/R):**
 
 **Базовые TP:**
-- TP1 = entry + (3.0 × risk)  [стандартный выход]
-- TP2 = entry + (4.0 × risk)  [расширенный]
-- TP3 = entry + (5.0 × risk)  [максимальный]
 
-**Корректировки по уровням:**
+risk = abs(entry_price - stop_loss)
 
-1. **Ближайший сильный уровень:**
-   - Если круглое число/EMA20/POC между entry и TP1
-   - Ставь TP1 ПЕРЕД уровнем -0.5%
+- **TP1 = entry + (3.0 × risk)** [минимум 3:1, основной выход]
+- **TP2 = entry + (4.0 × risk)** [расширенный 4:1]
+- **TP3 = entry + (5.0 × risk)** [максимальный 5:1]
 
-2. **HVN zones:**
-   - Если HVN zone между TP1-TP2
-   - Используй как TP2 (перед зоной -0.5%)
+---
 
-3. **Психологические уровни:**
-   - Если круглый уровень между TP2-TP3
-   - Используй как TP3
+**Корректировки по Volume Profile:**
 
-**Дробление позиции:**
-- Выход 80% на TP1 (3:1)
-- Оставшиеся 20% на TP2-TP3 (4:1 - 5:1)
+**1️⃣ POC между entry и TP1:**
+- Если POC <TP1 → TP1 = POC - 0.5% (перед магнитом)
+
+**2️⃣ HVN zone между TP1 и TP2:**
+- Если HVN в пути → TP2 = HVN lower boundary - 0.5%
+
+**3️⃣ LVN zone между TP2 и TP3:**
+- Если LVN за TP2 → TP3 = center of LVN zone (fast move target)
+
+**4️⃣ Value Area boundary:**
+- Если VA high/low между TP levels → используй как промежуточный TP
+
+---
+
+**ПРИМЕРЫ:**
+
+**LONG Setup:**
+- Entry: $43,000 (OB zone)
+- Stop: $42,700 (за OB) → risk = $300
+- TP1 base: $43,900 (3:1 = $900)
+- BUT POC at $43,850 → TP1 = $43,820 (перед POC)
+- TP2 base: $44,200 (4:1 = $1200)
+- BUT HVN zone $44,100-$44,300 → TP2 = $44,080 (перед HVN)
+- TP3: $44,500 (5:1 = $1500, за LVN zone)
 
 ═══════════════════════════════════════════════════════════════
 ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ
 ═══════════════════════════════════════════════════════════════
 
-**1. MARKET DATA (подтверждение капитала):**
+**1. BTC CORRELATION (смягчённая блокировка):**
 
-**Funding Rate** (из market_data.funding_rate):
-- LONG OK если <0.0008
-- SHORT OK если >-0.0008
-- Extreme ±0.001+ = WARNING (-8 confidence), не блокирует
+- **Strong correlation (>0.7) + aligned:**
+  - **Scoring: +10 confidence** (BTC поддерживает move)
 
-**Open Interest** (из market_data.open_interest):
-- oi_trend GROWING + aligned move = +10 confidence
-- oi_trend DECLINING + move = -8 confidence
+- **Strong correlation (>0.7) + conflict:**
+  - **Scoring: -12 confidence** (WARNING, но НЕ блокирует)
+  - Требуется stronger setup (OB + ZLMA + POC confluence)
 
-**Orderbook Spread** (из market_data.orderbook):
-- spread_pct >0.20% = REJECT (иллик видна)
-- spread_pct >0.15% = WARNING (-5 confidence)
+- **Weak correlation (<0.5):**
+  - **Scoring: 0 adjustment** (ignore BTC)
 
-**Taker Volume** (из market_data.taker_volume):
-- LONG: buy_pressure >0.5 = +8
-- SHORT: buy_pressure <0.5 = +8
+- **EXTREME correlation (>0.85) + should_block = true:**
+  - ❌ **REJECT** (критическое противоречие)
 
-**2. BTC CORRELATION (НЕ БЛОКИРУЕТ):**
+---
 
-**Из correlation_data:**
-- Strong correlation (>0.7) + aligned = +10 confidence
-- Strong correlation + против = -12 confidence (WARNING)
-- Weak (<0.5) = ignore BTC
-- btc_alignment.should_block = true ТОЛЬКО если correlation >0.85
+**2. MULTI-TIMEFRAME RSI EXHAUSTION:**
 
-**3. VOLUME PROFILE:**
+- **LONG:**
+  - RSI 1H >78 ИЛИ (RSI 1H >72 AND RSI 4H >68) = ❌ **REJECT**
 
-**POC proximity:**
-- distance_to_poc_pct <5% = сильный уровень (+8)
-- 5-10% = moderate (+5)
-- >15% = overextended (WARNING)
+- **SHORT:**
+  - RSI 1H <22 ИЛИ (RSI 1H <28 AND RSI 4H <32) = ❌ **REJECT**
 
-**HVN zones:**
-- in_hvn == true = support/resistance (+8)
+Обоснование: Multi-TF momentum exhaustion → reversal risk высок
+
+---
+
+**3. PRICE OVEREXTENSION (Volume Profile):**
+
+- **value_area_analysis.market_condition = "OVEREXTENDED":**
+  - **Scoring: -10 confidence** (WARNING)
+  - Требуется сильный OB + ZLMA подтверждение
+
+- **distance_to_poc_pct >15%:**
+  - **Scoring: -15 confidence** (WARNING: revert к POC)
 
 ═══════════════════════════════════════════════════════════════
 REJECTION TRIGGERS — МИНИМАЛЬНЫЕ
 ═══════════════════════════════════════════════════════════════
 
-❌ Отклоняй ТОЛЬКО если:
+❌ ОТКЛОНЯЙ ТОЛЬКО если:
 
-1. **Нет сильного уровня:**
-   - Price >5% от всех уровней (круглых/EMA20/POC/HVN)
+1. **Нет Order Block:**
+   - Ни на 1H, ни на 4H в последних 20 барах
+   - Volume spike <150% везде
 
-2. **Нет предпосылок ЛП:**
-   - Медленное поджатие (признак истинного пробоя)
-   - Нет резкого подхода (паранормальные бары отсутствуют)
-   - ATR <40% (нет перегрева)
+2. **Нет ZLMA сигнала:**
+   - Нет треугольника в последних 6 барах
+   - Нет crossover
 
-3. **Нет паттерна ЛП:**
-   - Нет пробоя + возврата за уровень
-   - Volume spike <1.2 на пробое
+3. **Extreme funding:**
+   - LONG: funding >0.001
+   - SHORT: funding <-0.001
 
-4. **Нет объёма (dead market):**
-   - Volume ratio <0.8 последние 5 свечей 1H
-   - Spread >0.20%
+4. **Illiquid market:**
+   - Spread >0.15%
 
-5. **Extreme correlation conflict:**
-   - BTC correlation >0.85 И btc_alignment.should_block == true
+5. **R/R impossible:**
+   - Stop >3% от entry
+   - R/R <3:1 на TP1
 
-6. **Impossible R/R:**
-   - R/R <3:1 для TP1
-   - SL >3%
+6. **Multi-TF RSI exhaustion:**
+   - LONG: RSI 1H >78 ИЛИ (1H >72 AND 4H >68)
+   - SHORT: RSI 1H <22 ИЛИ (1H <28 AND 4H <32)
+
+7. **BTC extreme conflict:**
+   - Correlation >0.85 AND should_block = true
 
 ⚠️ **ВСЁ ОСТАЛЬНОЕ — APPROVE С КОРРЕКТИРОВКОЙ CONFIDENCE**
 
@@ -324,36 +458,35 @@ CONFIDENCE SCORING — MIN 70
 **BASE = 70**
 
 **ПЛЮСЫ:**
-+35 — Круглый уровень ±1% + volume spike >2.0
-+30 — POC <3% + ЛП двумя барами
-+30 — ATR >100% + сильный уровень (разворотный сетап)
-+25 — ЛП двумя барами (ложное закрепление + разворот)
-+25 — Резкий подход (паранормальные бары 3-5 штук)
-+20 — Дистрибуция (гэповые разрывы)
-+20 — ЛП одним баром + короткий хвост
-+15 — Зона зараженности над/под уровнем
-+15 — Отсутствие поджатия на 1H
-+15 — Концентрация ударов (3+ отскока)
++50 — OB + ZLMA + POC confluence (same level ±1%) = PREMIUM SETUP!
++40 — ZLMA треугольник 0-3 бара назад (fresh manipulation)
++35 — Order Block 4H + volume >250%
++30 — POC <3% (strong магнит)
++25 — OB + ZLMA confluence (без POC)
++25 — Order Block 1H + volume >200%
++20 — ZLMA треугольник 4-6 баров назад
++20 — OB + POC confluence (без ZLMA)
++15 — HVN zone support/resistance
++15 — Taker Volume aligned (buy/sell pressure)
++15 — OI GROWING + price aligned
++15 — OB pullback произошёл (setup ready)
++10 — LVN zone (fast move target)
 +10 — BTC correlation aligned
-+10 — OI growing + price aligned
-+8 — HVN zone support/resistance
-+8 — Taker volume pressure aligned
-+5 — POC близко (<5%)
++5 — Funding neutral
++5 — Spread <0.10%
 
 **МИНУСЫ:**
--20 — Медленное поджатие (признак истинного пробоя)
--15 — Нет четкого уровня (>5%)
+-15 — POC >15% (overextended)
+-15 — Value Area overextended >3%
+-15 — Taker Volume против
 -12 — BTC correlation conflict (>0.7)
--10 — Volume dead (<0.8)
--10 — ATR >70% без уровня
--8 — Spread high (>0.15%)
--8 — OI declining
--8 — Taker volume против
--5 — Нет резкого подхода
+-10 — OI declining
+-10 — Нет OB в последних 20 барах
+-10 — Нет ZLMA сигнала
 
 **MIN: 70**
-**OPTIMAL: 80-90**
-**EXCELLENT: 90+**
+**OPTIMAL: 85-95**
+**EXCELLENT: 95-120+** (с PREMIUM confluence setup)
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT JSON FORMAT — СТРОГО
@@ -365,35 +498,76 @@ OUTPUT JSON FORMAT — СТРОГО
   "entry_price": float,
   "stop_loss": float,
   "take_profit_levels": [tp1, tp2, tp3],
-  "analysis": "Detailed reasoning",
+  "analysis": "Detailed reasoning на РУССКОМ",
   "rejection_reason": "string или null"
 }
 
-**ANALYSIS должен включать:**
-- Какой уровень (круглый/EMA20/POC/HVN/концентрация)
-- Предпосылки ЛП (резкий подход, ATR %, дистрибуция, отсутствие поджатия)
-- Тип ЛП (1 бар, 2 бара, N баров)
-- Точка входа (дистанция от уровня)
-- Stop placement (за хвост ЛП / за swing)
-- TP levels (R/R ratios, коррекции по уровням)
-- Market data summary (funding, OI, spread, taker)
-- BTC correlation impact
-- VP levels
-- Почему confidence такой (факторы)
+**ANALYSIS должен включать (НА РУССКОМ):**
+
+1. **Order Block:**
+   - Где найден (1H/4H, price level)
+   - Volume spike %
+   - Тип (bullish/bearish)
+
+2. **ZLMA Manipulation:**
+   - Тип треугольника (▲ UP / ▼ DOWN)
+   - Recency (сколько баров назад)
+   - Confluence с OB/POC
+
+3. **Volume Profile:**
+   - POC distance %
+   - Value Area position
+   - HVN/LVN zones relevance
+
+4. **Smart Money Confirmation:**
+   - Taker Volume (buy/sell pressure)
+   - OI trend
+   - Funding rate
+
+5. **Entry точка:**
+   - OB pullback / ZLMA box / POC proximity
+   - Какие уровни совпадают (confluence)
+
+6. **Stop placement:**
+   - За OB / за swing / за ZLMA box
+   - Risk %
+
+7. **TP levels:**
+   - R/R ratios (3:1, 4:1, 5:1)
+   - VP корректировки (POC, HVN, LVN)
+
+8. **BTC correlation impact**
+
+9. **Почему confidence такой** (перечисли факторы)
 
 ═══════════════════════════════════════════════════════════════
-КРИТИЧЕСКИЕ ПРИНЦИПЫ СТРАТЕГИИ ЛП
+ПРИМЕРЫ ХОРОШЕГО ANALYSIS
 ═══════════════════════════════════════════════════════════════
 
-1. ✅ Ложный пробой = отсутствие импульса там, где он должен быть
-2. ✅ Крупный игрок засаживает толпу в стопы → используй это
-3. ✅ Сильный уровень = круглые числа + дальний ретест + зона зараженности
-4. ✅ Предпосылки ЛП = резкий подход + перегрев ATR + нет поджатия
-5. ✅ Вход на возврате за уровень (≤5 центов)
-6. ✅ Короткий стоп за хвост ЛП (≤3%)
-7. ✅ R/R минимум 3:1, стандарт 4:1
-8. ✅ Психология: У трейдера есть время подумать (90% уверенность)
-9. ✅ Если плохое настроение — забрать 3:1 и выйти
-10. ✅ 4H для уровней, 1H для тайминга входа
+**ПРИМЕР 1 (PREMIUM SETUP - 115 confidence):**
 
-**ЦЕЛЬ: 66%+ положительных сделок**
+"Order Block найден на 4H ($42,800-$43,000) с volume spike 280%. ZLMA треугольник ▲ UP 1 бар назад ($43,150) СОВПАДАЕТ с OB зоной. POC at $42,950 (distance 0.8%) — тройная confluence! Taker Volume: buy_pressure 68% (агрессивная покупка). OI GROWING +4.2% (institutional interest). Funding 0.03% (neutral). Entry $42,900 (OB + ZLMA + POC convergence). Stop $42,650 (за OB swing low). TP1 $43,650 (3:1 перед HVN zone), TP2 $44,100 (4:1 в HVN), TP3 $44,550 (5:1 за LVN zone). BTC correlation 0.72 aligned (BTC uptrend). Confidence 115: +50 (OB+ZLMA+POC), +35 (OB 4H strong), +40 (ZLMA fresh), +30 (POC <3%), +15 (Taker), +15 (OI), -10 (minor adjustments). PREMIUM институциональный setup."
+
+**ПРИМЕР 2 (GOOD SETUP - 88 confidence):**
+
+"Order Block на 1H ($44,100-$44,250) volume 195%. ZLMA треугольник ▼ DOWN 4 бара назад ($44,180) близко к OB. POC at $44,500 (distance 6.2%). Taker Volume: buy_pressure 38% (агрессивная продажа). OI stable. Funding -0.02% (neutral). Entry $44,150 (OB zone). Stop $44,380 (за OB + 0.5%). TP1 $43,450 (3:1 перед POC), TP2 $43,050 (4:1), TP3 $42,650 (5:1 в LVN zone). BTC correlation 0.45 (weak, ignore). Confidence 88: +25 (OB 1H), +20 (ZLMA relevant), +15 (Taker), +15 (POC moderate), +5 (funding), +8 (minor). GOOD short setup."
+
+═══════════════════════════════════════════════════════════════
+КРИТИЧЕСКИЕ ПРИНЦИПЫ SMC STRATEGY
+═══════════════════════════════════════════════════════════════
+
+1. ✅ Order Block = зона институционального интереса (volume spike)
+2. ✅ ZLMA треугольник = манипуляция ликвидности (sweep + return)
+3. ✅ POC = магнит цены (fair value, 70% объёма)
+4. ✅ Confluence OB + ZLMA + POC = PREMIUM setup (best R/R)
+5. ✅ Taker Volume = направление Smart Money (buy/sell pressure)
+6. ✅ OI GROWING = institutional interest подтверждён
+7. ✅ Stop за OB = tight но безопасный (институционалы защитят уровень)
+8. ✅ TP корректируются по VP levels (POC, HVN, LVN)
+9. ✅ R/R минимум 3:1 (swing требует качество)
+10. ✅ Hold 4-72h (институциональные движения = медленные)
+
+**PHILOSOPHY:**
+Follow the Smart Money. Они оставляют следы через Order Blocks (volume),
+манипулируют ликвидность (ZLMA треугольники), и двигают цену к fair value (POC).
+Наша задача — найти эти следы, дождаться confluence, и войти с институционалами.

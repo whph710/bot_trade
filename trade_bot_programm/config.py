@@ -1,11 +1,11 @@
 """
-Trading Bot Configuration — SIMPLIFIED STAGE 1
+Trading Bot Configuration — ZLMA INTEGRATION
 Файл: trade_bot_programm/config.py
 
 ИЗМЕНЕНИЯ:
-- Убраны EMA_FAST (5) и EMA_MEDIUM (8)
-- Добавлен EMA_TREND (20) — единственная EMA для Stage 1
-- Новые параметры для упрощённой логики
+- Добавлены параметры Zero-Lag MA (ZLMA)
+- EMA_TREND теперь используется для ZLMA length
+- Добавлены ATR_WILDER_PERIOD для коробок
 """
 
 import os
@@ -21,6 +21,9 @@ def load_env():
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
+                    # Удаляем inline комментарии после значения
+                    if '#' in value:
+                        value = value.split('#')[0]
                     os.environ[key.strip()] = value.strip()
 
 
@@ -61,7 +64,7 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 
 # ============================================================================
-# STAGE 1 PARAMETERS — SIMPLIFIED
+# STAGE 1 PARAMETERS — ZLMA INTEGRATION
 # ============================================================================
 
 # Timeframes
@@ -74,40 +77,46 @@ TIMEFRAME_LONG_NAME = "4H"
 TIMEFRAME_HTF_NAME = "1D"
 
 # Stage 1 scanning
-QUICK_SCAN_CANDLES = 48  # 48 свечей 4H = 8 дней истории
+QUICK_SCAN_CANDLES = 250  # Увеличено для ZLMA+ATR (200+)
 
 # ═══════════════════════════════════════════════════════════════
-# УПРОЩЁННЫЕ ИНДИКАТОРЫ (только 3 для Stage 1)
+# ZLMA (ZERO-LAG MA) PARAMETERS
 # ═══════════════════════════════════════════════════════════════
 
-# 1. ТРЕНД (EMA20)
-EMA_TREND = safe_int(os.getenv('EMA_TREND', '20'), 20)
-TREND_THRESHOLD = safe_float(os.getenv('TREND_THRESHOLD', '0.5'), 0.5)  # 0.5% от EMA
+# Length for ZLMA calculation (default 15 from Pine Script)
+ZLMA_LENGTH = safe_int(os.getenv('ZLMA_LENGTH', '15'), 15)
 
-# 2. ИМПУЛЬС (RSI)
+# ATR period for trend boxes (default 200 from Pine Script)
+ATR_WILDER_PERIOD = safe_int(os.getenv('ATR_WILDER_PERIOD', '200'), 200)
+
+# Треугольник должен быть недавним (last N bars)
+ZLMA_TRIANGLE_LOOKBACK = safe_int(os.getenv('ZLMA_TRIANGLE_LOOKBACK', '3'), 3)
+
+# Minimum volume ratio для подтверждения ZLMA сигнала
+MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
+
+# Minimum confidence для Stage 1
+MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '55'), 55)
+
+# ═══════════════════════════════════════════════════════════════
+# LEGACY PARAMETERS (используются для других индикаторов)
+# ═══════════════════════════════════════════════════════════════
+
+# EMA_TREND теперь используется как ZLMA_LENGTH
+EMA_TREND = ZLMA_LENGTH
+
+# RSI (для AI анализа в Stage 2/3)
 RSI_PERIOD = safe_int(os.getenv('RSI_PERIOD', '14'), 14)
-
-# RSI диапазоны для LONG
 RSI_MIN_LONG = safe_int(os.getenv('RSI_MIN_LONG', '50'), 50)
 RSI_MAX_LONG = safe_int(os.getenv('RSI_MAX_LONG', '75'), 75)
-
-# RSI диапазоны для SHORT
 RSI_MIN_SHORT = safe_int(os.getenv('RSI_MIN_SHORT', '25'), 25)
 RSI_MAX_SHORT = safe_int(os.getenv('RSI_MAX_SHORT', '50'), 50)
 
-# 3. ОБЪЁМ
+# Volume window
 VOLUME_WINDOW = safe_int(os.getenv('VOLUME_WINDOW', '20'), 20)
-MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
-
-# Минимальная уверенность для отбора
-MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '70'), 70)
-
-# ═══════════════════════════════════════════════════════════════
-# LEGACY PARAMETERS (для Stage 2/3 AI analysis)
-# ═══════════════════════════════════════════════════════════════
 
 # EMA для AI анализа (Stage 2/3)
-EMA_FAST = 5   # используется только в AI indicators
+EMA_FAST = 5
 EMA_MEDIUM = 8
 EMA_SLOW = 20
 
@@ -124,12 +133,12 @@ ATR_PERIOD = safe_int(os.getenv('ATR_PERIOD', '14'), 14)
 # STAGE 2/3 PARAMETERS (без изменений)
 # ============================================================================
 
-# Stage 2 (Compact data для DeepSeek)
+# Stage 2 (Compact data)
 STAGE2_CANDLES_1H = 30
 STAGE2_CANDLES_4H = 30
 STAGE2_CANDLES_1D = 0
 
-# Stage 3 (Full data для Sonnet)
+# Stage 3 (Full data)
 STAGE3_CANDLES_1H = 100
 STAGE3_CANDLES_4H = 60
 STAGE3_CANDLES_1D = 0
@@ -182,30 +191,26 @@ class Config:
     MAX_CONCURRENT = safe_int(os.getenv('MAX_CONCURRENT', '50'), 50)
 
     # ═══════════════════════════════════════════════════════════════
-    # SIMPLIFIED STAGE 1 PARAMETERS
+    # ZLMA STAGE 1 PARAMETERS
     # ═══════════════════════════════════════════════════════════════
 
-    # Trend
-    EMA_TREND = EMA_TREND
-    TREND_THRESHOLD = TREND_THRESHOLD
+    ZLMA_LENGTH = ZLMA_LENGTH
+    ATR_WILDER_PERIOD = ATR_WILDER_PERIOD
+    ZLMA_TRIANGLE_LOOKBACK = ZLMA_TRIANGLE_LOOKBACK
+    MIN_VOLUME_RATIO = MIN_VOLUME_RATIO
+    MIN_CONFIDENCE = MIN_CONFIDENCE
 
-    # Momentum
+    # ═══════════════════════════════════════════════════════════════
+    # LEGACY PARAMETERS
+    # ═══════════════════════════════════════════════════════════════
+
+    EMA_TREND = EMA_TREND
     RSI_PERIOD = RSI_PERIOD
     RSI_MIN_LONG = RSI_MIN_LONG
     RSI_MAX_LONG = RSI_MAX_LONG
     RSI_MIN_SHORT = RSI_MIN_SHORT
     RSI_MAX_SHORT = RSI_MAX_SHORT
-
-    # Volume
     VOLUME_WINDOW = VOLUME_WINDOW
-    MIN_VOLUME_RATIO = MIN_VOLUME_RATIO
-
-    # Confidence
-    MIN_CONFIDENCE = MIN_CONFIDENCE
-
-    # ═══════════════════════════════════════════════════════════════
-    # LEGACY PARAMETERS (for Stage 2/3)
-    # ═══════════════════════════════════════════════════════════════
 
     EMA_FAST = EMA_FAST
     EMA_MEDIUM = EMA_MEDIUM
@@ -235,7 +240,7 @@ class Config:
     AI_MAX_TOKENS_SELECT = safe_int(os.getenv('AI_MAX_TOKENS_SELECT', '2000'), 2000)
     AI_MAX_TOKENS_ANALYZE = safe_int(os.getenv('AI_MAX_TOKENS_ANALYZE', '4000'), 4000)
 
-    # Timeframes (from module-level constants)
+    # Timeframes
     TIMEFRAME_SHORT = TIMEFRAME_SHORT
     TIMEFRAME_LONG = TIMEFRAME_LONG
     TIMEFRAME_HTF = TIMEFRAME_HTF
