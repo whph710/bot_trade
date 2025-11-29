@@ -1,11 +1,11 @@
 """
-Trading Bot Configuration — ZLMA INTEGRATION
+Trading Bot Configuration — TRIPLE EMA STRATEGY
 Файл: trade_bot_programm/config.py
 
 ИЗМЕНЕНИЯ:
-- Добавлены параметры Zero-Lag MA (ZLMA)
-- EMA_TREND теперь используется для ZLMA length
-- Добавлены ATR_WILDER_PERIOD для коробок
+- Удалены параметры ZLMA
+- Добавлены параметры Triple EMA (9/21/50)
+- Обновлены thresholds для EMA-based сигналов
 """
 
 import os
@@ -64,7 +64,7 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 
 # ============================================================================
-# STAGE 1 PARAMETERS — ZLMA INTEGRATION
+# STAGE 1 PARAMETERS — TRIPLE EMA STRATEGY
 # ============================================================================
 
 # Timeframes
@@ -77,33 +77,40 @@ TIMEFRAME_LONG_NAME = "4H"
 TIMEFRAME_HTF_NAME = "1D"
 
 # Stage 1 scanning
-QUICK_SCAN_CANDLES = 250  # Увеличено для ZLMA+ATR (200+)
+QUICK_SCAN_CANDLES = 100  # Достаточно для расчёта EMA50 + история
 
 # ═══════════════════════════════════════════════════════════════
-# ZLMA (ZERO-LAG MA) PARAMETERS
+# TRIPLE EMA PARAMETERS (классический 9/21/50)
 # ═══════════════════════════════════════════════════════════════
 
-# Length for ZLMA calculation (default 15 from Pine Script)
-ZLMA_LENGTH = safe_int(os.getenv('ZLMA_LENGTH', '15'), 15)
+# EMA periods
+EMA_FAST = safe_int(os.getenv('EMA_FAST', '9'), 9)       # Быстрая EMA
+EMA_MEDIUM = safe_int(os.getenv('EMA_MEDIUM', '21'), 21) # Средняя EMA
+EMA_SLOW = safe_int(os.getenv('EMA_SLOW', '50'), 50)     # Медленная EMA
 
-# ATR period for trend boxes (default 200 from Pine Script)
-ATR_WILDER_PERIOD = safe_int(os.getenv('ATR_WILDER_PERIOD', '200'), 200)
+# Минимальный зазор между EMA для "perfect alignment" (в процентах)
+EMA_MIN_GAP_PCT = safe_float(os.getenv('EMA_MIN_GAP_PCT', '0.5'), 0.5)
 
-# Треугольник должен быть недавним (last N bars)
-ZLMA_TRIANGLE_LOOKBACK = safe_int(os.getenv('ZLMA_TRIANGLE_LOOKBACK', '3'), 3)
+# Lookback для поиска crossovers (пересечений)
+EMA_CROSSOVER_LOOKBACK = safe_int(os.getenv('EMA_CROSSOVER_LOOKBACK', '5'), 5)
 
-# Minimum volume ratio для подтверждения ZLMA сигнала
-MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.2'), 1.2)
+# Pullback параметры
+PULLBACK_TOUCH_PCT = safe_float(os.getenv('PULLBACK_TOUCH_PCT', '1.5'), 1.5)  # ±1.5% от EMA21
+PULLBACK_BOUNCE_VOLUME = safe_float(os.getenv('PULLBACK_BOUNCE_VOLUME', '1.2'), 1.2)  # Минимум volume ratio
+
+# Compression (сжатие) параметры
+COMPRESSION_MAX_SPREAD_PCT = safe_float(os.getenv('COMPRESSION_MAX_SPREAD_PCT', '1.0'), 1.0)  # <1% между всеми EMA
+COMPRESSION_BREAKOUT_VOLUME = safe_float(os.getenv('COMPRESSION_BREAKOUT_VOLUME', '2.0'), 2.0)  # Volume spike при пробое
+
+# Minimum volume ratio для подтверждения EMA сигнала
+MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.0'), 1.0)
 
 # Minimum confidence для Stage 1
-MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '55'), 55)
+MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '60'), 60)
 
 # ═══════════════════════════════════════════════════════════════
-# LEGACY PARAMETERS (используются для других индикаторов)
+# ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ (для AI анализа в Stage 2/3)
 # ═══════════════════════════════════════════════════════════════
-
-# EMA_TREND теперь используется как ZLMA_LENGTH
-EMA_TREND = ZLMA_LENGTH
 
 # RSI (для AI анализа в Stage 2/3)
 RSI_PERIOD = safe_int(os.getenv('RSI_PERIOD', '14'), 14)
@@ -115,17 +122,12 @@ RSI_MAX_SHORT = safe_int(os.getenv('RSI_MAX_SHORT', '50'), 50)
 # Volume window
 VOLUME_WINDOW = safe_int(os.getenv('VOLUME_WINDOW', '20'), 20)
 
-# EMA для AI анализа (Stage 2/3)
-EMA_FAST = 5
-EMA_MEDIUM = 8
-EMA_SLOW = 20
-
-# MACD (используется только в AI анализа)
+# MACD (используется только в AI анализе)
 MACD_FAST = safe_int(os.getenv('MACD_FAST', '12'), 12)
 MACD_SLOW = safe_int(os.getenv('MACD_SLOW', '26'), 26)
 MACD_SIGNAL = safe_int(os.getenv('MACD_SIGNAL', '9'), 9)
 
-# ATR (используется только в AI анализа)
+# ATR (используется только в AI анализе)
 ATR_PERIOD = safe_int(os.getenv('ATR_PERIOD', '14'), 14)
 
 
@@ -191,30 +193,31 @@ class Config:
     MAX_CONCURRENT = safe_int(os.getenv('MAX_CONCURRENT', '50'), 50)
 
     # ═══════════════════════════════════════════════════════════════
-    # ZLMA STAGE 1 PARAMETERS
+    # TRIPLE EMA STAGE 1 PARAMETERS
     # ═══════════════════════════════════════════════════════════════
 
-    ZLMA_LENGTH = ZLMA_LENGTH
-    ATR_WILDER_PERIOD = ATR_WILDER_PERIOD
-    ZLMA_TRIANGLE_LOOKBACK = ZLMA_TRIANGLE_LOOKBACK
+    EMA_FAST = EMA_FAST
+    EMA_MEDIUM = EMA_MEDIUM
+    EMA_SLOW = EMA_SLOW
+    EMA_MIN_GAP_PCT = EMA_MIN_GAP_PCT
+    EMA_CROSSOVER_LOOKBACK = EMA_CROSSOVER_LOOKBACK
+    PULLBACK_TOUCH_PCT = PULLBACK_TOUCH_PCT
+    PULLBACK_BOUNCE_VOLUME = PULLBACK_BOUNCE_VOLUME
+    COMPRESSION_MAX_SPREAD_PCT = COMPRESSION_MAX_SPREAD_PCT
+    COMPRESSION_BREAKOUT_VOLUME = COMPRESSION_BREAKOUT_VOLUME
     MIN_VOLUME_RATIO = MIN_VOLUME_RATIO
     MIN_CONFIDENCE = MIN_CONFIDENCE
 
     # ═══════════════════════════════════════════════════════════════
-    # LEGACY PARAMETERS
+    # ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ
     # ═══════════════════════════════════════════════════════════════
 
-    EMA_TREND = EMA_TREND
     RSI_PERIOD = RSI_PERIOD
     RSI_MIN_LONG = RSI_MIN_LONG
     RSI_MAX_LONG = RSI_MAX_LONG
     RSI_MIN_SHORT = RSI_MIN_SHORT
     RSI_MAX_SHORT = RSI_MAX_SHORT
     VOLUME_WINDOW = VOLUME_WINDOW
-
-    EMA_FAST = EMA_FAST
-    EMA_MEDIUM = EMA_MEDIUM
-    EMA_SLOW = EMA_SLOW
     MACD_FAST = MACD_FAST
     MACD_SLOW = MACD_SLOW
     MACD_SIGNAL = MACD_SIGNAL

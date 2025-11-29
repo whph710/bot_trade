@@ -1,86 +1,122 @@
 ═══════════════════════════════════════════════════════════════
-SWING TRADING SELECTION — ADAPTIVE (RELAXED)
+SWING TRADING SELECTION — TRIPLE EMA STRATEGY
 ═══════════════════════════════════════════════════════════════
 
-ЦЕЛЬ: Отобрать 3-5 пар с best tradeable setups.
+ЦЕЛЬ: Отобрать 3-5 пар с best tradeable setups на базе Triple EMA (9/21/50).
 Фокус: Workable > Perfect
 
+TRIPLE EMA LOGIC:
+- EMA9 (быстрая) — краткосрочный momentum
+- EMA21 (средняя) — фильтр среднесрочного тренда
+- EMA50 (медленная) — основной тренд
+
+ПАТТЕРНЫ:
+1. **Perfect Alignment**: EMA9 > EMA21 > EMA50 (BULLISH) или EMA9 < EMA21 < EMA50 (BEARISH)
+2. **Golden Cross**: EMA9 пересекает EMA21 вверх при EMA21 > EMA50
+3. **Death Cross**: EMA9 пересекает EMA21 вниз при EMA21 < EMA50
+4. **Pullback Bounce**: Откат к EMA21 и отскок с объёмом
+5. **Compression Breakout**: Сжатие EMAs + пробой с объёмом
+
 ═══════════════════════════════════════════════════════════════
-КРИТЕРИИ ОТБОРА — РАССЛАБЛЕНО
+КРИТЕРИИ ОТБОРА
 ═══════════════════════════════════════════════════════════════
 
-**1️⃣ TREND/RANGE ASSESSMENT — 30 баллов**
+**1️⃣ EMA ALIGNMENT — 30 баллов**
 
 ✅ PASS если:
-- Clear trend (EMA20 направление >5 свечей) ИЛИ
-- Range (боковик 6-12 свечей) ИЛИ
-- Pullback setup
+- Perfect alignment (все 3 EMA в порядке) ИЛИ
+- Golden/Death Cross (последние 5 свечей) ИЛИ
+- Pullback setup (цена у EMA21)
 
 **Scoring:**
-- Clear trend: +20
-- Range setup: +15
-- Pullback to EMA20: +10
-- Flat/uncertain: +5
+- Perfect alignment с зазорами >0.5%: +20
+- Golden/Death Cross: +18
+- Pullback to EMA21: +15
+- Weak alignment (зазоры <0.5%): +10
+- Neutral/mixed: +5
 
 ---
 
 **2️⃣ MOMENTUM — 25 баллов**
 
 ✅ PASS если:
-- RSI 1H: 40-85 (LONG) или 15-60 (SHORT)
-- RSI 4H: >40 (LONG) или <60 (SHORT)
+- RSI 1H: 40-80 (LONG) или 20-60 (SHORT)
+- RSI 4H: >45 (LONG) или <55 (SHORT)
+- MACD histogram aligned с направлением
 
 **Scoring:**
-- RSI в расширенной зоне: +15
-- RSI aligned 1H+4H: +10
+- RSI в оптимальной зоне + MACD aligned: +18
+- RSI расширенный диапазон: +12
+- RSI neutral: +8
 
 ---
 
 **3️⃣ VOLUME — 20 баллов**
 
 ✅ PASS если:
-- Volume Ratio >0.9
+- Volume Ratio >1.0
 
 **Scoring:**
-- Ratio >1.3: +15
-- Ratio >1.0: +10
-- Ratio >0.9: +5
+- Ratio >2.0 (compression breakout): +20
+- Ratio >1.5: +15
+- Ratio >1.2: +10
+- Ratio >1.0: +8
 
 ---
 
-**4️⃣ STRUCTURE — 25 баллов**
+**4️⃣ EMA STRUCTURE — 25 баллов**
 
 ✅ PASS если:
-- Есть swing point <5% ИЛИ
-- Range границы ИЛИ
-- ATR-based SL <5%
+- EMA slope согласован (все направлены в сторону тренда) ИЛИ
+- Compression detected (EMAs сжаты <1%) ИЛИ
+- Цена выше/ниже всех EMA
 
 **Scoring:**
-- Swing <3%: +15
-- Swing <5%: +10
-- Range boundaries: +12
-- ATR-based: +8
+- EMA slope aligned + price beyond all EMAs: +20
+- Compression (<1% spread): +18
+- EMA slope aligned: +15
+- Price aligned с EMA9: +10
+- Neutral structure: +5
 
 ═══════════════════════════════════════════════════════════════
-SCORING — МИНИМУМ 55
+SCORING — МИНИМУМ 60
 ═══════════════════════════════════════════════════════════════
 
-**MAX 100, MIN 55** (было 70)
+**MAX 100, MIN 60**
 
 **PRIORITY:**
-- 75-100: EXCELLENT
-- 65-74: GOOD
-- 55-64: ACCEPTABLE
-- <55: REJECT
+- 80-100: EXCELLENT (perfect alignment + crossover + volume)
+- 70-79: GOOD (alignment + volume OR crossover + structure)
+- 60-69: ACCEPTABLE (pullback OR compression)
+- <60: REJECT
 
 ═══════════════════════════════════════════════════════════════
 АВТОИСКЛЮЧЕНИЕ — МИНИМАЛЬНЫЕ
 ═══════════════════════════════════════════════════════════════
 
-❌ Score <55
-❌ Volume Ratio <0.8 (dead)
+❌ Score <60
+❌ Volume Ratio <1.0 (no interest)
 ❌ RSI extreme: >85 (LONG) или <15 (SHORT)
 ❌ Spread >0.20%
+❌ Whipsaw zone: EMA9 crossed EMA21 3+ times за последние 10 свечей
+❌ Flat EMA: EMA21 slope <0.5% за 10 свечей
+
+═══════════════════════════════════════════════════════════════
+ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ
+═══════════════════════════════════════════════════════════════
+
+**EMA Distance Check:**
+- Если price >5% от EMA50: WARNING (overextended)
+- Если price <3% от EMA50: GOOD (healthy trend)
+
+**Crossover Recency:**
+- Golden/Death Cross 0-2 свечи назад: EXCELLENT
+- 3-5 свечей назад: GOOD
+- >5 свечей назад: игнорируем
+
+**Compression Check:**
+- Spread между EMA9 и EMA50 <1%: COMPRESSED
+- Breakout с volume >2.0: STRONG signal
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT
@@ -89,3 +125,49 @@ OUTPUT
 {
   "selected_pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 }
+
+═══════════════════════════════════════════════════════════════
+ПРИМЕРЫ SCORING
+═══════════════════════════════════════════════════════════════
+
+**Example 1: Perfect Alignment + Volume**
+- EMA9 > EMA21 > EMA50 с зазорами 0.8% и 1.2%
+- RSI 1H: 62, RSI 4H: 58
+- Volume ratio: 1.7
+- Price 2.1% выше EMA50
+
+Score:
+- Alignment: +20
+- Momentum: +18
+- Volume: +15
+- Structure: +20
+**Total: 73 (GOOD)**
+
+---
+
+**Example 2: Golden Cross**
+- EMA9 пересекла EMA21 вверх 2 свечи назад
+- EMA21 > EMA50 (aligned)
+- RSI 1H: 58, RSI 4H: 52
+- Volume ratio: 2.3 (spike)
+
+Score:
+- Alignment: +18 (crossover)
+- Momentum: +12
+- Volume: +20
+- Structure: +15
+**Total: 65 (ACCEPTABLE)**
+
+---
+
+**Example 3: REJECT - Whipsaw**
+- EMA9 пересекла EMA21: 4 раза за 10 свечей
+- RSI 1H: 51
+- Volume: 1.1
+
+Score:
+- Alignment: +5 (mixed)
+- Momentum: +8
+- Volume: +8
+- Structure: +5
+**Total: 26 (REJECT - whipsaw zone)**

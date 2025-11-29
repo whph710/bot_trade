@@ -1,11 +1,11 @@
 """
-Technical indicators with Zero-Lag MA Trend Levels
+Technical indicators with Triple EMA Strategy
 Файл: trade_bot_programm/func_trade.py
 
 ИЗМЕНЕНИЯ:
-- Интегрирован индикатор Zero-Lag MA (ZLMA)
-- Stage 1 сигнал = треугольник пробоя коробки (из Pine Script)
-- Логика: EMA → ZLMA → ATR → коробки → треугольники
+- Удалены функции ZLMA (calculate_zlma, detect_zlma_trend_boxes)
+- Добавлены функции Triple EMA (detect_ema_triple_signal)
+- Обновлена логика calculate_basic_indicators и check_basic_signal
 """
 
 import numpy as np
@@ -84,276 +84,278 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
         return np.full_like(prices, prices[0] if len(prices) > 0 else 0)
 
 
-def calculate_zlma(prices: np.ndarray, length: int = 15) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculate Zero-Lag Moving Average (ZLMA)
-
-    Returns:
-        (ema, zlma) - regular EMA and Zero-Lag MA
-    """
-    if len(prices) < length:
-        return np.zeros_like(prices), np.zeros_like(prices)
-
-    try:
-        # Step 1: Regular EMA
-        ema = calculate_ema(prices, length)
-
-        # Step 2: Correction = close + (close - EMA)
-        correction = prices + (prices - ema)
-
-        # Step 3: ZLMA = EMA of correction
-        zlma = calculate_ema(correction, length)
-
-        return ema, zlma
-    except Exception as e:
-        logger.error(f"ZLMA calculation error: {e}")
-        return np.zeros_like(prices), np.zeros_like(prices)
-
-
-def calculate_atr_wilder(candles: List[List[str]], period: int = 200) -> np.ndarray:
-    """
-    Calculate ATR using Wilder's smoothing (RMA-like via ewm)
-    Matching Pine Script ta.atr(200)
-    """
-    if not validate_candles(candles, period + 1):
-        return np.zeros(len(candles))
-
-    try:
-        highs = np.array([safe_float(c[2]) for c in candles])
-        lows = np.array([safe_float(c[3]) for c in candles])
-        closes = np.array([safe_float(c[4]) for c in candles])
-
-        if np.any(highs <= 0) or np.any(lows <= 0) or np.any(closes <= 0):
-            return np.zeros(len(candles))
-
-        # True Range calculation
-        tr = np.zeros(len(candles))
-        for i in range(1, len(candles)):
-            tr[i] = max(
-                highs[i] - lows[i],
-                abs(highs[i] - closes[i - 1]),
-                abs(lows[i] - closes[i - 1])
-            )
-
-        # Wilder's smoothing using ewm with alpha=1/period
-        # This approximates Pine Script's ta.atr()
-        atr = np.zeros(len(candles))
-
-        # Initialize with SMA for first period
-        if len(tr) > period:
-            atr[period] = np.mean(tr[1:period + 1])
-
-            # Apply Wilder's smoothing
-            alpha = 1.0 / period
-            for i in range(period + 1, len(candles)):
-                atr[i] = alpha * tr[i] + (1 - alpha) * atr[i - 1]
-
-        return atr
-    except Exception as e:
-        logger.error(f"ATR calculation error: {e}")
-        return np.zeros(len(candles))
-
-
-def detect_zlma_trend_boxes(
+def detect_ema_triple_signal(
     candles: List[List[str]],
-    length: int = 15,
-    atr_length: int = 200
+    ema_fast: int = 9,
+    ema_medium: int = 21,
+    ema_slow: int = 50
 ) -> Dict[str, Any]:
     """
-    Detect Zero-Lag MA trend boxes and triangle breakouts
-
-    Logic from Pine Script:
-    1. Calculate EMA and ZLMA
-    2. Detect crossovers: ZLMA crosses EMA
-    3. Create boxes: top/bottom defined by ZLMA ± ATR
-    4. Detect triangles: price breaks box boundaries
+    Detect Triple EMA signals (классический 9/21/50)
 
     Returns:
         {
-            'last_signal': 'UP' | 'DOWN' | 'NONE',
-            'last_triangle': 'UP' | 'DOWN' | 'NONE',
-            'box_active': bool,
-            'box_top': float,
-            'box_bottom': float,
-            'ema': float,
-            'zlma': float,
-            'confidence': int
+            'alignment': 'BULLISH' | 'BEARISH' | 'NEUTRAL',
+            'crossover': 'GOLDEN' | 'DEATH' | 'NONE',
+            'pullback': 'BULLISH_BOUNCE' | 'BEARISH_BOUNCE' | 'NONE',
+            'compression': 'BREAKOUT_UP' | 'BREAKOUT_DOWN' | 'COMPRESSED' | 'NONE',
+            'ema9': float,
+            'ema21': float,
+            'ema50': float,
+            'confidence': int,
+            'details': str
         }
     """
-    if not validate_candles(candles, max(length, atr_length) + 10):
+    if not validate_candles(candles, max(ema_fast, ema_medium, ema_slow) + 10):
         return {
-            'last_signal': 'NONE',
-            'last_triangle': 'NONE',
-            'box_active': False,
-            'box_top': 0,
-            'box_bottom': 0,
-            'ema': 0,
-            'zlma': 0,
-            'confidence': 0
+            'alignment': 'NEUTRAL',
+            'crossover': 'NONE',
+            'pullback': 'NONE',
+            'compression': 'NONE',
+            'ema9': 0,
+            'ema21': 0,
+            'ema50': 0,
+            'confidence': 0,
+            'details': 'Insufficient candle data'
         }
 
     try:
         closes = np.array([safe_float(c[4]) for c in candles])
         highs = np.array([safe_float(c[2]) for c in candles])
         lows = np.array([safe_float(c[3]) for c in candles])
+        volumes = np.array([safe_float(c[5]) for c in candles])
 
-        # Calculate ZLMA and ATR
-        ema, zlma = calculate_zlma(closes, length)
-        atr = calculate_atr_wilder(candles, atr_length)
+        # Calculate EMAs
+        ema9 = calculate_ema(closes, ema_fast)
+        ema21 = calculate_ema(closes, ema_medium)
+        ema50 = calculate_ema(closes, ema_slow)
 
-        # Detect crossovers (signals)
-        signal_up = np.zeros(len(candles), dtype=bool)
-        signal_dn = np.zeros(len(candles), dtype=bool)
+        current_price = closes[-1]
+        current_ema9 = ema9[-1]
+        current_ema21 = ema21[-1]
+        current_ema50 = ema50[-1]
 
-        for i in range(1, len(candles)):
-            # signalUp: ZLMA crosses above EMA
-            if zlma[i] > ema[i] and zlma[i - 1] <= ema[i - 1]:
-                signal_up[i] = True
-            # signalDn: ZLMA crosses below EMA
-            elif zlma[i] < ema[i] and zlma[i - 1] >= ema[i - 1]:
-                signal_dn[i] = True
+        # Volume ratio
+        volume_ratios = calculate_volume_ratios(volumes, config.VOLUME_WINDOW)
+        current_volume_ratio = safe_float(volume_ratios[-1])
 
-        check_signals = signal_up | signal_dn
+        # 1. CHECK ALIGNMENT
+        alignment = 'NEUTRAL'
+        alignment_score = 0
 
-        # Build boxes (track active box)
-        active_box = None
-        triangles = []
+        gap_9_21 = abs((current_ema9 - current_ema21) / current_ema21 * 100)
+        gap_21_50 = abs((current_ema21 - current_ema50) / current_ema50 * 100)
 
-        for i in range(len(candles)):
-            # If new signal occurs
-            if signal_up[i] or signal_dn[i]:
-                # Create new box
-                if signal_up[i]:
-                    top = zlma[i]
-                    bottom = zlma[i] - atr[i]
-                    side = 'up'
-                else:
-                    top = zlma[i] + atr[i]
-                    bottom = zlma[i]
-                    side = 'dn'
+        if current_ema9 > current_ema21 > current_ema50:
+            alignment = 'BULLISH'
+            # Perfect alignment если зазоры >0.5%
+            if gap_9_21 >= config.EMA_MIN_GAP_PCT and gap_21_50 >= config.EMA_MIN_GAP_PCT:
+                alignment_score = 15
+            else:
+                alignment_score = 10
 
-                active_box = {
-                    'start_idx': i,
-                    'top': top,
-                    'bottom': bottom,
-                    'side': side
-                }
-                continue
+        elif current_ema9 < current_ema21 < current_ema50:
+            alignment = 'BEARISH'
+            if gap_9_21 >= config.EMA_MIN_GAP_PCT and gap_21_50 >= config.EMA_MIN_GAP_PCT:
+                alignment_score = 15
+            else:
+                alignment_score = 10
 
-            # If there's an active box, check for triangle breakouts
-            if active_box is not None and i >= 1:
-                # Check: no signals on current and previous bar
-                if not check_signals[i] and not check_signals[i - 1]:
-                    box_bottom = active_box['bottom']
-                    box_top = active_box['top']
+        # 2. CHECK CROSSOVERS (последние 5 свечей)
+        crossover = 'NONE'
+        crossover_score = 0
+        lookback = min(config.EMA_CROSSOVER_LOOKBACK, len(ema9) - 1)
 
-                    # Down triangle: high crosses under box bottom
-                    if (highs[i - 1] >= box_bottom and
-                        highs[i] < box_bottom and
-                        ema[i] > zlma[i]):
-                        triangles.append({
-                            'index': i - 1,
-                            'type': 'DOWN',
-                            'price': highs[i - 1]
-                        })
+        for i in range(1, lookback + 1):
+            idx = -i
+            # Golden Cross: EMA9 crosses EMA21 upward
+            if ema9[idx] > ema21[idx] and ema9[idx - 1] <= ema21[idx - 1]:
+                # Проверяем что EMA21 уже выше EMA50
+                if ema21[idx] > ema50[idx]:
+                    crossover = 'GOLDEN'
+                    crossover_score = 12
+                    break
 
-                    # Up triangle: low crosses over box top
-                    if (lows[i - 1] <= box_top and
-                        lows[i] > box_top and
-                        ema[i] < zlma[i]):
-                        triangles.append({
-                            'index': i - 1,
-                            'type': 'UP',
-                            'price': lows[i - 1]
-                        })
+            # Death Cross: EMA9 crosses EMA21 downward
+            elif ema9[idx] < ema21[idx] and ema9[idx - 1] >= ema21[idx - 1]:
+                if ema21[idx] < ema50[idx]:
+                    crossover = 'DEATH'
+                    crossover_score = 12
+                    break
 
-        # Get last signal and triangle
-        last_signal = 'NONE'
-        last_signal_idx = -1
+        # 3. CHECK PULLBACK TO EMA21
+        pullback = 'NONE'
+        pullback_score = 0
 
-        for i in range(len(candles) - 1, -1, -1):
-            if signal_up[i]:
-                last_signal = 'UP'
-                last_signal_idx = i
-                break
-            elif signal_dn[i]:
-                last_signal = 'DOWN'
-                last_signal_idx = i
-                break
+        # Проверяем последние 3 свечи
+        for i in range(1, min(4, len(candles))):
+            idx = -i
+            low_price = lows[idx]
+            high_price = highs[idx]
+            close_price = closes[idx]
+            ema21_value = ema21[idx]
 
-        last_triangle = 'NONE'
-        last_triangle_idx = -1
+            # Допуск ±1.5% от EMA21
+            touch_upper = ema21_value * (1 + config.PULLBACK_TOUCH_PCT / 100)
+            touch_lower = ema21_value * (1 - config.PULLBACK_TOUCH_PCT / 100)
 
-        if triangles:
-            last_tri = triangles[-1]
-            last_triangle = last_tri['type']
-            last_triangle_idx = last_tri['index']
+            # Bullish bounce: цена коснулась EMA21 снизу и отскочила вверх
+            if alignment == 'BULLISH' and touch_lower <= low_price <= touch_upper:
+                if current_price > ema21_value and current_volume_ratio >= config.PULLBACK_BOUNCE_VOLUME:
+                    pullback = 'BULLISH_BOUNCE'
+                    pullback_score = 10
+                    break
 
-        # Calculate confidence based on recency
-        confidence = 0
-        current_idx = len(candles) - 1
+            # Bearish bounce: цена коснулась EMA21 сверху и отскочила вниз
+            elif alignment == 'BEARISH' and touch_lower <= high_price <= touch_upper:
+                if current_price < ema21_value and current_volume_ratio >= config.PULLBACK_BOUNCE_VOLUME:
+                    pullback = 'BEARISH_BOUNCE'
+                    pullback_score = 10
+                    break
 
-        # Triangle gets priority if recent (last 3 bars)
-        if last_triangle_idx >= current_idx - 3:
-            bars_ago = current_idx - last_triangle_idx
-            # 0 bars ago = 100, 1 bar = 85, 2 bars = 70, 3 bars = 55
-            confidence = max(55, 100 - bars_ago * 15)
+        # 4. CHECK COMPRESSION
+        compression = 'NONE'
+        compression_score = 0
 
-        # If no recent triangle, check signal
-        elif last_signal_idx >= current_idx - 5:
-            bars_ago = current_idx - last_signal_idx
-            # Signals are weaker than triangles
-            confidence = max(50, 80 - bars_ago * 10)
+        # Расстояние между EMA9 и EMA50
+        total_spread = abs((current_ema9 - current_ema50) / current_ema50 * 100)
+
+        if total_spread <= config.COMPRESSION_MAX_SPREAD_PCT:
+            compression = 'COMPRESSED'
+            # Проверяем breakout с объёмом
+            if current_volume_ratio >= config.COMPRESSION_BREAKOUT_VOLUME:
+                if current_price > max(current_ema9, current_ema21, current_ema50):
+                    compression = 'BREAKOUT_UP'
+                    compression_score = 12
+                elif current_price < min(current_ema9, current_ema21, current_ema50):
+                    compression = 'BREAKOUT_DOWN'
+                    compression_score = 12
+
+        # 5. ДОПОЛНИТЕЛЬНЫЕ БОНУСЫ
+        bonus_score = 0
+
+        # EMA slope согласован
+        if alignment == 'BULLISH':
+            if ema9[-1] > ema9[-5] and ema21[-1] > ema21[-5] and ema50[-1] > ema50[-5]:
+                bonus_score += 10
+        elif alignment == 'BEARISH':
+            if ema9[-1] < ema9[-5] and ema21[-1] < ema21[-5] and ema50[-1] < ema50[-5]:
+                bonus_score += 10
+
+        # Цена выше всех EMA (для LONG) или ниже всех (для SHORT)
+        if alignment == 'BULLISH' and current_price > current_ema9:
+            bonus_score += 8
+        elif alignment == 'BEARISH' and current_price < current_ema9:
+            bonus_score += 8
+
+        # Расстояние от EMA50 <3% (не перерастянуто)
+        distance_from_ema50 = abs((current_price - current_ema50) / current_ema50 * 100)
+        if distance_from_ema50 < 3.0:
+            bonus_score += 8
+
+        # Volume spike
+        if current_volume_ratio >= 1.5:
+            bonus_score += 8
+
+        # 6. ШТРАФЫ
+        penalty = 0
+
+        # Flat EMA (горизонтальная)
+        ema21_slope = abs((ema21[-1] - ema21[-10]) / ema21[-10] * 100)
+        if ema21_slope < 0.5:
+            penalty -= 10
+
+        # Overextension (>5% от EMA50)
+        if distance_from_ema50 > 5.0:
+            penalty -= 10
+
+        # Volume dead
+        recent_volume = [safe_float(v) for v in volume_ratios[-3:]]
+        if all(v < 0.8 for v in recent_volume):
+            penalty -= 10
+
+        # Whipsaw zone (частые пересечения)
+        crosses_count = 0
+        for i in range(1, min(11, len(ema9))):
+            if (ema9[-i] > ema21[-i] and ema9[-i-1] <= ema21[-i-1]) or \
+               (ema9[-i] < ema21[-i] and ema9[-i-1] >= ema21[-i-1]):
+                crosses_count += 1
+        if crosses_count >= 3:
+            penalty -= 12
+
+        # 7. CALCULATE CONFIDENCE
+        base_confidence = 50
+        total_confidence = base_confidence + alignment_score + crossover_score + pullback_score + compression_score + bonus_score + penalty
+        total_confidence = max(0, min(100, total_confidence))
+
+        # 8. BUILD DETAILS
+        details_parts = []
+        if alignment != 'NEUTRAL':
+            details_parts.append(f"Alignment: {alignment} ({alignment_score:+d})")
+        if crossover != 'NONE':
+            details_parts.append(f"Crossover: {crossover} ({crossover_score:+d})")
+        if pullback != 'NONE':
+            details_parts.append(f"Pullback: {pullback} ({pullback_score:+d})")
+        if compression != 'NONE' and compression != 'COMPRESSED':
+            details_parts.append(f"Compression: {compression} ({compression_score:+d})")
+        if bonus_score > 0:
+            details_parts.append(f"Bonuses: {bonus_score:+d}")
+        if penalty < 0:
+            details_parts.append(f"Penalties: {penalty:+d}")
+
+        details = '; '.join(details_parts) if details_parts else 'No significant patterns'
 
         return {
-            'last_signal': last_signal,
-            'last_triangle': last_triangle,
-            'box_active': active_box is not None,
-            'box_top': active_box['top'] if active_box else 0,
-            'box_bottom': active_box['bottom'] if active_box else 0,
-            'ema': safe_float(ema[-1]),
-            'zlma': safe_float(zlma[-1]),
-            'confidence': confidence,
-            'last_signal_idx': last_signal_idx,
-            'last_triangle_idx': last_triangle_idx,
-            'triangles_count': len(triangles)
+            'alignment': alignment,
+            'crossover': crossover,
+            'pullback': pullback,
+            'compression': compression,
+            'ema9': safe_float(current_ema9),
+            'ema21': safe_float(current_ema21),
+            'ema50': safe_float(current_ema50),
+            'confidence': int(total_confidence),
+            'details': details,
+            'distance_from_ema50_pct': round(distance_from_ema50, 2),
+            'volume_ratio': round(current_volume_ratio, 2)
         }
 
     except Exception as e:
-        logger.error(f"ZLMA trend box detection error: {e}")
+        logger.error(f"Triple EMA detection error: {e}")
         return {
-            'last_signal': 'NONE',
-            'last_triangle': 'NONE',
-            'box_active': False,
-            'box_top': 0,
-            'box_bottom': 0,
-            'ema': 0,
-            'zlma': 0,
-            'confidence': 0
+            'alignment': 'NEUTRAL',
+            'crossover': 'NONE',
+            'pullback': 'NONE',
+            'compression': 'NONE',
+            'ema9': 0,
+            'ema21': 0,
+            'ema50': 0,
+            'confidence': 0,
+            'details': f'Error: {str(e)[:50]}'
         }
 
 
 def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
     """
-    Calculate indicators for Stage 1 with ZLMA integration
+    Calculate indicators for Stage 1 with Triple EMA
 
-    Returns indicators + ZLMA trend box data
+    Returns indicators + Triple EMA signal data
     """
-    if not validate_candles(candles, 20):
+    if not validate_candles(candles, 60):
         return {}
 
     try:
         closes = np.array([safe_float(c[4]) for c in candles])
         volumes = np.array([safe_float(c[5]) for c in candles])
 
-        if len(closes) < 20 or np.all(closes == 0) or np.all(volumes == 0):
+        if len(closes) < 60 or np.all(closes == 0) or np.all(volumes == 0):
             return {}
 
-        # Calculate ZLMA trend boxes
-        zlma_data = detect_zlma_trend_boxes(
+        # Calculate Triple EMA signal
+        ema_signal = detect_ema_triple_signal(
             candles,
-            length=config.EMA_TREND,  # 15 по умолчанию
-            atr_length=200
+            ema_fast=config.EMA_FAST,
+            ema_medium=config.EMA_MEDIUM,
+            ema_slow=config.EMA_SLOW
         )
 
         # Volume ratio for confirmation
@@ -362,7 +364,7 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
         return {
             'price': safe_float(closes[-1]),
             'volume_ratio': safe_float(volume_ratios[-1]),
-            'zlma_data': zlma_data,
+            'ema_signal': ema_signal,
             # History for Stage 2/3
             'volume_history': [safe_float(x) for x in volume_ratios[-10:]]
         }
@@ -374,39 +376,56 @@ def calculate_basic_indicators(candles: List[List[str]]) -> Dict[str, Any]:
 
 def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Check for trading signal based on ZLMA triangle breakouts
+    Check for trading signal based on Triple EMA
 
     Logic:
-    - PRIMARY: Triangle breakout (last 3 bars)
-    - SECONDARY: Recent signal (last 5 bars)
+    - PRIMARY: Perfect alignment (BULLISH/BEARISH)
+    - SECONDARY: Golden/Death Cross
+    - TERTIARY: Pullback bounce
+    - BONUS: Compression breakout
     - Volume confirmation required
     """
     if not indicators:
         return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
     try:
-        zlma_data = indicators.get('zlma_data', {})
+        ema_signal = indicators.get('ema_signal', {})
         volume_ratio = safe_float(indicators.get('volume_ratio', 1.0))
 
-        if not zlma_data:
+        if not ema_signal:
             return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-        last_triangle = zlma_data.get('last_triangle', 'NONE')
-        last_signal = zlma_data.get('last_signal', 'NONE')
-        base_confidence = zlma_data.get('confidence', 0)
+        alignment = ema_signal.get('alignment', 'NEUTRAL')
+        crossover = ema_signal.get('crossover', 'NONE')
+        pullback = ema_signal.get('pullback', 'NONE')
+        compression = ema_signal.get('compression', 'NONE')
+        base_confidence = ema_signal.get('confidence', 0)
 
         # Determine direction
         direction = 'NONE'
 
-        # Triangle gets priority
-        if last_triangle == 'UP':
+        # Priority 1: Alignment
+        if alignment == 'BULLISH':
             direction = 'LONG'
-        elif last_triangle == 'DOWN':
+        elif alignment == 'BEARISH':
             direction = 'SHORT'
-        # Fallback to signal if no triangle
-        elif last_signal == 'UP':
+
+        # Priority 2: Crossovers
+        if crossover == 'GOLDEN':
             direction = 'LONG'
-        elif last_signal == 'DOWN':
+        elif crossover == 'DEATH':
+            direction = 'SHORT'
+
+        # Priority 3: Pullback
+        if pullback == 'BULLISH_BOUNCE':
+            direction = 'LONG'
+        elif pullback == 'BEARISH_BOUNCE':
+            direction = 'SHORT'
+
+        # Priority 4: Compression breakout
+        if compression == 'BREAKOUT_UP':
+            direction = 'LONG'
+        elif compression == 'BREAKOUT_DOWN':
             direction = 'SHORT'
 
         if direction == 'NONE':
@@ -417,7 +436,7 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
             return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
         # Volume boost
-        volume_score = min((volume_ratio - 1.0) * 25, 20)
+        volume_score = min((volume_ratio - 1.0) * 10, 15)
 
         # Final confidence
         confidence = int(base_confidence + volume_score)
@@ -430,7 +449,8 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
         return {
             'signal': True,
             'confidence': confidence,
-            'direction': direction
+            'direction': direction,
+            'details': ema_signal.get('details', '')
         }
 
     except Exception as e:
@@ -524,7 +544,7 @@ def calculate_macd(prices: np.ndarray, fast: int = 12, slow: int = 26, signal: i
 
 
 def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
-    """Calculate ATR (for Stage 2/3)"""
+    """Calculate ATR"""
     if not validate_candles(candles, period + 1):
         return 0.0
 
@@ -558,8 +578,8 @@ def calculate_atr(candles: List[List[str]], period: int = 14) -> float:
 
 
 def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Dict[str, Any]:
-    """Calculate indicators for AI analysis (Stage 2/3) - without EMA5/8"""
-    if not validate_candles(candles, max(history_length, 20)):
+    """Calculate indicators for AI analysis (Stage 2/3)"""
+    if not validate_candles(candles, max(history_length, 60)):
         return {}
 
     try:
@@ -569,7 +589,11 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
         if len(closes) < history_length or np.all(closes == 0):
             return {}
 
-        ema20 = calculate_ema(closes, config.EMA_TREND)
+        # Calculate Triple EMA
+        ema9 = calculate_ema(closes, config.EMA_FAST)
+        ema21 = calculate_ema(closes, config.EMA_MEDIUM)
+        ema50 = calculate_ema(closes, config.EMA_SLOW)
+
         rsi = calculate_rsi(closes, config.RSI_PERIOD)
         macd = calculate_macd(closes, config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
         volume_ratios = calculate_volume_ratios(volumes, config.VOLUME_WINDOW)
@@ -587,7 +611,9 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
                 return [0.0] * length
 
         return {
-            'ema20_history': safe_history(ema20, history_length),
+            'ema9_history': safe_history(ema9, history_length),
+            'ema21_history': safe_history(ema21, history_length),
+            'ema50_history': safe_history(ema50, history_length),
             'rsi_history': safe_history(rsi, history_length),
             'macd_line_history': safe_history(macd['line'], history_length),
             'macd_signal_history': safe_history(macd['signal'], history_length),
@@ -595,7 +621,9 @@ def calculate_ai_indicators(candles: List[List[str]], history_length: int) -> Di
             'volume_ratio_history': safe_history(volume_ratios, history_length),
             'current': {
                 'price': safe_float(closes[-1]),
-                'ema20': safe_float(ema20[-1]),
+                'ema9': safe_float(ema9[-1]),
+                'ema21': safe_float(ema21[-1]),
+                'ema50': safe_float(ema50[-1]),
                 'rsi': safe_float(rsi[-1]),
                 'macd_line': safe_float(macd['line'][-1]),
                 'macd_histogram': safe_float(macd['histogram'][-1]),
