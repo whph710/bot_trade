@@ -426,7 +426,7 @@ class TradingBotRunner:
             'volume_profile': comp_data.get('volume_profile', {}),
             'vp_analysis': comp_data.get('vp_analysis', {})
         }
-
+#sjdfhsldfahfljasdkfjadsghfkajsdghkfjashgdkdjgfsdhfaksjsdh
         return signal
 
     async def run_cycle(self, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
