@@ -96,17 +96,13 @@ EMA_CROSSOVER_LOOKBACK = safe_int(os.getenv('EMA_CROSSOVER_LOOKBACK', '5'), 5)
 
 # Pullback параметры
 PULLBACK_TOUCH_PCT = safe_float(os.getenv('PULLBACK_TOUCH_PCT', '1.5'), 1.5)  # ±1.5% от EMA21
-PULLBACK_BOUNCE_VOLUME = safe_float(os.getenv('PULLBACK_BOUNCE_VOLUME', '1.2'), 1.2)  # Минимум volume ratio
+PULLBACK_BOUNCE_VOLUME = safe_float(os.getenv('PULLBACK_BOUNCE_VOLUME', '1.2'), 1.2)  # Минимум volume ratio для pullback
 
 # Compression (сжатие) параметры
 COMPRESSION_MAX_SPREAD_PCT = safe_float(os.getenv('COMPRESSION_MAX_SPREAD_PCT', '1.0'), 1.0)  # <1% между всеми EMA
 COMPRESSION_BREAKOUT_VOLUME = safe_float(os.getenv('COMPRESSION_BREAKOUT_VOLUME', '2.0'), 2.0)  # Volume spike при пробое
 
-# Minimum volume ratio для подтверждения EMA сигнала
-MIN_VOLUME_RATIO = safe_float(os.getenv('MIN_VOLUME_RATIO', '1.0'), 1.0)
-
-# Minimum confidence для Stage 1
-MIN_CONFIDENCE = safe_int(os.getenv('MIN_CONFIDENCE', '60'), 60)
+# ИСПРАВЛЕНО: Минимум volume ratio для Stage 1 base
 
 # ═══════════════════════════════════════════════════════════════
 # ДОПОЛНИТЕЛЬНЫЕ ИНДИКАТОРЫ (для AI анализа в Stage 2/3)

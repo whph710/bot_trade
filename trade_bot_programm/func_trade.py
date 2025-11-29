@@ -431,7 +431,7 @@ def check_basic_signal(indicators: Dict[str, Any]) -> Dict[str, Any]:
         if direction == 'NONE':
             return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 
-        # Volume confirmation
+        # Volume confirmation - ИСПРАВЛЕНО: единый порог
         if volume_ratio < config.MIN_VOLUME_RATIO:
             return {'signal': False, 'confidence': 0, 'direction': 'NONE'}
 

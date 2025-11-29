@@ -6,6 +6,7 @@ Trading Bot Runner - REMOVED 1D CANDLES
 - Удалены candles_1d из всех структур данных
 - Удалены indicators_1d
 - Удалён флаг has_1d_data
+- ИСПРАВЛЕНО: Удалён мусор на строке 382
 """
 
 import asyncio
@@ -426,7 +427,7 @@ class TradingBotRunner:
             'volume_profile': comp_data.get('volume_profile', {}),
             'vp_analysis': comp_data.get('vp_analysis', {})
         }
-#sjdfhsldfahfljasdkfjadsghfkajsdghkfjashgdkdjgfsdhfaksjsdh
+
         return signal
 
     async def run_cycle(self, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
